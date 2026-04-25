@@ -7,17 +7,39 @@ enum class Market(
 ) {
     A_SHARE("A股", "¥", 1.0),
     HONG_KONG("港股", "HK$", 0.92),
+    US("美股", "$", 7.20),
+    CASH("现金", "¥", 1.0),
+}
+
+enum class DisplayCurrency(
+    val label: String,
+    val code: String,
+    val symbol: String,
+    val cnyRate: Double,
+) {
+    USD("美元", "USD", "$", 7.20),
+    CNY("人民币", "CNY", "¥", 1.0),
+    HKD("港币", "HKD", "HK$", 0.92),
 }
 
 enum class TradeType(val label: String) {
     BUY("买入"),
     SELL("卖出"),
+    DEPOSIT("入金"),
+    WITHDRAW("出金"),
+    ;
+
+    val isSecurityTrade: Boolean
+        get() = this == BUY || this == SELL
+
+    val isCashFlowPositive: Boolean
+        get() = this == SELL || this == DEPOSIT
 }
 
 enum class RefreshState(val title: String) {
     IDLE("等待手动刷新"),
     REFRESHING("刷新中"),
-    FRESH("刚更新"),
+    FRESH("刚刚更新"),
     FAILED("刷新失败"),
 }
 
@@ -41,6 +63,8 @@ enum class TransactionFilter(
     ALL("全部", null),
     BUY("买入", TradeType.BUY),
     SELL("卖出", TradeType.SELL),
+    DEPOSIT("入金", TradeType.DEPOSIT),
+    WITHDRAW("出金", TradeType.WITHDRAW),
 }
 
 enum class MarketFilter(
@@ -50,17 +74,23 @@ enum class MarketFilter(
     ALL("全部市场", null),
     A_SHARE("A股", Market.A_SHARE),
     HONG_KONG("港股", Market.HONG_KONG),
+    US("美股", Market.US),
+    CASH("现金", Market.CASH),
 }
 
 data class PortfolioSummary(
     val totalAssets: String,
     val totalCost: String,
     val totalCostHint: String,
+    val cashBalance: String,
+    val cashBalanceHint: String,
     val totalProfit: String,
     val totalProfitHint: String,
     val dayProfit: String,
     val refreshState: RefreshState,
     val refreshMessage: String,
+    val refreshTimeLabel: String?,
+    val showPullRefreshTime: Boolean,
 )
 
 data class HoldingUiModel(

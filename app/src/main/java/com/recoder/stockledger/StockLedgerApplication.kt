@@ -3,6 +3,7 @@ package com.recoder.stockledger
 import android.app.Application
 import androidx.room.Room
 import com.recoder.stockledger.data.repository.DefaultLedgerRepository
+import com.recoder.stockledger.data.repository.FrankfurterExchangeRateDataSource
 import com.recoder.stockledger.data.repository.TencentSinaQuoteDataSource
 import com.recoder.stockledger.data.local.StockLedgerDatabase
 
@@ -19,6 +20,7 @@ class StockLedgerApplication : Application() {
         DefaultLedgerRepository(
             dao = database.ledgerDao(),
             quoteDataSource = TencentSinaQuoteDataSource(),
+            exchangeRateDataSource = FrankfurterExchangeRateDataSource(applicationContext),
         )
     }
 }

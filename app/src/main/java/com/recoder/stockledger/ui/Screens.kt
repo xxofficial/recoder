@@ -1,4 +1,4 @@
-package com.recoder.stockledger.ui
+﻿package com.recoder.stockledger.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.ExperimentalMaterialApi
@@ -28,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.HoldingUiModel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.MarketFilter
@@ -53,10 +55,10 @@ import com.recoder.stockledger.ui.theme.SurfaceSecondary
 @Composable
 fun HoldingsRoute(
     summary: PortfolioSummary,
+    displayCurrency: DisplayCurrency,
     holdings: List<HoldingUiModel>,
-    onBuyClick: () -> Unit,
-    onSellClick: () -> Unit,
     onDeleteHolding: (HoldingUiModel) -> Unit,
+    onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
     onRefresh: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
@@ -75,9 +77,9 @@ fun HoldingsRoute(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .verticalScroll(rememberScrollState()),
         ) {
-            StatusBarStub()
             Column(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -96,6 +98,11 @@ fun HoldingsRoute(
                     }
                 }
 
+                CurrencySelector(
+                    selected = displayCurrency,
+                    onSelected = onDisplayCurrencySelected,
+                )
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -111,11 +118,22 @@ fun HoldingsRoute(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         SummaryMetric(
-                            label = "总成本",
+                            label = "净入金",
                             value = summary.totalCost,
                             hint = summary.totalCostHint,
                             modifier = Modifier.weight(1f),
                         )
+                        SummaryMetric(
+                            label = "可用现金",
+                            value = summary.cashBalance,
+                            hint = summary.cashBalanceHint,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
                         SummaryMetric(
                             label = "累计盈亏",
                             value = summary.totalProfit,
@@ -123,25 +141,15 @@ fun HoldingsRoute(
                             valueColor = if (summary.totalProfit.startsWith("-")) MarketDown else MarketUp,
                             modifier = Modifier.weight(1f),
                         )
+                        SummaryMetric(
+                            label = "当日盈亏",
+                            value = summary.dayProfit,
+                            hint = "按昨收估算",
+                            valueColor = if (summary.dayProfit.startsWith("-")) MarketDown else MarketUp,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
-                    SummaryMetric(
-                        label = "当日盈亏",
-                        value = summary.dayProfit,
-                        hint = "按昨收估算",
-                        valueColor = if (summary.dayProfit.startsWith("-")) MarketDown else MarketUp,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
-
-                RefreshStatusCard(
-                    state = summary.refreshState,
-                    message = summary.refreshMessage,
-                )
-
-                TradeActionButtons(
-                    onBuyClick = onBuyClick,
-                    onSellClick = onSellClick,
-                )
 
                 Text("持仓列表", color = ForegroundPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Column(
@@ -176,6 +184,23 @@ fun HoldingsRoute(
             contentColor = ForegroundPrimary,
         )
 
+        if (summary.showPullRefreshTime && !summary.refreshTimeLabel.isNullOrBlank()) {
+            Text(
+                text = "上次更新 ${summary.refreshTimeLabel}",
+                color = ForegroundSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 72.dp)
+                    .background(
+                        color = SurfaceSecondary,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(999.dp),
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+
         BottomPillNavigation(
             current = TopLevelDestination.HOLDINGS,
             onDestinationSelected = onDestinationSelected,
@@ -208,6 +233,71 @@ fun HoldingsRoute(
 }
 
 @Composable
+fun OperationsRoute(
+    onBuyClick: () -> Unit,
+    onSellClick: () -> Unit,
+    onDepositClick: () -> Unit,
+    onWithdrawClick: () -> Unit,
+    onDestinationSelected: (TopLevelDestination) -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BackgroundPrimary),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Column(
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Text("\u5feb\u6377\u64cd\u4f5c", color = ForegroundPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+
+                TradeActionButtons(
+                    onBuyClick = onBuyClick,
+                    onSellClick = onSellClick,
+                    onDepositClick = onDepositClick,
+                    onWithdrawClick = onWithdrawClick,
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = SurfaceSecondary,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                        )
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("\u5f55\u5165\u6307\u5f15", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "\u4e70\u5165\u3001\u5356\u51fa\u4f1a\u8fdb\u5165\u4ea4\u6613\u8868\u5355\uff0c\u652f\u6301\u4ee3\u7801\u8054\u60f3\u3001\u8d39\u7528\u5f55\u5165\u548c\u5907\u6ce8\u3002",
+                        color = ForegroundSecondary,
+                        fontSize = 13.sp,
+                    )
+                    Text(
+                        "\u5165\u91d1\u3001\u51fa\u91d1\u7528\u4e8e\u8bb0\u5f55\u8d44\u91d1\u53d8\u52a8\uff0c\u5e76\u540c\u6b65\u5f71\u54cd\u6301\u4ed3\u603b\u89c8\u91cc\u7684\u51c0\u5165\u91d1\u4e0e\u53ef\u7528\u73b0\u91d1\u3002",
+                        color = ForegroundSecondary,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+        }
+
+        BottomPillNavigation(
+            current = TopLevelDestination.OPERATIONS,
+            onDestinationSelected = onDestinationSelected,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+}
+
+@Composable
 fun TransactionsRoute(
     sections: List<TransactionSection>,
     selectedTradeFilter: TransactionFilter,
@@ -225,9 +315,9 @@ fun TransactionsRoute(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .verticalScroll(rememberScrollState()),
         ) {
-            StatusBarStub()
             Column(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -313,6 +403,7 @@ fun TransactionsRoute(
 @Composable
 fun TradeEntryRoute(
     state: TradeFormState,
+    displayCurrency: DisplayCurrency,
     sellCandidates: List<SellCandidateUiModel>,
     symbolLookup: SymbolLookupUiModel,
     symbolSuggestions: List<SecuritySuggestionUiModel>,
@@ -332,12 +423,25 @@ fun TradeEntryRoute(
     onNoteChange: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
+    val isSecurityTrade = state.selectedType.isSecurityTrade
+    val isSellTrade = state.selectedType == TradeType.SELL
+    val cashCurrencyCode = when (displayCurrency) {
+        DisplayCurrency.USD -> "USD"
+        DisplayCurrency.CNY -> "CNY"
+        DisplayCurrency.HKD -> "HKD"
+    }
+    val cashCurrencyLabel = when (displayCurrency) {
+        DisplayCurrency.USD -> "美元"
+        DisplayCurrency.CNY -> "人民币"
+        DisplayCurrency.HKD -> "港币"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .statusBarsPadding()
             .background(BackgroundPrimary),
     ) {
-        StatusBarStub()
         ScreenHeader(title = "录入交易", onBack = onBackClick)
 
         Box(
@@ -355,7 +459,7 @@ fun TradeEntryRoute(
                     onSelected = onTradeTypeSelected,
                 )
 
-                if (state.selectedType == TradeType.SELL) {
+                if (isSellTrade) {
                     SellCandidateSection(
                         candidates = sellCandidates,
                         selectedValue = state.symbolOrName,
@@ -363,65 +467,81 @@ fun TradeEntryRoute(
                     )
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("市场", color = ForegroundSecondary, fontSize = 14.sp)
-                    MarketSelector(
-                        selected = state.market,
-                        onSelected = onMarketSelected,
-                    )
+                if (isSecurityTrade) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("市场", color = ForegroundSecondary, fontSize = 14.sp)
+                        TradeEntryMarketSelector(
+                            selected = state.market,
+                            onSelected = onMarketSelected,
+                        )
+                    }
                 }
 
-                InputFieldBlock(
-                    label = "股票代码 / 名称",
-                    value = state.symbolOrName,
-                    supportingText = symbolLookup.message,
-                    supportingColor = when (symbolLookup.state) {
-                        SymbolLookupState.INVALID -> MarketDown
-                        SymbolLookupState.RESOLVED -> MarketUp
-                        else -> ForegroundMuted
-                    },
-                    onValueChange = onSymbolChange,
-                )
-                if (symbolSuggestions.isNotEmpty()) {
-                    SymbolSuggestionSection(
-                        suggestions = symbolSuggestions,
-                        onSelected = onSymbolSuggestionSelected,
+                if (isSecurityTrade) {
+                    InputFieldBlock(
+                        label = "证券代码 / 名称",
+                        value = state.symbolOrName,
+                        supportingText = symbolLookup.message,
+                        supportingColor = when (symbolLookup.state) {
+                            SymbolLookupState.INVALID -> MarketDown
+                            SymbolLookupState.RESOLVED -> MarketUp
+                            else -> ForegroundMuted
+                        },
+                        onValueChange = onSymbolChange,
                     )
+                    if (symbolSuggestions.isNotEmpty()) {
+                        SymbolSuggestionSection(
+                            suggestions = symbolSuggestions,
+                            onSelected = onSymbolSuggestionSelected,
+                        )
+                    }
                 }
 
-                DateInputField(
+                TradeEntryDateField(
                     value = state.tradeDate,
                     onValueChange = onDateChange,
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
+                if (isSecurityTrade) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        InputFieldBlock(
+                            label = "成交价格",
+                            value = state.priceLabel,
+                            modifier = Modifier.weight(1f),
+                            keyboardType = KeyboardType.Decimal,
+                            onValueChange = onPriceChange,
+                        )
+                        InputFieldBlock(
+                            label = "成交数量",
+                            value = state.quantityLabel,
+                            modifier = Modifier.weight(1f),
+                            keyboardType = KeyboardType.Number,
+                            onValueChange = onQuantityChange,
+                        )
+                    }
+                } else {
                     InputFieldBlock(
-                        label = "成交价格",
+                        label = if (state.selectedType == TradeType.DEPOSIT) "入金金额 ($cashCurrencyCode)" else "出金金额 ($cashCurrencyCode)",
                         value = state.priceLabel,
-                        modifier = Modifier.weight(1f),
+                        supportingText = "当前按${cashCurrencyLabel}录入，保存后会自动折算到资产汇总",
                         keyboardType = KeyboardType.Decimal,
                         onValueChange = onPriceChange,
                     )
-                    InputFieldBlock(
-                        label = "成交数量",
-                        value = state.quantityLabel,
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number,
-                        onValueChange = onQuantityChange,
+                }
+
+                if (isSecurityTrade) {
+                    TradeEntryFeeCard(
+                        commission = state.commissionLabel,
+                        tax = state.taxLabel,
+                        onCommissionChange = onCommissionChange,
+                        onTaxChange = onTaxChange,
                     )
                 }
 
-                FeeCard(
-                    commission = state.commissionLabel,
-                    tax = state.taxLabel,
-                    onCommissionChange = onCommissionChange,
-                    onTaxChange = onTaxChange,
-                )
-
-                NoteField(
+                TradeEntryNoteField(
                     note = state.note,
                     onValueChange = onNoteChange,
                 )
@@ -444,7 +564,12 @@ fun TradeEntryRoute(
                 }
 
                 FilledActionButton(
-                    text = if (state.selectedType == TradeType.BUY) "确认买入" else "确认卖出",
+                    text = when (state.selectedType) {
+                        TradeType.BUY -> "确认买入"
+                        TradeType.SELL -> "确认卖出"
+                        TradeType.DEPOSIT -> "确认入金"
+                        TradeType.WITHDRAW -> "确认出金"
+                    },
                     onClick = onSubmit,
                     enabled = canSubmit,
                     modifier = Modifier.fillMaxWidth(),

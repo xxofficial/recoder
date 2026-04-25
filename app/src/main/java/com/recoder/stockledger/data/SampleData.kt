@@ -5,11 +5,11 @@ import java.time.LocalDate
 object SampleData {
     fun tradeForm(defaultType: TradeType): TradeFormState = TradeFormState(
         selectedType = defaultType,
-        market = Market.A_SHARE,
+        market = if (defaultType.isSecurityTrade) Market.A_SHARE else Market.CASH,
         symbolOrName = "",
         tradeDate = LocalDate.now().toString(),
         priceLabel = "",
-        quantityLabel = "",
+        quantityLabel = if (defaultType.isSecurityTrade) "" else "1",
         commissionLabel = "0.00",
         taxLabel = "0.00",
         note = "",

@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -40,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.HoldingUiModel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.PriceTrend
@@ -67,31 +70,9 @@ enum class TopLevelDestination(
     val icon: ImageVector,
 ) {
     HOLDINGS("持仓", Icons.Filled.AccountBalanceWallet),
+    ANALYSIS("盈亏", Icons.Filled.BarChart),
+    OPERATIONS("操作", Icons.Filled.AddCircle),
     TRANSACTIONS("流水", Icons.AutoMirrored.Filled.List),
-}
-
-@Composable
-fun StatusBarStub() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 20.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "9:41",
-            color = ForegroundPrimary,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, ForegroundMuted, RoundedCornerShape(8.dp)),
-        )
-    }
 }
 
 @Composable
@@ -131,6 +112,42 @@ fun ScreenHeader(
 }
 
 @Composable
+fun CurrencySelector(
+    selected: DisplayCurrency,
+    onSelected: (DisplayCurrency) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(999.dp))
+            .background(SurfaceSecondary)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        DisplayCurrency.entries.forEach { currency ->
+            val isSelected = currency == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (isSelected) BackgroundPrimary else Color.Transparent)
+                    .clickable { onSelected(currency) }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = currency.label,
+                    color = if (isSelected) ForegroundPrimary else ForegroundSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun SummaryMetric(
     label: String,
     value: String,
@@ -161,7 +178,7 @@ fun RefreshStatusCard(
     val badgeText = when (state) {
         RefreshState.IDLE -> "下拉刷新"
         RefreshState.REFRESHING -> "刷新中"
-        RefreshState.FRESH -> "刚更新"
+        RefreshState.FRESH -> "刚刚更新"
         RefreshState.FAILED -> "稍后重试"
     }
     val badgeBackground = when (state) {
@@ -207,6 +224,8 @@ fun RefreshStatusCard(
 fun TradeActionButtons(
     onBuyClick: () -> Unit,
     onSellClick: () -> Unit,
+    onDepositClick: () -> Unit,
+    onWithdrawClick: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -229,6 +248,22 @@ fun TradeActionButtons(
             OutlineActionButton(
                 text = "卖出",
                 onClick = onSellClick,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            FilledActionButton(
+                text = "入金",
+                onClick = onDepositClick,
+                modifier = Modifier.weight(1f),
+            )
+            OutlineActionButton(
+                text = "出金",
+                onClick = onWithdrawClick,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -465,6 +500,7 @@ fun SymbolSuggestionSection(
 
 @Composable
 fun TransactionRow(item: TransactionUiModel) {
+    val (badgeBackground, badgeForeground) = tradeTypeColors(item.tradeType)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -473,8 +509,8 @@ fun TransactionRow(item: TransactionUiModel) {
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             PillLabel(
                 text = item.tradeType.label,
-                background = if (item.tradeType == TradeType.BUY) MarketUpSoft else MarketDownSoft,
-                foreground = if (item.tradeType == TradeType.BUY) MarketUp else MarketDown,
+                background = badgeBackground,
+                foreground = badgeForeground,
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column {
@@ -491,7 +527,7 @@ fun TransactionRow(item: TransactionUiModel) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 item.timeLabel,
-                color = if (item.tradeType == TradeType.BUY) MarketUp else MarketDown,
+                color = badgeForeground,
                 fontSize = 12.sp,
             )
             Spacer(modifier = Modifier.height(2.dp))
@@ -644,6 +680,98 @@ fun InputFieldBlock(
 }
 
 @Composable
+fun TradeEntryMarketSelector(
+    selected: Market,
+    onSelected: (Market) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
+        SelectableBlock("港股", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
+        SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
+    }
+}
+
+@Composable
+fun TradeEntryFeeCard(
+    commission: String,
+    tax: String,
+    onCommissionChange: (String) -> Unit,
+    onTaxChange: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(SurfaceMuted)
+            .border(1.dp, Color(0xFFECEEF2), RoundedCornerShape(16.dp))
+            .padding(16.dp),
+    ) {
+        Text("手续费 / 税费", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            InputFieldBlock(
+                label = "佣金",
+                value = commission,
+                onValueChange = onCommissionChange,
+                keyboardType = KeyboardType.Decimal,
+                modifier = Modifier.weight(1f),
+            )
+            InputFieldBlock(
+                label = "税费",
+                value = tax,
+                onValueChange = onTaxChange,
+                keyboardType = KeyboardType.Decimal,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+fun TradeEntryNoteField(
+    note: String,
+    onValueChange: (String) -> Unit,
+) {
+    Column {
+        Text("备注", color = ForegroundSecondary, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(SurfaceSecondary)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            EditableField(
+                value = note,
+                onValueChange = onValueChange,
+                keyboardType = KeyboardType.Text,
+                singleLine = false,
+            )
+        }
+    }
+}
+
+@Composable
+fun TradeEntryDateField(
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    InputFieldBlock(
+        label = "交易日期",
+        value = value,
+        trailingIcon = Icons.Filled.DateRange,
+        onValueChange = onValueChange,
+    )
+}
+
+@Composable
 private fun EditableField(
     value: String,
     onValueChange: (String) -> Unit,
@@ -686,6 +814,7 @@ fun MarketSelector(
     ) {
         SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
         SelectableBlock("港股", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
+        SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
     }
 }
 
@@ -716,10 +845,8 @@ fun TradeTypeSelector(
             ) {
                 Text(
                     text = type.label,
-                    color = if (type == TradeType.BUY) {
-                        if (isSelected) MarketUp else ForegroundMuted
-                    } else {
-                        if (isSelected) MarketDown else ForegroundMuted
+                    color = tradeTypeColors(type).let { (_, foreground) ->
+                        if (isSelected) foreground else ForegroundMuted
                     },
                     fontSize = 15.sp,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
@@ -727,6 +854,11 @@ fun TradeTypeSelector(
             }
         }
     }
+}
+
+private fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
+    TradeType.BUY, TradeType.DEPOSIT -> MarketUpSoft to MarketUp
+    TradeType.SELL, TradeType.WITHDRAW -> MarketDownSoft to MarketDown
 }
 
 @Composable

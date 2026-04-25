@@ -16,6 +16,8 @@ import kotlinx.coroutines.launch
 
 private object Routes {
     const val Holdings = "holdings"
+    const val Analysis = "analysis"
+    const val Operations = "operations"
     const val Transactions = "transactions"
     const val TradeEntry = "trade-entry"
     const val TradeTypeArg = "tradeType"
@@ -40,7 +42,54 @@ fun StockLedgerApp(
         composable(Routes.Holdings) {
             HoldingsRoute(
                 summary = uiState.summary,
+                displayCurrency = uiState.displayCurrency,
                 holdings = uiState.holdings,
+                onDeleteHolding = ledgerViewModel::deleteHolding,
+                onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
+                onRefresh = ledgerViewModel::refreshQuotesByPull,
+                onDestinationSelected = { destination ->
+                    when (destination) {
+                        TopLevelDestination.HOLDINGS -> Unit
+                        TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                            launchSingleTop = true
+                        }
+                        TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                            launchSingleTop = true
+                        }
+                        TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                            launchSingleTop = true
+                        }
+                    }
+                },
+            )
+        }
+
+        composable(Routes.Analysis) {
+            ProfitAnalysisRoute(
+                analysis = uiState.profitAnalysis,
+                displayCurrency = uiState.displayCurrency,
+                exchangeRates = uiState.exchangeRates,
+                onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
+                onDestinationSelected = { destination ->
+                    when (destination) {
+                        TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                            launchSingleTop = true
+                        }
+
+                        TopLevelDestination.ANALYSIS -> Unit
+                        TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                            launchSingleTop = true
+                        }
+                        TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                            launchSingleTop = true
+                        }
+                    }
+                },
+            )
+        }
+
+        composable(Routes.Operations) {
+            OperationsRoute(
                 onBuyClick = {
                     ledgerViewModel.openTradeEntry(TradeType.BUY)
                     navController.navigate(Routes.tradeEntry(TradeType.BUY))
@@ -49,11 +98,23 @@ fun StockLedgerApp(
                     ledgerViewModel.openTradeEntry(TradeType.SELL)
                     navController.navigate(Routes.tradeEntry(TradeType.SELL))
                 },
-                onDeleteHolding = ledgerViewModel::deleteHolding,
-                onRefresh = ledgerViewModel::refreshQuotesByPull,
+                onDepositClick = {
+                    ledgerViewModel.openTradeEntry(TradeType.DEPOSIT)
+                    navController.navigate(Routes.tradeEntry(TradeType.DEPOSIT))
+                },
+                onWithdrawClick = {
+                    ledgerViewModel.openTradeEntry(TradeType.WITHDRAW)
+                    navController.navigate(Routes.tradeEntry(TradeType.WITHDRAW))
+                },
                 onDestinationSelected = { destination ->
                     when (destination) {
-                        TopLevelDestination.HOLDINGS -> Unit
+                        TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                            launchSingleTop = true
+                        }
+                        TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                            launchSingleTop = true
+                        }
+                        TopLevelDestination.OPERATIONS -> Unit
                         TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
                             launchSingleTop = true
                         }
@@ -78,6 +139,12 @@ fun StockLedgerApp(
                         TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
                             launchSingleTop = true
                         }
+                        TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                            launchSingleTop = true
+                        }
+                        TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                            launchSingleTop = true
+                        }
                         TopLevelDestination.TRANSACTIONS -> Unit
                     }
                 },
@@ -90,6 +157,7 @@ fun StockLedgerApp(
         ) {
             TradeEntryRoute(
                 state = uiState.draft,
+                displayCurrency = uiState.displayCurrency,
                 sellCandidates = uiState.sellCandidates,
                 symbolLookup = uiState.symbolLookup,
                 symbolSuggestions = uiState.symbolSuggestions,

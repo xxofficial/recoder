@@ -1,6 +1,8 @@
 package com.recoder.stockledger.data.repository
 
 import android.util.Log
+import com.recoder.stockledger.data.ExchangeRateRefreshResult
+import com.recoder.stockledger.data.ExchangeRates
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.data.local.LedgerDao
@@ -8,6 +10,8 @@ import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
@@ -62,9 +66,12 @@ interface QuoteDataSource {
 class DefaultLedgerRepository(
     private val dao: LedgerDao,
     private val quoteDataSource: QuoteDataSource,
+    private val exchangeRateDataSource: FrankfurterExchangeRateDataSource,
 ) {
     val transactions: Flow<List<TransactionEntity>> = dao.observeTransactions()
     val quotes: Flow<List<QuoteSnapshotEntity>> = dao.observeQuotes()
+    private val _exchangeRates = MutableStateFlow(exchangeRateDataSource.currentRates())
+    val exchangeRates: StateFlow<ExchangeRates> = _exchangeRates
 
     val isUsingRealtimeQuotes: Boolean
         get() = quoteDataSource.isConfigured
@@ -145,6 +152,12 @@ class DefaultLedgerRepository(
 
     suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long {
         val requests = transactions
+            .filter { transaction ->
+                val tradeType = TradeType.valueOf(transaction.tradeType)
+                tradeType.isSecurityTrade &&
+                    transaction.symbol.isNotBlank() &&
+                    transaction.market != Market.CASH.name
+            }
             .groupBy { it.market to it.symbol }
             .map { (_, grouped) ->
                 val head = grouped.first()
@@ -161,6 +174,12 @@ class DefaultLedgerRepository(
         }
 
         return refreshQuotes(requests)
+    }
+
+    suspend fun refreshExchangeRates(): ExchangeRateRefreshResult {
+        val result = exchangeRateDataSource.refreshRates()
+        _exchangeRates.value = result.rates
+        return result
     }
 
     private fun normalizeLookupSymbol(rawInput: String, market: Market): String? {
@@ -185,6 +204,21 @@ class DefaultLedgerRepository(
                     .filter(Char::isDigit)
                 digits.takeIf { it.length in 1..5 }?.padStart(4, '0')?.let { "$it.HK" }
             }
+
+            Market.US -> {
+                val symbol = compact
+                    .removePrefix("US.")
+                    .removePrefix("US")
+                    .removePrefix("GB_")
+                    .removeSuffix(".US")
+                    .replace("_", ".")
+                symbol.takeIf {
+                    it.matches(Regex("[A-Z][A-Z0-9.-]{0,9}")) &&
+                        it.any(Char::isLetter)
+                }
+            }
+
+            Market.CASH -> null
         }
     }
 }
@@ -200,23 +234,28 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             val deduped = requests.distinctBy { requestKey(it.symbol, it.market) }
             Log.d(TAG, "Refreshing ${deduped.size} quote(s) from $providerLabel")
 
-            val tencentQuotes = runCatching { fetchTencentQuotes(deduped) }
+            val (tencentEligible, sinaOnly) = deduped.partition { request ->
+                request.market != Market.US
+            }
+
+            val tencentQuotes = runCatching { fetchTencentQuotes(tencentEligible) }
                 .onFailure { Log.e(TAG, "Tencent quote fetch failed", it) }
                 .getOrElse { emptyMap() }
 
-            val missing = deduped.filterNot { request ->
+            val missing = tencentEligible.filterNot { request ->
                 tencentQuotes.containsKey(requestKey(request.symbol, request.market))
             }
+            val fallbackRequests = missing + sinaOnly
 
-            if (missing.isEmpty()) {
+            if (fallbackRequests.isEmpty()) {
                 Log.d(TAG, "Tencent returned all ${tencentQuotes.size} quote(s)")
                 return@withContext deduped.mapNotNull { request ->
                     tencentQuotes[requestKey(request.symbol, request.market)]
                 }
             }
 
-            Log.w(TAG, "Tencent missed ${missing.size} quote(s), fallback to Sina")
-            val sinaQuotes = runCatching { fetchSinaQuotes(missing) }
+            Log.w(TAG, "Tencent missed ${missing.size} quote(s), fallback to Sina for ${fallbackRequests.size} quote(s)")
+            val sinaQuotes = runCatching { fetchSinaQuotes(fallbackRequests) }
                 .onFailure { Log.e(TAG, "Sina quote fetch failed", it) }
                 .getOrElse { emptyMap() }
 
@@ -237,6 +276,8 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         market: Market,
         limit: Int,
     ): List<SecurityLookupResult> = withContext(Dispatchers.IO) {
+        if (market == Market.CASH) return@withContext emptyList()
+
         val raw = keyword.trim()
         if (raw.isBlank()) return@withContext emptyList()
 
@@ -348,6 +389,8 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         return when (request.market) {
             Market.A_SHARE -> parseSinaAShare(request, parts)
             Market.HONG_KONG -> parseSinaHongKong(request, parts)
+            Market.US -> parseSinaUs(request, parts)
+            Market.CASH -> null
         }
     }
 
@@ -406,6 +449,32 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         )
     }
 
+    private fun parseSinaUs(
+        request: QuoteRequest,
+        parts: List<String>,
+    ): QuoteSnapshotEntity? {
+        if (parts.size < 27) {
+            Log.w(TAG, "Sina US payload too short for ${request.symbol}: ${parts.size}")
+            return null
+        }
+
+        val currentPrice = parts.getOrNull(1)?.toDoubleOrNull()
+        val previousClose = parts.getOrNull(26)?.toDoubleOrNull()
+        if (currentPrice == null || previousClose == null) {
+            Log.w(TAG, "Sina US missing price for ${request.symbol}")
+            return null
+        }
+
+        return QuoteSnapshotEntity(
+            symbol = request.symbol,
+            market = request.market.name,
+            name = parts.firstOrNull().orEmpty().ifBlank { request.name },
+            currentPrice = currentPrice,
+            previousClose = previousClose,
+            lastUpdatedAt = parseSinaUsTimestamp(parts.getOrElse(3) { "" }),
+        )
+    }
+
     private fun parseSinaSuggestResponse(
         body: String,
         market: Market,
@@ -440,6 +509,17 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
                             market = Market.HONG_KONG,
                         )
                     }
+
+                    Market.US -> {
+                        if (typeCode != "41") return@mapNotNull null
+                        SecurityLookupResult(
+                            symbol = code.uppercase(),
+                            name = name,
+                            market = Market.US,
+                        )
+                    }
+
+                    Market.CASH -> null
                 }
             }
             .distinctBy { requestKey(it.symbol, it.market) }
@@ -455,6 +535,9 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             val raw = request.symbol.substringBefore(".").padStart(5, '0')
             "hk$raw"
         }
+
+        Market.US -> error("US market does not use Tencent quotes")
+        Market.CASH -> error("Cash market does not support Tencent quotes")
     }
 
     private fun normalizeSinaCode(request: QuoteRequest): String = when (request.market) {
@@ -467,6 +550,9 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             val raw = request.symbol.substringBefore(".").padStart(5, '0')
             "hk$raw"
         }
+
+        Market.US -> "gb_${request.symbol.lowercase()}"
+        Market.CASH -> error("Cash market does not support Sina quotes")
     }
 
     private fun httpGet(
@@ -601,6 +687,16 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         }.getOrElse { System.currentTimeMillis() }
     }
 
+    private fun parseSinaUsTimestamp(raw: String): Long {
+        if (raw.isBlank()) return System.currentTimeMillis()
+        return runCatching {
+            LocalDateTime.parse(
+                raw,
+                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+            ).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        }.getOrElse { System.currentTimeMillis() }
+    }
+
     private fun requestKey(symbol: String, market: Market): String = "${market.name}:$symbol"
 
     private companion object {
@@ -655,10 +751,21 @@ class FakeQuoteDataSource : QuoteDataSource {
         if (normalizedKeyword.isBlank()) return emptyList()
 
         return fakeNames.mapNotNull { (symbol, name) ->
-            val currentMarket = if (symbol.endsWith(".HK")) Market.HONG_KONG else Market.A_SHARE
+            val currentMarket = when {
+                symbol.endsWith(".HK") -> Market.HONG_KONG
+                symbol.all { it.isLetterOrDigit() || it == '.' || it == '-' } &&
+                    symbol.any(Char::isLetter) &&
+                    !symbol.all(Char::isDigit) -> Market.US
+                else -> Market.A_SHARE
+            }
             if (currentMarket != market) return@mapNotNull null
 
-            val displaySymbol = if (currentMarket == Market.HONG_KONG) symbol else symbol.substringBefore(".")
+            val displaySymbol = when (currentMarket) {
+                Market.HONG_KONG -> symbol
+                Market.US -> symbol
+                Market.A_SHARE -> symbol.substringBefore(".")
+                Market.CASH -> symbol
+            }
             if (
                 displaySymbol.contains(normalizedKeyword, ignoreCase = true) ||
                 name.contains(normalizedKeyword, ignoreCase = true)
@@ -684,11 +791,13 @@ class FakeQuoteDataSource : QuoteDataSource {
             "300750" to BaseQuote(201.80, 195.40),
             "0700.HK" to BaseQuote(305.40, 308.85),
             "0941.HK" to BaseQuote(75.10, 74.60),
+            "AAPL" to BaseQuote(271.06, 273.43),
         )
         val fakeNames = mapOf(
             "300750" to "宁德时代",
             "0700.HK" to "腾讯控股",
             "0941.HK" to "中国移动",
+            "AAPL" to "苹果",
         )
     }
 }
