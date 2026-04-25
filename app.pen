@@ -1,0 +1,583 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "WgtuF",
+      "x": 0,
+      "y": 0,
+      "name": "Stock App",
+      "width": 390,
+      "height": 844,
+      "fill": "$surface.primary",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "mgwN1",
+          "name": "statusBar",
+          "width": "fill_container",
+          "height": 62,
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "NhEjj",
+              "name": "time",
+              "fill": "$foreground.primary",
+              "content": "9:41",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "sgQEw",
+              "name": "battery",
+              "width": 24,
+              "height": 24,
+              "iconFontName": "battery-full",
+              "iconFontFamily": "lucide",
+              "fill": "$foreground.primary"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "LZsvy",
+          "name": "contentWrapper",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            16,
+            20
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "cqMwg",
+              "name": "header",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "MuMSo",
+                  "name": "headerTitle",
+                  "fill": "$foreground.secondary",
+                  "content": "总资产",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "TQpiW",
+                  "name": "headerValue",
+                  "fill": "$foreground.primary",
+                  "content": "¥128,450.00",
+                  "fontFamily": "Inter",
+                  "fontSize": 36,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "frame",
+                  "id": "88OHB",
+                  "name": "headerSub",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mT5o5",
+                      "name": "headerSubLabel",
+                      "fill": "$foreground.muted",
+                      "content": "今日",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "2FETn",
+                      "name": "headerSubValue",
+                      "fill": "#10B981",
+                      "content": "+1,250.00 (+0.98%)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WVpQc",
+              "name": "actionsTile",
+              "width": "fill_container",
+              "fill": "$surface.secondary",
+              "cornerRadius": "$rounded.2xl",
+              "gap": 16,
+              "padding": 20,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "dwAw2",
+                  "name": "buyBtn",
+                  "width": "fill_container",
+                  "height": 48,
+                  "fill": "$surface.inverse",
+                  "cornerRadius": "$rounded.xl",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "9DJcQ",
+                      "name": "buyText",
+                      "fill": "$foreground.inverse",
+                      "content": "买入",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "tEGdQ",
+                  "name": "sellBtn",
+                  "width": "fill_container",
+                  "height": 48,
+                  "fill": "$surface.primary",
+                  "cornerRadius": "$rounded.xl",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "RutKD",
+                      "name": "sellText",
+                      "fill": "$foreground.primary",
+                      "content": "卖出",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "swRb9",
+              "name": "listTitle",
+              "fill": "$foreground.primary",
+              "content": "持仓列表",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "ysbDw",
+              "name": "listTile",
+              "width": "fill_container",
+              "fill": "$surface.secondary",
+              "cornerRadius": "$rounded.2xl",
+              "layout": "vertical",
+              "gap": 20,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "H7o3w",
+                  "name": "item1",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "T3xmw",
+                      "name": "item1Left",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "2yncx",
+                          "name": "item1Name",
+                          "fill": "$foreground.primary",
+                          "content": "苹果公司",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "OKxjo",
+                          "name": "item1Ticker",
+                          "fill": "$foreground.muted",
+                          "content": "AAPL • 50 股",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "VPGUg",
+                      "name": "item1Right",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "alignItems": "end",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "qmi8V",
+                          "name": "item1Price",
+                          "fill": "$foreground.primary",
+                          "content": "$175.50",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "bl9Hp",
+                          "name": "item1PL",
+                          "fill": "#10B981",
+                          "content": "+2.4%",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "apkBs",
+                  "name": "item2",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "t5Nnw",
+                      "name": "item2Left",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "dgnPd",
+                          "name": "item2Name",
+                          "fill": "$foreground.primary",
+                          "content": "特斯拉",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "E62oM",
+                          "name": "item2Ticker",
+                          "fill": "$foreground.muted",
+                          "content": "TSLA • 20 股",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "QtkU2",
+                      "name": "item2Right",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "alignItems": "end",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "0BhXT",
+                          "name": "item2Price",
+                          "fill": "$foreground.primary",
+                          "content": "$214.30",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "lde7g",
+                          "name": "item2PL",
+                          "fill": "#EF4444",
+                          "content": "-1.2%",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "q87Uo",
+                  "name": "item3",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "4Fzar",
+                      "name": "item3Left",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "1MTHH",
+                          "name": "item3Name",
+                          "fill": "$foreground.primary",
+                          "content": "微软",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "NP685",
+                          "name": "item3Ticker",
+                          "fill": "$foreground.muted",
+                          "content": "MSFT • 10 股",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "xWaT4",
+                      "name": "item3Right",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "alignItems": "end",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zoH5C",
+                          "name": "item3Price",
+                          "fill": "$foreground.primary",
+                          "content": "$402.10",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "fqoFq",
+                          "name": "item3PL",
+                          "fill": "#10B981",
+                          "content": "+0.5%",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "sTslj",
+          "layoutPosition": "absolute",
+          "x": 0,
+          "y": 782,
+          "name": "bottomBar",
+          "width": 390,
+          "padding": [
+            12,
+            21
+          ],
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "w4jCt",
+              "name": "pill",
+              "width": "fill_container",
+              "height": 62,
+              "fill": "$surface.primary",
+              "cornerRadius": 36,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E5E7EB"
+              },
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#0000000a",
+                "offset": {
+                  "x": 0,
+                  "y": 2
+                },
+                "blur": 4
+              },
+              "padding": 4,
+              "justifyContent": "space_around",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "SHFEs",
+                  "name": "tab1",
+                  "width": 70,
+                  "height": "fill_container",
+                  "fill": "$surface.inverse",
+                  "cornerRadius": 26,
+                  "layout": "vertical",
+                  "gap": 4,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "kApNT",
+                      "name": "tab1Icon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "house",
+                      "iconFontFamily": "lucide",
+                      "fill": "$foreground.inverse"
+                    },
+                    {
+                      "type": "text",
+                      "id": "C5rpo",
+                      "name": "tab1Label",
+                      "fill": "$foreground.inverse",
+                      "content": "首页",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "7fa5a",
+                  "name": "tab2",
+                  "width": 70,
+                  "height": "fill_container",
+                  "fill": "#00000000",
+                  "cornerRadius": 26,
+                  "layout": "vertical",
+                  "gap": 4,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "SroiU",
+                      "name": "tab2Icon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "chart-pie",
+                      "iconFontFamily": "lucide",
+                      "fill": "$foreground.muted"
+                    },
+                    {
+                      "type": "text",
+                      "id": "luF01",
+                      "name": "tab2Label",
+                      "fill": "$foreground.muted",
+                      "content": "持仓",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "accent.primary": {
+      "type": "color",
+      "value": "#635BFF"
+    },
+    "foreground.inverse": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "foreground.muted": {
+      "type": "color",
+      "value": "#9CA3AF"
+    },
+    "foreground.primary": {
+      "type": "color",
+      "value": "#1A1A1A"
+    },
+    "foreground.secondary": {
+      "type": "color",
+      "value": "#4B5563"
+    },
+    "rounded.2xl": {
+      "type": "number",
+      "value": 16
+    },
+    "rounded.full": {
+      "type": "number",
+      "value": 9999
+    },
+    "rounded.lg": {
+      "type": "number",
+      "value": 8
+    },
+    "rounded.xl": {
+      "type": "number",
+      "value": 12
+    },
+    "shadow.sm": {
+      "type": "string",
+      "value": "not used"
+    },
+    "surface.inverse": {
+      "type": "color",
+      "value": "#1A1A1A"
+    },
+    "surface.primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "surface.secondary": {
+      "type": "color",
+      "value": "#F7F8FA"
+    }
+  }
+}
