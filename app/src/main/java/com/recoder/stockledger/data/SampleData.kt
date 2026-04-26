@@ -5,6 +5,7 @@ import java.time.LocalDate
 object SampleData {
     fun tradeForm(defaultType: TradeType): TradeFormState = TradeFormState(
         selectedType = defaultType,
+        platform = BrokerPlatform.configurableEntries.first(),
         market = if (defaultType.isSecurityTrade) Market.A_SHARE else Market.CASH,
         symbolOrName = "",
         tradeDate = LocalDate.now().toString(),

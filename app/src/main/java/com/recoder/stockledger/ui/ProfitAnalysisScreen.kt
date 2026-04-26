@@ -1,9 +1,12 @@
 package com.recoder.stockledger.ui
 
+import android.app.DatePickerDialog
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +45,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +57,7 @@ import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.ExchangeRates
 import com.recoder.stockledger.data.ProfitAnalysisPointUiModel
 import com.recoder.stockledger.data.ProfitAnalysisUiModel
+import com.recoder.stockledger.data.SecurityProfitAnalysisUiModel
 import com.recoder.stockledger.data.rateToCny
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.BorderSubtle
@@ -72,9 +78,11 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 import java.time.temporal.WeekFields
+import kotlin.math.abs
 import kotlin.math.absoluteValue
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private val AnalysisLineColor = Color(0xFF3B82F6)
 private val AnalysisFillTopColor = Color(0x443B82F6)
@@ -868,7 +876,7 @@ private fun BucketCard(
 }
 
 @Composable
-private fun AnalysisStatCard(
+internal fun AnalysisStatCard(
     title: String,
     value: String,
     valueColor: Color,
@@ -898,7 +906,7 @@ private fun AnalysisStatCard(
 }
 
 @Composable
-private fun <T> SegmentRow(
+internal fun <T> SegmentRow(
     options: List<T>,
     selected: T,
     label: (T) -> String,
@@ -935,7 +943,7 @@ private fun <T> SegmentRow(
 }
 
 @Composable
-private fun <T> SegmentStrip(
+internal fun <T> SegmentStrip(
     options: List<T>,
     selected: T,
     label: (T) -> String,

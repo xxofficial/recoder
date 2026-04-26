@@ -1,6 +1,7 @@
 package com.recoder.stockledger.data.repository
 
 import android.util.Log
+import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.ExchangeRateRefreshResult
 import com.recoder.stockledger.data.ExchangeRates
 import com.recoder.stockledger.data.Market
@@ -12,9 +13,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
@@ -47,6 +51,7 @@ data class HistoricalClosePoint(
 
 data class TradeDraftInput(
     val tradeType: TradeType,
+    val platform: BrokerPlatform,
     val market: Market,
     val symbol: String,
     val name: String,
@@ -58,6 +63,13 @@ data class TradeDraftInput(
     val note: String,
     val tradeTime: String,
     val createdAt: Long,
+)
+
+data class ImportedBackup(
+    val displayCurrencyName: String?,
+    val transactionCount: Int,
+    val enabledPlatforms: List<BrokerPlatform>,
+    val selectedPlatform: BrokerPlatform?,
 )
 
 interface QuoteDataSource {
@@ -111,6 +123,7 @@ class DefaultLedgerRepository(
         dao.insertTransaction(
             TransactionEntity(
                 tradeType = input.tradeType.name,
+                platform = input.platform.name,
                 market = input.market.name,
                 symbol = input.symbol,
                 name = input.name,
@@ -134,6 +147,7 @@ class DefaultLedgerRepository(
             TransactionEntity(
                 id = transactionId,
                 tradeType = input.tradeType.name,
+                platform = input.platform.name,
                 market = input.market.name,
                 symbol = input.symbol,
                 name = input.name,
@@ -150,6 +164,108 @@ class DefaultLedgerRepository(
     }
 
     suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
+
+    suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
+        dao.replaceTransactions(transactions)
+    }
+
+    suspend fun exportBackup(
+        outputStream: OutputStream,
+        displayCurrencyName: String,
+        enabledPlatforms: List<BrokerPlatform>,
+        selectedPlatform: BrokerPlatform?,
+    ) = withContext(Dispatchers.IO) {
+        val transactionsSnapshot = transactions.first()
+        val payload = JSONObject().apply {
+            put("version", 2)
+            put("exportedAt", System.currentTimeMillis())
+            put("displayCurrency", displayCurrencyName)
+            put("enabledPlatforms", org.json.JSONArray().apply {
+                enabledPlatforms.forEach { put(it.name) }
+            })
+            put("selectedPlatform", selectedPlatform?.name)
+            put("transactions", org.json.JSONArray().apply {
+                transactionsSnapshot.forEach { transaction ->
+                    put(
+                        JSONObject().apply {
+                            put("id", transaction.id)
+                            put("tradeType", transaction.tradeType)
+                            put("platform", transaction.platform)
+                            put("market", transaction.market)
+                            put("symbol", transaction.symbol)
+                            put("name", transaction.name)
+                            put("tradeDate", transaction.tradeDate)
+                            put("tradeTime", transaction.tradeTime)
+                            put("price", transaction.price)
+                            put("quantity", transaction.quantity)
+                            put("commission", transaction.commission)
+                            put("tax", transaction.tax)
+                            put("note", transaction.note)
+                            put("createdAt", transaction.createdAt)
+                        },
+                    )
+                }
+            })
+        }
+        outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload.toString(2)) }
+    }
+
+    suspend fun importBackup(inputStream: InputStream): ImportedBackup = withContext(Dispatchers.IO) {
+        val json = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val payload = JSONObject(json)
+        val transactionsArray = payload.optJSONArray("transactions") ?: org.json.JSONArray()
+        val enabledPlatforms = buildList {
+            val array = payload.optJSONArray("enabledPlatforms") ?: org.json.JSONArray()
+            for (index in 0 until array.length()) {
+                val name = array.optString(index)
+                BrokerPlatform.entries.firstOrNull { it.name == name && it.isConfigurable }?.let(::add)
+            }
+        }
+        val selectedPlatform = payload.optString("selectedPlatform")
+            .takeIf { it.isNotBlank() }
+            ?.let { name -> BrokerPlatform.entries.firstOrNull { it.name == name && it.isConfigurable } }
+        val importedTransactions = buildList {
+            for (index in 0 until transactionsArray.length()) {
+                val item = transactionsArray.optJSONObject(index) ?: continue
+                add(
+                    TransactionEntity(
+                        id = item.optLong("id"),
+                        tradeType = item.optString("tradeType"),
+                        platform = item.optString("platform").ifBlank { BrokerPlatform.UNSPECIFIED.name },
+                        market = item.optString("market"),
+                        symbol = item.optString("symbol"),
+                        name = item.optString("name"),
+                        tradeDate = item.optString("tradeDate"),
+                        tradeTime = item.optString("tradeTime"),
+                        price = item.optDouble("price"),
+                        quantity = item.optInt("quantity"),
+                        commission = item.optDouble("commission"),
+                        tax = item.optDouble("tax"),
+                        note = item.optString("note"),
+                        createdAt = item.optLong("createdAt"),
+                    ),
+                )
+            }
+        }
+        val restoredPlatforms = if (enabledPlatforms.isNotEmpty()) {
+            enabledPlatforms
+        } else {
+            importedTransactions
+                .mapNotNull { transaction ->
+                    BrokerPlatform.entries.firstOrNull {
+                        it.name == transaction.platform && it.isConfigurable
+                    }
+                }
+                .distinctBy { it.name }
+        }
+        replaceTransactions(importedTransactions)
+        ImportedBackup(
+            displayCurrencyName = payload.optString("displayCurrency").takeIf { it.isNotBlank() },
+            transactionCount = importedTransactions.size,
+            enabledPlatforms = restoredPlatforms,
+            selectedPlatform = selectedPlatform?.takeIf { it in restoredPlatforms },
+        )
+    }
 
     suspend fun deleteHolding(symbol: String, market: Market): Int {
         return dao.deleteHolding(symbol = symbol, market = market.name)

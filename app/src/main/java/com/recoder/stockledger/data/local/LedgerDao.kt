@@ -23,6 +23,9 @@ interface LedgerDao {
     @Insert
     suspend fun insertTransactions(transactions: List<TransactionEntity>)
 
+    @Query("DELETE FROM transactions")
+    suspend fun clearTransactions()
+
     @Update
     suspend fun updateTransaction(transaction: TransactionEntity)
 
@@ -52,6 +55,13 @@ interface LedgerDao {
         val deletedCount = deleteTransactionsByHolding(symbol, market)
         deleteQuoteByHolding(symbol, market)
         return deletedCount
+    }
+
+    @Transaction
+    suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
+        clearTransactions()
+        clearQuotes()
+        insertTransactions(transactions)
     }
 
     @Query("SELECT MAX(lastUpdatedAt) FROM quote_snapshots")

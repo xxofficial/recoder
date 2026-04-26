@@ -39,7 +39,7 @@ enum class TradeType(val label: String) {
 enum class RefreshState(val title: String) {
     IDLE("等待手动刷新"),
     REFRESHING("刷新中"),
-    FRESH("刚刚更新"),
+    FRESH("刚刚刷新"),
     FAILED("刷新失败"),
 }
 
@@ -78,6 +78,25 @@ enum class MarketFilter(
     CASH("现金", Market.CASH),
 }
 
+enum class BrokerPlatform(
+    val label: String,
+    val shortLabel: String,
+    val isConfigurable: Boolean = true,
+) {
+    UNSPECIFIED("未设置", "未", false),
+    ALIPAY("支付宝", "支"),
+    EAST_MONEY("东方财富", "东财"),
+    LONGBRIDGE("长桥证券", "长桥"),
+    HSBC("汇丰银行", "HS"),
+    WEBULL("盈立证券", "盈立"),
+    ZHUORUI("卓锐证券", "卓锐"),
+    ;
+
+    companion object {
+        val configurableEntries: List<BrokerPlatform> = entries.filter { it.isConfigurable }
+    }
+}
+
 data class PortfolioSummary(
     val totalAssets: String,
     val totalCost: String,
@@ -103,6 +122,12 @@ data class HoldingUiModel(
     val changeLabel: String,
     val pnlLabel: String,
     val trend: PriceTrend,
+    val dayProfitLabel: String,
+    val dayProfitPercentLabel: String,
+    val totalProfitLabel: String,
+    val totalProfitPercentLabel: String,
+    val dayTrend: PriceTrend,
+    val totalTrend: PriceTrend,
 )
 
 data class SellCandidateUiModel(
@@ -126,10 +151,19 @@ data class TransactionUiModel(
     val amountLabel: String,
     val timeLabel: String,
     val feeLabel: String,
+    val platform: BrokerPlatform,
+    val platformLabel: String,
+)
+
+data class ManagedPlatformUiModel(
+    val platform: BrokerPlatform?,
+    val label: String,
+    val isSelected: Boolean,
 )
 
 data class TradeFormState(
     val selectedType: TradeType,
+    val platform: BrokerPlatform,
     val market: Market,
     val symbolOrName: String,
     val tradeDate: String,

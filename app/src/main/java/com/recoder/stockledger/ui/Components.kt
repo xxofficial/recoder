@@ -1,10 +1,13 @@
-package com.recoder.stockledger.ui
+﻿package com.recoder.stockledger.ui
 
 import android.app.DatePickerDialog
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,12 +29,19 @@ import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,13 +49,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.recoder.stockledger.R
 import com.recoder.stockledger.data.DisplayCurrency
+import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.HoldingUiModel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.PriceTrend
@@ -73,16 +87,17 @@ enum class TopLevelDestination(
     val label: String,
     val icon: ImageVector,
 ) {
-    HOLDINGS("持仓", Icons.Filled.AccountBalanceWallet),
-    ANALYSIS("盈亏", Icons.Filled.BarChart),
-    OPERATIONS("操作", Icons.Filled.AddCircle),
-    TRANSACTIONS("流水", Icons.AutoMirrored.Filled.List),
+    HOLDINGS("鎸佷粨", Icons.Filled.AccountBalanceWallet),
+    ANALYSIS("鐩堜簭", Icons.Filled.BarChart),
+    OPERATIONS("鎿嶄綔", Icons.Filled.AddCircle),
+    TRANSACTIONS("娴佹按", Icons.AutoMirrored.Filled.List),
 }
 
 @Composable
 fun ScreenHeader(
     title: String,
     onBack: (() -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -111,7 +126,16 @@ fun ScreenHeader(
             fontWeight = FontWeight.SemiBold,
         )
 
-        Spacer(modifier = Modifier.size(24.dp))
+        if (trailingContent != null) {
+            Box(
+                modifier = Modifier.size(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                trailingContent()
+            }
+        } else {
+            Spacer(modifier = Modifier.size(24.dp))
+        }
     }
 }
 
@@ -182,7 +206,7 @@ fun RefreshStatusCard(
     val badgeText = when (state) {
         RefreshState.IDLE -> "下拉刷新"
         RefreshState.REFRESHING -> "刷新中"
-        RefreshState.FRESH -> "刚刚更新"
+        RefreshState.FRESH -> "刚刚刷新"
         RefreshState.FAILED -> "稍后重试"
     }
     val badgeBackground = when (state) {
@@ -230,6 +254,7 @@ fun TradeActionButtons(
     onSellClick: () -> Unit,
     onDepositClick: () -> Unit,
     onWithdrawClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     Column(
         modifier = Modifier
@@ -238,19 +263,19 @@ fun TradeActionButtons(
             .background(SurfaceSecondary)
             .padding(20.dp),
     ) {
-        Text("快捷录入", color = ForegroundSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text("蹇嵎褰曞叆", color = ForegroundSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Spacer(modifier = Modifier.height(14.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             FilledActionButton(
-                text = "买入",
+                text = "涔板叆",
                 onClick = onBuyClick,
                 modifier = Modifier.weight(1f),
             )
             OutlineActionButton(
-                text = "卖出",
+                text = "鍗栧嚭",
                 onClick = onSellClick,
                 modifier = Modifier.weight(1f),
             )
@@ -261,12 +286,12 @@ fun TradeActionButtons(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             FilledActionButton(
-                text = "入金",
+                text = "鍏ラ噾",
                 onClick = onDepositClick,
                 modifier = Modifier.weight(1f),
             )
             OutlineActionButton(
-                text = "出金",
+                text = "鍑洪噾",
                 onClick = onWithdrawClick,
                 modifier = Modifier.weight(1f),
             )
@@ -298,17 +323,140 @@ fun OutlineActionButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(BackgroundPrimary)
             .border(1.dp, BorderSubtle, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 13.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = ForegroundPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text,
+            color = if (enabled) ForegroundPrimary else ForegroundMuted,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+fun PlatformTopBar(
+    selectedPlatform: BrokerPlatform?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (selectedPlatform != null) {
+            PlatformLogoBadge(
+                platform = selectedPlatform,
+                modifier = Modifier.size(42.dp),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceSecondary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "汇",
+                    color = ForegroundPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = selectedPlatform?.label ?: "汇总",
+                color = ForegroundPrimary,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(
+                imageVector = Icons.Filled.Tune,
+                contentDescription = "切换平台",
+                tint = ForegroundPrimary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun InlineCurrencyDropdown(
+    title: String,
+    selected: DisplayCurrency,
+    onSelected: (DisplayCurrency) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = modifier.clickable { expanded = true },
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "$title(${selected.code})",
+            color = ForegroundPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = "切换显示货币",
+            tint = ForegroundPrimary,
+            modifier = Modifier.size(18.dp),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(BackgroundPrimary),
+        ) {
+            DisplayCurrency.entries.forEach { currency ->
+                DropdownMenuItem(
+                    text = {
+                        Text("${currency.label}(${currency.code})")
+                    },
+                    trailingIcon = if (currency == selected) {
+                        {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = ForegroundPrimary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        onSelected(currency)
+                        expanded = false
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -326,7 +474,7 @@ fun HoldingsCard(
             Text(item.name, color = ForegroundPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "${item.code} · ${item.market.label} · ${item.quantityLabel} · ${item.costLabel}",
+                "${item.code} 路 ${item.market.label} 路 ${item.quantityLabel} 路 ${item.costLabel}",
                 color = ForegroundSecondary,
                 fontSize = 12.sp,
             )
@@ -340,7 +488,7 @@ fun HoldingsCard(
         ) {
             Text(item.priceLabel, color = ForegroundPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Text(
-                text = "${item.changeLabel} · ${item.pnlLabel}",
+                text = "${item.changeLabel} 路 ${item.pnlLabel}",
                 color = item.trendColor(),
                 fontSize = 12.sp,
             )
@@ -355,12 +503,12 @@ fun HoldingsCard(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Delete,
-                    contentDescription = "删除持仓",
+                    contentDescription = "鍒犻櫎鎸佷粨",
                     tint = MarketDown,
                     modifier = Modifier.size(14.dp),
                 )
                 Text(
-                    text = "删除",
+                    text = "鍒犻櫎",
                     color = MarketDown,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -431,7 +579,7 @@ fun SellCandidateRow(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${candidate.market.label} · ${candidate.quantityLabel} · ${candidate.costLabel}",
+                text = "${candidate.market.label} 路 ${candidate.quantityLabel} 路 ${candidate.costLabel}",
                 color = ForegroundSecondary,
                 fontSize = 12.sp,
             )
@@ -439,7 +587,7 @@ fun SellCandidateRow(
 
         if (selected) {
             PillLabel(
-                text = "已选择",
+                text = "宸查€夋嫨",
                 background = MarketUpSoft,
                 foreground = MarketUp,
             )
@@ -486,14 +634,14 @@ fun SymbolSuggestionSection(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "${suggestion.symbol} · ${suggestion.market.label}",
+                        text = "${suggestion.symbol} 路 ${suggestion.market.label}",
                         color = ForegroundSecondary,
                         fontSize = 12.sp,
                     )
                 }
 
                 PillLabel(
-                    text = "补全",
+                    text = "琛ュ叏",
                     background = SurfaceMuted,
                     foreground = ForegroundPrimary,
                 )
@@ -505,12 +653,13 @@ fun SymbolSuggestionSection(
 @Composable
 fun TransactionRow(
     item: TransactionUiModel,
-    onEditClick: () -> Unit,
-    onDeleteClick: () -> Unit,
+    onClick: () -> Unit,
 ) {
     val (badgeBackground, badgeForeground) = tradeTypeColors(item.tradeType)
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -522,9 +671,18 @@ fun TransactionRow(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column {
-                Text(item.stockName, color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PlatformLogoBadge(
+                        platform = item.platform,
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Text(item.stockName, color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(item.stockMeta, color = ForegroundSecondary, fontSize = 12.sp)
+                Text("${item.platformLabel} · ${item.stockMeta}", color = ForegroundSecondary, fontSize = 12.sp)
             }
         }
 
@@ -540,56 +698,6 @@ fun TransactionRow(
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(item.feeLabel, color = ForegroundMuted, fontSize = 12.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(SurfaceMuted)
-                        .clickable(onClick = onEditClick)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Edit,
-                        contentDescription = "编辑记录",
-                        tint = ForegroundPrimary,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Text(
-                        text = "编辑",
-                        color = ForegroundPrimary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(MarketDownSoft)
-                        .clickable(onClick = onDeleteClick)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = "删除记录",
-                        tint = MarketDown,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Text(
-                        text = "删除",
-                        color = MarketDown,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-            }
         }
     }
 }
@@ -619,7 +727,7 @@ fun FilterChip(
 ) {
     val background = when {
         selected -> SurfaceInverse
-        text == "全部市场" -> Color(0xFFECEEF2)
+        text == "鍏ㄩ儴甯傚満" -> Color(0xFFECEEF2)
         else -> BackgroundPrimary
     }
     val contentColor = if (selected) BackgroundPrimary else ForegroundPrimary
@@ -629,7 +737,7 @@ fun FilterChip(
             .clip(RoundedCornerShape(999.dp))
             .background(background)
             .border(
-                width = if (selected || text == "全部市场") 0.dp else 1.dp,
+                width = if (selected || text == "鍏ㄩ儴甯傚満") 0.dp else 1.dp,
                 color = BorderSubtle,
                 shape = RoundedCornerShape(999.dp),
             )
@@ -714,7 +822,7 @@ fun InputFieldBlock(
         ) {
             if (onValueChange == null) {
                 Text(
-                    text = value.ifBlank { "请选择" },
+                    text = value.ifBlank { "璇烽€夋嫨" },
                     color = if (value.isBlank()) ForegroundMuted else ForegroundPrimary,
                     fontSize = 16.sp,
                     modifier = Modifier.weight(1f),
@@ -754,8 +862,8 @@ fun TradeEntryMarketSelector(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
-        SelectableBlock("港股", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
-        SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
+        SelectableBlock("娓偂", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
+        SelectableBlock("缇庤偂", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
     }
 }
 
@@ -774,21 +882,21 @@ fun TradeEntryFeeCard(
             .border(1.dp, Color(0xFFECEEF2), RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
-        Text("手续费 / 税费", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text("鎵嬬画璐?/ 绋庤垂", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             InputFieldBlock(
-                label = "佣金",
+                label = "浣ｉ噾",
                 value = commission,
                 onValueChange = onCommissionChange,
                 keyboardType = KeyboardType.Decimal,
                 modifier = Modifier.weight(1f),
             )
             InputFieldBlock(
-                label = "税费",
+                label = "绋庤垂",
                 value = tax,
                 onValueChange = onTaxChange,
                 keyboardType = KeyboardType.Decimal,
@@ -804,7 +912,7 @@ fun TradeEntryNoteField(
     onValueChange: (String) -> Unit,
 ) {
     Column {
-        Text("备注", color = ForegroundSecondary, fontSize = 14.sp)
+        Text("澶囨敞", color = ForegroundSecondary, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(8.dp))
         Box(
             modifier = Modifier
@@ -833,7 +941,7 @@ fun TradeEntryDateField(
         runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
     }
     InputFieldBlock(
-        label = "交易日期",
+        label = "浜ゆ槗鏃ユ湡",
         value = value,
         trailingIcon = Icons.Filled.DateRange,
         onClick = {
@@ -892,8 +1000,8 @@ fun MarketSelector(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
-        SelectableBlock("港股", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
-        SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
+        SelectableBlock("娓偂", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
+        SelectableBlock("缇庤偂", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
     }
 }
 
@@ -935,7 +1043,7 @@ fun TradeTypeSelector(
     }
 }
 
-private fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
+fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
     TradeType.BUY, TradeType.DEPOSIT -> MarketUpSoft to MarketUp
     TradeType.SELL, TradeType.WITHDRAW -> MarketDownSoft to MarketDown
 }
@@ -984,21 +1092,21 @@ fun FeeCard(
             .border(1.dp, Color(0xFFECEEF2), RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
-        Text("手续费 / 税费", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text("鎵嬬画璐?/ 绋庤垂", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             InputFieldBlock(
-                label = "佣金",
+                label = "浣ｉ噾",
                 value = commission,
                 onValueChange = onCommissionChange,
                 keyboardType = KeyboardType.Decimal,
                 modifier = Modifier.weight(1f),
             )
             InputFieldBlock(
-                label = "税费",
+                label = "绋庤垂",
                 value = tax,
                 onValueChange = onTaxChange,
                 keyboardType = KeyboardType.Decimal,
@@ -1014,7 +1122,7 @@ fun NoteField(
     onValueChange: (String) -> Unit,
 ) {
     Column {
-        Text("备注", color = ForegroundSecondary, fontSize = 14.sp)
+        Text("澶囨敞", color = ForegroundSecondary, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(8.dp))
         Box(
             modifier = Modifier
@@ -1039,7 +1147,7 @@ fun DateInputField(
     onValueChange: (String) -> Unit,
 ) {
     InputFieldBlock(
-        label = "交易日期",
+        label = "浜ゆ槗鏃ユ湡",
         value = value,
         trailingIcon = Icons.Filled.DateRange,
         onValueChange = onValueChange,
@@ -1051,3 +1159,61 @@ private fun HoldingUiModel.trendColor(): Color = when (trend) {
     PriceTrend.DOWN -> MarketDown
     PriceTrend.NEUTRAL -> MarketNeutral
 }
+
+@Composable
+fun BrokerPlatformSelector(
+    selected: BrokerPlatform,
+    onSelected: (BrokerPlatform) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BrokerPlatform.configurableEntries.forEach { platform ->
+            FilterChip(
+                text = platform.label,
+                selected = platform == selected,
+                onClick = { onSelected(platform) },
+            )
+        }
+    }
+}
+
+@Composable
+fun PlatformLogoBadge(
+    platform: BrokerPlatform,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(BackgroundPrimary)
+            .border(1.dp, BorderSubtle, RoundedCornerShape(10.dp))
+            .padding(6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(platformLogoRes(platform)),
+            contentDescription = platform.label,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+private fun platformLogoRes(platform: BrokerPlatform): Int = when (platform) {
+    BrokerPlatform.UNSPECIFIED -> R.drawable.platform_east_money
+    BrokerPlatform.ALIPAY -> R.drawable.platform_alipay
+    BrokerPlatform.EAST_MONEY -> R.drawable.platform_east_money
+    BrokerPlatform.LONGBRIDGE -> R.drawable.platform_longbridge
+    BrokerPlatform.HSBC -> R.drawable.platform_hsbc
+    BrokerPlatform.WEBULL -> R.drawable.platform_webull
+    BrokerPlatform.ZHUORUI -> R.drawable.platform_zhuorui
+}
+
+
+
+

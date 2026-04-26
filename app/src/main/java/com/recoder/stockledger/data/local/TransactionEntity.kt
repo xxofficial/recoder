@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val tradeType: String,
+    val platform: String,
     val market: String,
     val symbol: String,
     val name: String,

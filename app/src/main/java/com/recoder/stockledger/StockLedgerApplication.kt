@@ -13,7 +13,9 @@ class StockLedgerApplication : Application() {
             applicationContext,
             StockLedgerDatabase::class.java,
             "stock-ledger.db",
-        ).fallbackToDestructiveMigration().build()
+        ).addMigrations(StockLedgerDatabase.MIGRATION_1_2)
+            .fallbackToDestructiveMigration()
+            .build()
     }
 
     val repository: DefaultLedgerRepository by lazy {

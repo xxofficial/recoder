@@ -21,6 +21,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            resValue("string", "app_name", "StockLedger Debug")
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(

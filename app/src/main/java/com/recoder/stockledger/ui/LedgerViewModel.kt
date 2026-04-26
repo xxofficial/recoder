@@ -2,8 +2,10 @@
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.ExchangeRateOrigin
 import com.recoder.stockledger.data.ExchangeRates
@@ -11,10 +13,13 @@ import com.recoder.stockledger.StockLedgerApplication
 import com.recoder.stockledger.data.HoldingUiModel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.MarketFilter
+import com.recoder.stockledger.data.ManagedPlatformUiModel
 import com.recoder.stockledger.data.PortfolioSummary
 import com.recoder.stockledger.data.PriceTrend
 import com.recoder.stockledger.data.ProfitAnalysisPointUiModel
 import com.recoder.stockledger.data.ProfitAnalysisUiModel
+import com.recoder.stockledger.data.SecurityProfitAnalysisUiModel
+import com.recoder.stockledger.data.SecurityProfitPointUiModel
 import com.recoder.stockledger.data.RefreshState
 import com.recoder.stockledger.data.SampleData
 import com.recoder.stockledger.data.SecuritySuggestionUiModel
@@ -31,6 +36,7 @@ import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
 import com.recoder.stockledger.data.repository.DefaultLedgerRepository
 import com.recoder.stockledger.data.repository.HistoricalClosePoint
+import com.recoder.stockledger.data.repository.ImportedBackup
 import com.recoder.stockledger.data.repository.SecurityLookupResult
 import com.recoder.stockledger.data.repository.TradeDraftInput
 import kotlinx.coroutines.Job
@@ -75,6 +81,11 @@ data class LedgerUiState(
     val profitAnalysis: ProfitAnalysisUiModel = ProfitAnalysisUiModel(),
     val selectedTradeFilter: TransactionFilter = TransactionFilter.ALL,
     val selectedMarketFilter: MarketFilter = MarketFilter.ALL,
+    val transactionKeyword: String = "",
+    val transactionDateStart: String = "",
+    val transactionDateEnd: String = "",
+    val managedPlatforms: List<ManagedPlatformUiModel> = emptyList(),
+    val selectedPlatform: BrokerPlatform? = null,
     val draft: TradeFormState = SampleData.tradeForm(TradeType.BUY),
     val symbolLookup: SymbolLookupUiModel = SymbolLookupUiModel(),
     val symbolSuggestions: List<SecuritySuggestionUiModel> = emptyList(),
@@ -83,6 +94,7 @@ data class LedgerUiState(
     val editingTransactionId: Long? = null,
     val displayCurrency: DisplayCurrency = DisplayCurrency.CNY,
     val exchangeRates: ExchangeRates = ExchangeRates(),
+    val backupStatusMessage: String? = null,
 )
 
 class LedgerViewModel(application: Application) : AndroidViewModel(application) {
@@ -92,6 +104,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val tradeFilter = MutableStateFlow(TransactionFilter.ALL)
     private val marketFilter = MutableStateFlow(MarketFilter.ALL)
+    private val transactionKeyword = MutableStateFlow("")
+    private val transactionDateStart = MutableStateFlow<String?>(null)
+    private val transactionDateEnd = MutableStateFlow<String?>(null)
+    private val selectedPlatform = MutableStateFlow(loadSavedSelectedPlatform())
     private val draft = MutableStateFlow(SampleData.tradeForm(TradeType.BUY))
     private val symbolLookup = MutableStateFlow(SymbolLookupUiModel())
     private val symbolSuggestions = MutableStateFlow<List<SecuritySuggestionUiModel>>(emptyList())
@@ -101,12 +117,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val showPullRefreshTime = MutableStateFlow(false)
     private val displayCurrency = MutableStateFlow(loadSavedDisplayCurrency())
     private val editingTrade = MutableStateFlow<EditingTradeSession?>(null)
+    private val backupStatusMessage = MutableStateFlow<String?>(null)
 
     private var lastManualRefreshTriggeredAt: Long = 0L
     private var symbolLookupJob: Job? = null
 
-    private val portfolio = combine(repository.transactions, repository.quotes, repository.exchangeRates) { transactions, quotes, exchangeRates ->
-        computePortfolio(transactions, quotes, exchangeRates)
+    private val portfolio = combine(
+        repository.transactions,
+        repository.quotes,
+        repository.exchangeRates,
+        selectedPlatform,
+    ) { transactions, quotes, exchangeRates, activePlatform ->
+        computePortfolio(
+            filterTransactionsByPlatform(transactions, activePlatform),
+            quotes,
+            exchangeRates,
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -118,19 +144,36 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         repository.quotes,
         repository.exchangeRates,
         editingTrade,
-    ) { transactions, quotes, exchangeRates, currentEditingTrade ->
+        draft,
+    ) { transactions, quotes, exchangeRates, currentEditingTrade, currentDraft ->
         val referenceTransactions = currentEditingTrade?.let { session ->
             transactions.filterNot { it.id == session.transactionId }
         } ?: transactions
-        computePortfolio(referenceTransactions, quotes, exchangeRates)
+        computePortfolio(
+            filterTransactionsByPlatform(referenceTransactions, currentDraft.platform),
+            quotes,
+            exchangeRates,
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = emptyPortfolioComputation(),
     )
 
-    private val filters = combine(tradeFilter, marketFilter) { selectedTradeFilter, selectedMarketFilter ->
-        selectedTradeFilter to selectedMarketFilter
+    private val filters = combine(
+        tradeFilter,
+        marketFilter,
+        transactionKeyword,
+        transactionDateStart,
+        transactionDateEnd,
+    ) { selectedTradeFilter, selectedMarketFilter, keyword, startDate, endDate ->
+        TransactionFilters(
+            tradeFilter = selectedTradeFilter,
+            marketFilter = selectedMarketFilter,
+            keyword = keyword,
+            startDate = startDate,
+            endDate = endDate,
+        )
     }
 
     private val refreshMeta = combine(
@@ -147,19 +190,48 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    private val analysisInputs = combine(
+        repository.historicalCloses,
+        repository.quotes,
+    ) { historicalCloses, quotes ->
+        historicalCloses to quotes
+    }
+
+    private val platformSetup = combine(repository.transactions, selectedPlatform) { transactions, active ->
+        val recordedPlatforms = transactions
+            .mapNotNull { transaction ->
+                BrokerPlatform.entries.firstOrNull { platform ->
+                    platform.name == transaction.platform && platform.isConfigurable
+                }
+            }
+            .distinctBy { it.name }
+            .sortedBy { it.label }
+        val resolvedSelection = active?.takeIf { it in recordedPlatforms }
+        if (resolvedSelection != active) {
+            selectedPlatform.value = resolvedSelection
+            saveSelectedPlatform(resolvedSelection)
+        }
+        PlatformSetup(
+            recorded = recordedPlatforms,
+            selected = resolvedSelection,
+        )
+    }
+
     val uiState: StateFlow<LedgerUiState> = combine(
         portfolio,
         draftReferencePortfolio,
         repository.transactions,
         editingTrade,
-        repository.historicalCloses,
-    ) { portfolioState, referencePortfolioState, transactions, currentEditingTrade, historicalCloses ->
+        analysisInputs,
+    ) { portfolioState, referencePortfolioState, transactions, currentEditingTrade, analysisInput ->
+        val (historicalCloses, quotes) = analysisInput
         PortfolioContext(
             portfolio = portfolioState,
             draftReferencePortfolio = referencePortfolioState,
             transactions = transactions,
             editingTrade = currentEditingTrade,
             historicalCloses = historicalCloses,
+            quotes = quotes,
         )
     }.combine(filters) { context, selectedFilters ->
         PortfolioTransactionsAndFilters(context = context, filters = selectedFilters)
@@ -167,12 +239,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         PortfolioTransactionsFiltersAndDraft(upstream = upstream, draft = tradeDraft)
     }.combine(refreshMeta) { upstream, meta ->
         PortfolioTransactionsFiltersDraftAndRefresh(upstream = upstream, refresh = meta)
+    }.combine(platformSetup) { upstream, platforms ->
+        upstream to platforms
     }.combine(displayCurrency) { upstream, selectedDisplayCurrency ->
-        upstream to selectedDisplayCurrency
+        Triple(upstream.first, upstream.second, selectedDisplayCurrency)
     }.combine(symbolLookup) { upstream, lookup ->
-        val (state, selectedDisplayCurrency) = upstream
-        val (selectedTradeFilter, selectedMarketFilter) = state.upstream.upstream.filters
+        val (state, platforms, selectedDisplayCurrency) = upstream
+        val selectedFilters = state.upstream.upstream.filters
         val context = state.upstream.upstream.context
+        val platformScopedTransactions = filterTransactionsByPlatform(
+            context.transactions,
+            platforms.selected,
+        )
         val validationMessage = validateTradeDraft(
             draft = state.upstream.draft,
             portfolio = context.draftReferencePortfolio,
@@ -191,18 +269,44 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             holdings = context.portfolio.holdings,
             sellCandidates = buildSellCandidates(context.draftReferencePortfolio.positions),
             transactionSections = buildTransactionSections(
-                transactions = context.transactions,
-                tradeFilter = selectedTradeFilter,
-                marketFilter = selectedMarketFilter,
+                transactions = platformScopedTransactions,
+                tradeFilter = selectedFilters.tradeFilter,
+                marketFilter = selectedFilters.marketFilter,
+                keyword = selectedFilters.keyword,
+                startDate = selectedFilters.startDate,
+                endDate = selectedFilters.endDate,
             ),
             profitAnalysis = buildProfitAnalysis(
                 portfolio = context.portfolio,
-                transactions = context.transactions,
+                transactions = platformScopedTransactions,
                 exchangeRates = repository.exchangeRates.value,
                 historicalCloses = context.historicalCloses,
+                quotes = context.quotes,
             ),
-            selectedTradeFilter = selectedTradeFilter,
-            selectedMarketFilter = selectedMarketFilter,
+            selectedTradeFilter = selectedFilters.tradeFilter,
+            selectedMarketFilter = selectedFilters.marketFilter,
+            transactionKeyword = selectedFilters.keyword,
+            transactionDateStart = selectedFilters.startDate.orEmpty(),
+            transactionDateEnd = selectedFilters.endDate.orEmpty(),
+            managedPlatforms = buildList {
+                add(
+                    ManagedPlatformUiModel(
+                        platform = null,
+                        label = "汇总",
+                        isSelected = platforms.selected == null,
+                    ),
+                )
+                platforms.recorded.forEach { platform ->
+                    add(
+                        ManagedPlatformUiModel(
+                            platform = platform,
+                            label = platform.label,
+                            isSelected = platform == platforms.selected,
+                        ),
+                    )
+                }
+            },
+            selectedPlatform = platforms.selected,
             draft = state.upstream.draft,
             symbolLookup = lookup,
             canSubmitTrade = validationMessage == null,
@@ -213,6 +317,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         )
     }.combine(symbolSuggestions) { state, suggestions ->
         state.copy(symbolSuggestions = suggestions)
+    }.combine(backupStatusMessage) { state, message ->
+        state.copy(backupStatusMessage = message)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -235,23 +341,37 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openTradeEntry(type: TradeType) {
+        val activePlatform = selectedPlatform.value ?: draft.value.platform
         symbolLookupJob?.cancel()
         editingTrade.value = null
         symbolLookup.value = SymbolLookupUiModel()
         symbolSuggestions.value = emptyList()
-        draft.value = applyDraftRules(resetDraftForType(type, preferredCashMarket = cashMarketFor(displayCurrency.value)))
+        draft.value = applyDraftRules(
+            resetDraftForType(
+                type = type,
+                preferredCashMarket = cashMarketFor(displayCurrency.value),
+                preferredPlatform = activePlatform,
+            ),
+        )
     }
 
     fun startEditingTrade(transactionId: Long) {
         viewModelScope.launch {
             val transactions = repository.transactions.first()
             val transaction = transactions.firstOrNull { it.id == transactionId } ?: return@launch
+            val transactionPlatform = runCatching {
+                BrokerPlatform.valueOf(transaction.platform)
+            }.getOrDefault(BrokerPlatform.UNSPECIFIED)
             val referencePortfolio = computePortfolio(
-                transactions = transactions.filterNot { it.id == transactionId },
+                transactions = filterTransactionsByPlatform(
+                    transactions.filterNot { it.id == transactionId },
+                    transactionPlatform,
+                ),
                 quotes = repository.quotes.first(),
                 exchangeRates = repository.exchangeRates.value,
             )
             val tradeType = TradeType.valueOf(transaction.tradeType)
+            val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
             val market = Market.valueOf(transaction.market)
             val resolvedLookup = if (tradeType.isSecurityTrade) {
                 SymbolLookupUiModel(
@@ -276,6 +396,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             draft.value = applyDraftRules(
                 draft = TradeFormState(
                     selectedType = tradeType,
+                    platform = platform,
                     market = market,
                     symbolOrName = if (tradeType.isSecurityTrade) {
                         "${transaction.name} ${transaction.symbol}".trim()
@@ -305,6 +426,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     type = type,
                     current = current,
                     preferredCashMarket = cashMarketFor(displayCurrency.value),
+                    preferredPlatform = current.platform,
                 ),
             )
         }
@@ -344,6 +466,32 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         marketFilter.value = filter
     }
 
+    fun updateTransactionDateRange(
+        startDate: String?,
+        endDate: String?,
+    ) {
+        transactionDateStart.value = startDate?.takeIf { it.isNotBlank() }
+        transactionDateEnd.value = endDate?.takeIf { it.isNotBlank() }
+    }
+
+    fun updateTransactionKeyword(keyword: String) {
+        transactionKeyword.value = keyword.trimStart()
+    }
+
+    fun resetTransactionFilters() {
+        tradeFilter.value = TransactionFilter.ALL
+        marketFilter.value = MarketFilter.ALL
+        transactionKeyword.value = ""
+        transactionDateStart.value = null
+        transactionDateEnd.value = null
+    }
+
+    fun selectGlobalPlatform(platform: BrokerPlatform?) {
+        selectedPlatform.value = platform
+        saveSelectedPlatform(platform)
+        backupStatusMessage.value = null
+    }
+
     fun selectDisplayCurrency(currency: DisplayCurrency) {
         saveDisplayCurrency(currency)
         displayCurrency.value = currency
@@ -359,6 +507,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             applyDraftRules(current.copy(market = market))
         }
         refreshSymbolLookupForCurrentDraft()
+    }
+
+    fun selectTradePlatform(platform: BrokerPlatform) {
+        draft.update { current ->
+            applyDraftRules(current.copy(platform = platform))
+        }
     }
 
     fun onSymbolInputChanged(value: String) {
@@ -461,9 +615,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val currentEditingTrade = editingTrade.value
         val latestTransactions = repository.transactions.first()
         val portfolioState = computePortfolio(
-            transactions = currentEditingTrade?.let { editing ->
-                latestTransactions.filterNot { it.id == editing.transactionId }
-            } ?: latestTransactions,
+            transactions = filterTransactionsByPlatform(
+                currentEditingTrade?.let { editing ->
+                    latestTransactions.filterNot { it.id == editing.transactionId }
+                } ?: latestTransactions,
+                currentDraft.platform,
+            ),
             quotes = repository.quotes.first(),
             exchangeRates = repository.exchangeRates.value,
         )
@@ -482,6 +639,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
         val input = TradeDraftInput(
             tradeType = currentDraft.selectedType,
+            platform = currentDraft.platform,
             market = resolved.market,
             symbol = resolved.symbol,
             name = resolved.name,
@@ -502,10 +660,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
         tradeFilter.value = TransactionFilter.ALL
         marketFilter.value = MarketFilter.ALL
+        backupStatusMessage.value = null
         editingTrade.value = null
         symbolLookup.value = SymbolLookupUiModel()
         symbolSuggestions.value = emptyList()
-        draft.value = applyDraftRules(resetDraftForType(currentDraft.selectedType))
+        draft.value = applyDraftRules(
+            resetDraftForType(
+                currentDraft.selectedType,
+                preferredPlatform = currentDraft.platform,
+            ),
+        )
         refreshQuotes(
             trigger = if (currentEditingTrade == null) {
                 RefreshTrigger.TRADE_CREATE
@@ -514,6 +678,54 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             },
         )
         return true
+    }
+
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                val recordedPlatforms = repository.transactions.first()
+                    .mapNotNull { transaction ->
+                        BrokerPlatform.entries.firstOrNull { platform ->
+                            platform.name == transaction.platform && platform.isConfigurable
+                        }
+                    }
+                    .distinctBy { it.name }
+                getApplication<Application>().contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    repository.exportBackup(
+                        outputStream = outputStream,
+                        displayCurrencyName = displayCurrency.value.name,
+                        enabledPlatforms = recordedPlatforms,
+                        selectedPlatform = selectedPlatform.value,
+                    )
+                } ?: error("无法创建备份文件")
+            }.onSuccess {
+                backupStatusMessage.value = "备份已导出"
+            }.onFailure { error ->
+                backupStatusMessage.value = "备份失败：${error.message ?: "请稍后重试"}"
+            }
+        }
+    }
+
+    fun importBackup(uri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                val imported = getApplication<Application>().contentResolver.openInputStream(uri)?.use { inputStream ->
+                    repository.importBackup(inputStream)
+                } ?: error("无法读取备份文件")
+                applyImportedBackup(imported)
+            }.onSuccess {
+                val latestTransactions = repository.transactions.first()
+                if (latestTransactions.isEmpty()) {
+                    refreshState.value = RefreshState.IDLE
+                    refreshNote.value = "备份已导入，但当前没有交易记录"
+                    lastRefreshTimestamp.value = 0L
+                } else {
+                    refreshQuotes(trigger = RefreshTrigger.BACKUP_IMPORT)
+                }
+            }.onFailure { error ->
+                backupStatusMessage.value = "导入失败：${error.message ?: "请检查备份文件"}"
+            }
+        }
     }
 
     private fun refreshSymbolLookupForCurrentDraft() {
@@ -644,6 +856,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             RefreshTrigger.TRADE_CREATE -> "正在同步新增交易后的最新行情..."
             RefreshTrigger.TRADE_UPDATE -> "正在同步修改交易后的最新行情..."
             RefreshTrigger.TRADE_DELETE -> "正在同步删除交易后的最新行情..."
+            RefreshTrigger.BACKUP_IMPORT -> "正在同步导入备份后的最新行情..."
         }
 
         runCatching {
@@ -667,6 +880,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     "修改成功，已同步最新行情 · ${formatRefreshTime(lastRefreshTimestamp.value)}$rateSuffix"
                 RefreshTrigger.TRADE_DELETE ->
                     "删除成功，已同步最新行情 · ${formatRefreshTime(lastRefreshTimestamp.value)}$rateSuffix"
+                RefreshTrigger.BACKUP_IMPORT ->
+                    "备份导入成功，已同步最新行情 · ${formatRefreshTime(lastRefreshTimestamp.value)}$rateSuffix"
             }
         }.onFailure { error ->
             refreshState.value = RefreshState.FAILED
@@ -681,6 +896,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     "修改已保存，但行情同步失败：${error.message ?: "请稍后手动下拉刷新"}"
                 RefreshTrigger.TRADE_DELETE ->
                     "删除已完成，但行情同步失败：${error.message ?: "请稍后手动下拉刷新"}"
+                RefreshTrigger.BACKUP_IMPORT ->
+                    "备份已导入，但行情同步失败：${error.message ?: "请稍后手动下拉刷新"}"
             }
         }
         if (trigger == RefreshTrigger.MANUAL_PULL) {
@@ -1011,10 +1228,30 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         transactions: List<TransactionEntity>,
         tradeFilter: TransactionFilter,
         marketFilter: MarketFilter,
+        keyword: String,
+        startDate: String?,
+        endDate: String?,
     ): List<TransactionSection> {
+        val parsedStartDate = startDate?.let(::parseTradeDateOrNull)
+        val parsedEndDate = endDate?.let(::parseTradeDateOrNull)
+        val normalizedKeyword = keyword.trim().lowercase()
         val filtered = transactions
             .filter { tradeFilter.tradeType == null || it.tradeType == tradeFilter.tradeType.name }
             .filter { marketFilter.market == null || it.market == marketFilter.market.name }
+            .filter { transaction ->
+                if (normalizedKeyword.isBlank()) {
+                    true
+                } else {
+                    transaction.symbol.lowercase().contains(normalizedKeyword) ||
+                        transaction.name.lowercase().contains(normalizedKeyword)
+                }
+            }
+            .filter { transaction ->
+                val tradeDate = parseTradeDateOrNull(transaction.tradeDate) ?: return@filter false
+                val isAfterStart = parsedStartDate == null || !tradeDate.isBefore(parsedStartDate)
+                val isBeforeEnd = parsedEndDate == null || !tradeDate.isAfter(parsedEndDate)
+                isAfterStart && isBeforeEnd
+            }
 
         return filtered
             .groupBy { it.tradeDate }
@@ -1026,6 +1263,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     items = entries.map { transaction ->
                         val market = Market.valueOf(transaction.market)
                         val tradeType = TradeType.valueOf(transaction.tradeType)
+                        val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
                         val cashFlow = transactionCashFlow(transaction, tradeType)
                         TransactionUiModel(
                             id = transaction.id,
@@ -1038,7 +1276,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                             stockMeta = if (tradeType.isSecurityTrade) {
                                 "${market.label} · 成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
                             } else {
-                                transaction.note.ifBlank { "现金账户流水" }
+                                transaction.note.ifBlank { "${platform.label} 现金账户流水" }
                             },
                             amountLabel = formatSignedMarketAmount(cashFlow, market),
                             timeLabel = "${tradeType.label} ${transaction.tradeTime}",
@@ -1047,6 +1285,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             },
+                            platform = platform,
+                            platformLabel = platform.label,
                         )
                     },
                 )
@@ -1058,12 +1298,28 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         transactions: List<TransactionEntity>,
         exchangeRates: ExchangeRates,
         historicalCloses: List<HistoricalClosePoint>,
+        quotes: List<QuoteSnapshotEntity>,
     ): ProfitAnalysisUiModel {
+        val securityMeta = transactions
+            .asSequence()
+            .filter { TradeType.valueOf(it.tradeType).isSecurityTrade && it.symbol.isNotBlank() }
+            .distinctBy { positionKey(it.symbol, Market.valueOf(it.market)) }
+            .associate { transaction ->
+                val market = Market.valueOf(transaction.market)
+                positionKey(transaction.symbol, market) to ResolvedSecurity(
+                    symbol = transaction.symbol,
+                    name = transaction.name,
+                    market = market,
+                )
+            }
+
         if (historicalCloses.isEmpty()) {
             return buildProfitAnalysisFromRealizedAndCurrent(
                 portfolio = portfolio,
                 transactions = transactions,
                 exchangeRates = exchangeRates,
+                quotes = quotes,
+                securityMeta = securityMeta,
             )
         }
 
@@ -1093,10 +1349,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         var totalDepositCny = 0.0
         var totalWithdrawCny = 0.0
         val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
+        val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
+        val previousSecurityProfit = mutableMapOf<String, Double>()
         var cursor = firstDate
         var previousCumulativeProfit = 0.0
+        var previousTotalAssets = 0.0
+        var cumulativeNav = 1.0
         var hasPreviousPoint = false
         while (!cursor.isAfter(latestDate)) {
+            var dailyNetFlowCny = 0.0
             transactionMap[cursor].orEmpty().forEach { transaction ->
                 val market = Market.valueOf(transaction.market)
                 when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
@@ -1104,12 +1365,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                         cashBalanceCny += amountCny
                         totalDepositCny += amountCny
+                        dailyNetFlowCny += amountCny
                     }
 
                     TradeType.WITHDRAW -> {
                         val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                         cashBalanceCny -= amountCny
                         totalWithdrawCny += amountCny
+                        dailyNetFlowCny -= amountCny
                     }
 
                     TradeType.BUY, TradeType.SELL -> {
@@ -1163,24 +1426,68 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 convertToCny(closePrice * position.quantity, position.market, exchangeRates)
             }
             val netInflowCny = totalDepositCny - totalWithdrawCny
-            val cumulativeProfit = holdingsValueCny + cashBalanceCny - netInflowCny
+            val totalAssetsCny = holdingsValueCny + cashBalanceCny
+            val cumulativeProfit = totalAssetsCny - netInflowCny
             val dailyProfit = if (hasPreviousPoint) {
                 cumulativeProfit - previousCumulativeProfit
             } else {
                 cumulativeProfit
             }
+            val dailyReturnPercent = if (hasPreviousPoint && previousTotalAssets > 0.0) {
+                ((totalAssetsCny - dailyNetFlowCny - previousTotalAssets) / previousTotalAssets) * 100.0
+            } else {
+                0.0
+            }
+            cumulativeNav = if (hasPreviousPoint) {
+                cumulativeNav * (1 + dailyReturnPercent / 100.0)
+            } else {
+                1.0
+            }
             dailyPoints += ProfitAnalysisPointUiModel(
                 date = cursor,
                 dailyProfitCny = dailyProfit,
                 cumulativeProfitCny = cumulativeProfit,
+                totalAssetsCny = totalAssetsCny,
+                netInflowCny = netInflowCny,
+                dailyReturnPercent = dailyReturnPercent,
+                cumulativeReturnPercent = (cumulativeNav - 1.0) * 100.0,
             )
+            securityMeta.forEach { (key, security) ->
+                val position = positions[key]
+                val realizedCny = position?.let { convertToCny(it.realizedProfit, it.market, exchangeRates) } ?: 0.0
+                val unrealizedCny = position?.takeIf { it.quantity > 0 }?.let {
+                    val closePrice = latestCloseByPosition[key] ?: it.averageCost
+                    convertToCny((closePrice - it.averageCost) * it.quantity, it.market, exchangeRates)
+                } ?: 0.0
+                val cumulativeSecurityProfit = realizedCny + unrealizedCny
+                val previousSecurityCumulative = previousSecurityProfit[key] ?: 0.0
+                securitySeries.getValue(key) += SecurityProfitPointUiModel(
+                    date = cursor,
+                    dailyProfitCny = if (hasPreviousPoint) {
+                        cumulativeSecurityProfit - previousSecurityCumulative
+                    } else {
+                        cumulativeSecurityProfit
+                    },
+                    cumulativeProfitCny = cumulativeSecurityProfit,
+                )
+                previousSecurityProfit[key] = cumulativeSecurityProfit
+            }
             previousCumulativeProfit = cumulativeProfit
+            previousTotalAssets = totalAssetsCny
             hasPreviousPoint = true
             cursor = cursor.plusDays(1)
         }
 
         return ProfitAnalysisUiModel(
             dailyPoints = dailyPoints,
+            securityAnalyses = securityMeta.map { (key, security) ->
+                SecurityProfitAnalysisUiModel(
+                    symbol = security.symbol,
+                    name = security.name,
+                    market = security.market,
+                    dailyPoints = securitySeries[key].orEmpty(),
+                )
+            },
             netInflowCny = totalDepositCny - totalWithdrawCny,
             latestDate = latestDate,
         )
@@ -1190,12 +1497,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         portfolio: PortfolioComputation,
         transactions: List<TransactionEntity>,
         exchangeRates: ExchangeRates,
+        quotes: List<QuoteSnapshotEntity>,
+        securityMeta: Map<String, ResolvedSecurity>,
     ): ProfitAnalysisUiModel {
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }),
         )
         val positions = linkedMapOf<String, PositionComputation>()
-        val realizedByDate = linkedMapOf<LocalDate, Double>()
+        val dailyProfitByDate = linkedMapOf<LocalDate, Double>()
+        val netFlowByDate = linkedMapOf<LocalDate, Double>()
+        val securityProfitByDate = mutableMapOf<String, MutableMap<LocalDate, Double>>()
+        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.valueOf(it.market)) }
 
         ordered.forEach { transaction ->
             val market = Market.valueOf(transaction.market)
@@ -1239,7 +1551,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     val removedCost = current.averageCost * sellQuantity
                     val proceeds = transaction.price * sellQuantity - transaction.commission - transaction.tax
                     val realizedProfitCny = convertToCny(proceeds - removedCost, market, exchangeRates)
-                    realizedByDate[date] = realizedByDate.getOrDefault(date, 0.0) + realizedProfitCny
+                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + realizedProfitCny
+                    val securityDailyProfit = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                    securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + realizedProfitCny
 
                     val nextQuantity = (current.quantity - sellQuantity).coerceAtLeast(0)
                     val nextRemaining = (current.remainingCost - removedCost).coerceAtLeast(0.0)
@@ -1251,33 +1565,98 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
 
-                TradeType.DEPOSIT, TradeType.WITHDRAW -> Unit
+                TradeType.DEPOSIT -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
+                }
+
+                TradeType.WITHDRAW -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
+                }
             }
         }
 
         val lastTransactionDate = ordered.mapNotNull { parseTradeDateOrNull(it.tradeDate) }.maxOrNull()
         val latestDate = maxOf(LocalDate.now(), lastTransactionDate ?: LocalDate.now())
-        val realizedTotalCny = realizedByDate.values.sum()
+        val realizedTotalCny = dailyProfitByDate.values.sum()
         val openProfitAdjustmentCny = portfolio.totalProfitCny - realizedTotalCny
-        realizedByDate[latestDate] = realizedByDate.getOrDefault(latestDate, 0.0) + openProfitAdjustmentCny
+        dailyProfitByDate[latestDate] = dailyProfitByDate.getOrDefault(latestDate, 0.0) + openProfitAdjustmentCny
+        positions.values.forEach { position ->
+            if (position.quantity <= 0) return@forEach
+            val key = positionKey(position.symbol, position.market)
+            val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
+            val unrealizedCny = convertToCny(
+                (currentPrice - position.averageCost) * position.quantity,
+                position.market,
+                exchangeRates,
+            )
+            val seriesForSecurity = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+            seriesForSecurity[latestDate] = seriesForSecurity.getOrDefault(latestDate, 0.0) + unrealizedCny
+        }
 
-        val firstDate = realizedByDate.keys.minOrNull() ?: latestDate
+        val firstDate = listOf(
+            dailyProfitByDate.keys.minOrNull(),
+            netFlowByDate.keys.minOrNull(),
+        ).filterNotNull().minOrNull() ?: latestDate
         val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
+        val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
         var cursor = firstDate
         var cumulativeProfit = 0.0
+        var cumulativeNetInflow = 0.0
+        var previousTotalAssets = 0.0
+        var cumulativeNav = 1.0
+        var hasPreviousPoint = false
         while (!cursor.isAfter(latestDate)) {
-            val dailyProfit = realizedByDate.getOrDefault(cursor, 0.0)
+            val dailyProfit = dailyProfitByDate.getOrDefault(cursor, 0.0)
+            val dailyNetFlow = netFlowByDate.getOrDefault(cursor, 0.0)
             cumulativeProfit += dailyProfit
+            cumulativeNetInflow += dailyNetFlow
+            val totalAssetsCny = cumulativeNetInflow + cumulativeProfit
+            val dailyReturnPercent = if (hasPreviousPoint && previousTotalAssets > 0.0) {
+                ((totalAssetsCny - dailyNetFlow - previousTotalAssets) / previousTotalAssets) * 100.0
+            } else {
+                0.0
+            }
+            cumulativeNav = if (hasPreviousPoint) {
+                cumulativeNav * (1 + dailyReturnPercent / 100.0)
+            } else {
+                1.0
+            }
             dailyPoints += ProfitAnalysisPointUiModel(
                 date = cursor,
                 dailyProfitCny = dailyProfit,
                 cumulativeProfitCny = cumulativeProfit,
+                totalAssetsCny = totalAssetsCny,
+                netInflowCny = cumulativeNetInflow,
+                dailyReturnPercent = dailyReturnPercent,
+                cumulativeReturnPercent = (cumulativeNav - 1.0) * 100.0,
             )
+            securityMeta.forEach { (key, security) ->
+                val seriesMap = securityProfitByDate[key].orEmpty()
+                val priorCumulative = securitySeries[key]?.lastOrNull()?.cumulativeProfitCny ?: 0.0
+                val securityDailyProfit = seriesMap[cursor] ?: 0.0
+                securitySeries.getValue(key) += SecurityProfitPointUiModel(
+                    date = cursor,
+                    dailyProfitCny = securityDailyProfit,
+                    cumulativeProfitCny = priorCumulative + securityDailyProfit,
+                )
+            }
+            previousTotalAssets = totalAssetsCny
+            hasPreviousPoint = true
             cursor = cursor.plusDays(1)
         }
 
         return ProfitAnalysisUiModel(
             dailyPoints = dailyPoints,
+            securityAnalyses = securityMeta.map { (key, security) ->
+                SecurityProfitAnalysisUiModel(
+                    symbol = security.symbol,
+                    name = security.name,
+                    market = security.market,
+                    dailyPoints = securitySeries[key].orEmpty(),
+                )
+            },
             netInflowCny = portfolio.netInflowCny,
             latestDate = latestDate,
         )
@@ -1360,8 +1739,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 val currentPrice = quote?.currentPrice
                 val previousClose = quote?.previousClose
                 val unrealized = currentPrice?.let { (it - position.averageCost) * position.quantity }
+                val dayProfit = if (currentPrice != null && previousClose != null) {
+                    (currentPrice - previousClose) * position.quantity
+                } else {
+                    null
+                }
                 val dayPercent = if (currentPrice != null && previousClose != null && previousClose > 0.0) {
                     ((currentPrice - previousClose) / previousClose) * 100.0
+                } else {
+                    null
+                }
+                val totalProfitPercent = if (unrealized != null && position.remainingCost > 0.0) {
+                    (unrealized / position.remainingCost) * 100.0
                 } else {
                     null
                 }
@@ -1380,6 +1769,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         currentPrice == null || dayPercent == null -> PriceTrend.NEUTRAL
                         dayPercent > 0 -> PriceTrend.UP
                         dayPercent < 0 -> PriceTrend.DOWN
+                        else -> PriceTrend.NEUTRAL
+                    },
+                    dayProfitLabel = dayProfit?.let { formatSignedMarketAmount(it, position.market) } ?: "--",
+                    dayProfitPercentLabel = dayPercent?.let(::formatSignedPercent) ?: "--",
+                    totalProfitLabel = unrealized?.let { formatSignedMarketAmount(it, position.market) } ?: "--",
+                    totalProfitPercentLabel = totalProfitPercent?.let(::formatSignedPercent) ?: "--",
+                    dayTrend = when {
+                        dayProfit == null -> PriceTrend.NEUTRAL
+                        dayProfit > 0 -> PriceTrend.UP
+                        dayProfit < 0 -> PriceTrend.DOWN
+                        else -> PriceTrend.NEUTRAL
+                    },
+                    totalTrend = when {
+                        unrealized == null -> PriceTrend.NEUTRAL
+                        unrealized > 0 -> PriceTrend.UP
+                        unrealized < 0 -> PriceTrend.DOWN
                         else -> PriceTrend.NEUTRAL
                     },
                 ) to marketValue
@@ -1546,14 +1951,54 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         type: TradeType,
         current: TradeFormState? = null,
         preferredCashMarket: Market = cashMarketFor(displayCurrency.value),
+        preferredPlatform: BrokerPlatform = current?.platform
+            ?: selectedPlatform.value
+            ?: SampleData.tradeForm(type).platform,
     ): TradeFormState {
         val base = SampleData.tradeForm(type)
         return base.copy(
+            platform = preferredPlatform,
             market = if (type.isSecurityTrade) base.market else preferredCashMarket,
             tradeDate = current?.tradeDate ?: base.tradeDate,
             note = current?.note.orEmpty(),
             priceLabel = if (current?.selectedType == type) current.priceLabel else "",
         )
+    }
+
+    private fun filterTransactionsByPlatform(
+        transactions: List<TransactionEntity>,
+        platform: BrokerPlatform?,
+    ): List<TransactionEntity> {
+        if (platform == null) return transactions
+        return transactions.filter { transaction ->
+            runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED) == platform
+        }
+    }
+
+    private fun applyImportedBackup(importedBackup: ImportedBackup) {
+        importedBackup.displayCurrencyName
+            ?.let { savedName -> DisplayCurrency.entries.firstOrNull { it.name == savedName } }
+            ?.let { currency ->
+                saveDisplayCurrency(currency)
+                displayCurrency.value = currency
+            }
+        val restoredSelectedPlatform = importedBackup.selectedPlatform
+        selectedPlatform.value = restoredSelectedPlatform
+        saveSelectedPlatform(restoredSelectedPlatform)
+        tradeFilter.value = TransactionFilter.ALL
+        marketFilter.value = MarketFilter.ALL
+        transactionDateStart.value = null
+        transactionDateEnd.value = null
+        editingTrade.value = null
+        symbolLookup.value = SymbolLookupUiModel()
+        symbolSuggestions.value = emptyList()
+        draft.value = applyDraftRules(
+            resetDraftForType(
+                type = TradeType.BUY,
+                preferredPlatform = restoredSelectedPlatform ?: SampleData.tradeForm(TradeType.BUY).platform,
+            ),
+        )
+        backupStatusMessage.value = "已导入 ${importedBackup.transactionCount} 条交易记录"
     }
 
     private fun cashMarketFor(currency: DisplayCurrency): Market = when (currency) {
@@ -1580,6 +2025,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         TRADE_CREATE,
         TRADE_UPDATE,
         TRADE_DELETE,
+        BACKUP_IMPORT,
     }
 
     private data class EditingTradeSession(
@@ -1625,11 +2071,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val transactions: List<TransactionEntity>,
         val editingTrade: EditingTradeSession?,
         val historicalCloses: List<HistoricalClosePoint>,
+        val quotes: List<QuoteSnapshotEntity>,
     )
 
     private data class PortfolioTransactionsAndFilters(
         val context: PortfolioContext,
-        val filters: Pair<TransactionFilter, MarketFilter>,
+        val filters: TransactionFilters,
     )
 
     private data class PortfolioTransactionsFiltersAndDraft(
@@ -1640,6 +2087,19 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private data class PortfolioTransactionsFiltersDraftAndRefresh(
         val upstream: PortfolioTransactionsFiltersAndDraft,
         val refresh: RefreshMeta,
+    )
+
+    private data class TransactionFilters(
+        val tradeFilter: TransactionFilter,
+        val marketFilter: MarketFilter,
+        val keyword: String,
+        val startDate: String?,
+        val endDate: String?,
+    )
+
+    private data class PlatformSetup(
+        val recorded: List<BrokerPlatform>,
+        val selected: BrokerPlatform?,
     )
 
     private data class RefreshMeta(
@@ -1675,6 +2135,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             .apply()
     }
 
+    private fun loadSavedSelectedPlatform(): BrokerPlatform? {
+        val savedName = preferences.getString(KEY_SELECTED_PLATFORM, null).orEmpty()
+        return BrokerPlatform.entries.firstOrNull { it.name == savedName && it.isConfigurable }
+    }
+
+    private fun saveSelectedPlatform(platform: BrokerPlatform?) {
+        preferences.edit()
+            .putString(KEY_SELECTED_PLATFORM, platform?.name)
+            .apply()
+    }
+
     private companion object {
         const val MANUAL_REFRESH_INTERVAL_MS = 60_000L
         const val SYMBOL_LOOKUP_DEBOUNCE_MS = 350L
@@ -1683,6 +2154,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         const val EPSILON = 1e-6
         const val PREFERENCES_NAME = "stock_ledger_preferences"
         const val KEY_DISPLAY_CURRENCY = "display_currency"
+        const val KEY_SELECTED_PLATFORM = "selected_platform"
 
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val monthDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM/dd")
