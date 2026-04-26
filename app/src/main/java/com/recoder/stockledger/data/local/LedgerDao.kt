@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -22,6 +23,9 @@ interface LedgerDao {
     @Insert
     suspend fun insertTransactions(transactions: List<TransactionEntity>)
 
+    @Update
+    suspend fun updateTransaction(transaction: TransactionEntity)
+
     @Upsert
     suspend fun upsertQuotes(quotes: List<QuoteSnapshotEntity>)
 
@@ -36,6 +40,9 @@ interface LedgerDao {
 
     @Query("DELETE FROM transactions WHERE symbol = :symbol AND market = :market")
     suspend fun deleteTransactionsByHolding(symbol: String, market: String): Int
+
+    @Query("DELETE FROM transactions WHERE id = :id")
+    suspend fun deleteTransactionById(id: Long): Int
 
     @Query("DELETE FROM quote_snapshots WHERE symbol = :symbol AND market = :market")
     suspend fun deleteQuoteByHolding(symbol: String, market: String)

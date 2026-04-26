@@ -19,9 +19,11 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.Charset
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import kotlin.math.sin
 
 data class QuoteRequest(
@@ -36,18 +38,26 @@ data class SecurityLookupResult(
     val market: Market,
 )
 
+data class HistoricalClosePoint(
+    val symbol: String,
+    val market: Market,
+    val date: LocalDate,
+    val closePrice: Double,
+)
+
 data class TradeDraftInput(
     val tradeType: TradeType,
     val market: Market,
     val symbol: String,
     val name: String,
     val tradeDate: String,
-    val tradeTime: String,
     val price: Double,
     val quantity: Int,
     val commission: Double,
     val tax: Double,
     val note: String,
+    val tradeTime: String,
+    val createdAt: Long,
 )
 
 interface QuoteDataSource {
@@ -55,6 +65,11 @@ interface QuoteDataSource {
     val providerLabel: String
 
     suspend fun refreshQuotes(requests: List<QuoteRequest>): List<QuoteSnapshotEntity>
+
+    suspend fun fetchHistoricalCloses(
+        requests: List<QuoteRequest>,
+        lookbackDays: Int,
+    ): List<HistoricalClosePoint>
 
     suspend fun searchSecurities(
         keyword: String,
@@ -70,6 +85,8 @@ class DefaultLedgerRepository(
 ) {
     val transactions: Flow<List<TransactionEntity>> = dao.observeTransactions()
     val quotes: Flow<List<QuoteSnapshotEntity>> = dao.observeQuotes()
+    private val _historicalCloses = MutableStateFlow<List<HistoricalClosePoint>>(emptyList())
+    val historicalCloses: StateFlow<List<HistoricalClosePoint>> = _historicalCloses
     private val _exchangeRates = MutableStateFlow(exchangeRateDataSource.currentRates())
     val exchangeRates: StateFlow<ExchangeRates> = _exchangeRates
 
@@ -104,10 +121,35 @@ class DefaultLedgerRepository(
                 commission = input.commission,
                 tax = input.tax,
                 note = input.note,
-                createdAt = System.currentTimeMillis(),
+                createdAt = input.createdAt,
             ),
         )
     }
+
+    suspend fun updateTrade(
+        transactionId: Long,
+        input: TradeDraftInput,
+    ) {
+        dao.updateTransaction(
+            TransactionEntity(
+                id = transactionId,
+                tradeType = input.tradeType.name,
+                market = input.market.name,
+                symbol = input.symbol,
+                name = input.name,
+                tradeDate = input.tradeDate,
+                tradeTime = input.tradeTime,
+                price = input.price,
+                quantity = input.quantity,
+                commission = input.commission,
+                tax = input.tax,
+                note = input.note,
+                createdAt = input.createdAt,
+            ),
+        )
+    }
+
+    suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
 
     suspend fun deleteHolding(symbol: String, market: Market): Int {
         return dao.deleteHolding(symbol = symbol, market = market.name)
@@ -151,13 +193,14 @@ class DefaultLedgerRepository(
     }
 
     suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long {
-        val requests = transactions
+        val securityTransactions = transactions
             .filter { transaction ->
                 val tradeType = TradeType.valueOf(transaction.tradeType)
                 tradeType.isSecurityTrade &&
                     transaction.symbol.isNotBlank() &&
                     transaction.market != Market.CASH.name
             }
+        val requests = securityTransactions
             .groupBy { it.market to it.symbol }
             .map { (_, grouped) ->
                 val head = grouped.first()
@@ -170,8 +213,23 @@ class DefaultLedgerRepository(
 
         if (requests.isEmpty()) {
             dao.clearQuotes()
+            _historicalCloses.value = emptyList()
             return System.currentTimeMillis()
         }
+
+        val earliestTradeDate = securityTransactions
+            .mapNotNull { parseTradeDateOrNull(it.tradeDate) }
+            .minOrNull()
+            ?: LocalDate.now()
+        val lookbackDays = ChronoUnit.DAYS
+            .between(earliestTradeDate, LocalDate.now())
+            .toInt()
+            .coerceAtLeast(90)
+            .coerceAtMost(2_400) + 10
+
+        _historicalCloses.value = runCatching {
+            quoteDataSource.fetchHistoricalCloses(requests, lookbackDays)
+        }.getOrElse { emptyList() }
 
         return refreshQuotes(requests)
     }
@@ -221,6 +279,10 @@ class DefaultLedgerRepository(
             Market.CASH -> null
         }
     }
+
+    private fun parseTradeDateOrNull(value: String): LocalDate? = runCatching {
+        LocalDate.parse(value)
+    }.getOrNull()
 }
 
 class TencentSinaQuoteDataSource : QuoteDataSource {
@@ -271,6 +333,22 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             merged
         }
 
+    override suspend fun fetchHistoricalCloses(
+        requests: List<QuoteRequest>,
+        lookbackDays: Int,
+    ): List<HistoricalClosePoint> = withContext(Dispatchers.IO) {
+        requests.flatMap { request ->
+            runCatching {
+                fetchHistoricalClosesForRequest(
+                    request = request,
+                    lookbackDays = lookbackDays,
+                )
+            }.onFailure {
+                Log.w(TAG, "Historical close fetch failed for ${request.market}:${request.symbol}: ${it.message}")
+            }.getOrDefault(emptyList())
+        }
+    }
+
     override suspend fun searchSecurities(
         keyword: String,
         market: Market,
@@ -292,6 +370,52 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         )
 
         parseSinaSuggestResponse(body, market).take(limit)
+    }
+
+    private fun fetchHistoricalClosesForRequest(
+        request: QuoteRequest,
+        lookbackDays: Int,
+    ): List<HistoricalClosePoint> {
+        val historyCode = resolveHistoryCode(request)
+        val endpoint = when (request.market) {
+            Market.A_SHARE, Market.US -> "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+            Market.HONG_KONG -> "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
+            Market.CASH -> return emptyList()
+        }
+        val body = httpGet(
+            url = "$endpoint?param=$historyCode,day,,,$lookbackDays,qfq",
+            headers = mapOf(
+                "Referer" to "https://gu.qq.com/",
+                "User-Agent" to WEB_USER_AGENT,
+            ),
+            charsetName = "UTF-8",
+        )
+        val data = JSONObject(body).optJSONObject("data") ?: return emptyList()
+        val historyPayload = data.optJSONObject(historyCode)
+            ?: data.keys().asSequence().mapNotNull { key -> data.optJSONObject(key) }.firstOrNull()
+            ?: return emptyList()
+        val series = historyPayload.optJSONArray("qfqday")
+            ?: historyPayload.optJSONArray("day")
+            ?: return emptyList()
+
+        return buildList {
+            for (index in 0 until series.length()) {
+                val row = series.optJSONArray(index) ?: continue
+                val date = row.optString(0)
+                    .takeIf { it.isNotBlank() }
+                    ?.let(::parseHistoricalDateOrNull)
+                    ?: continue
+                val closePrice = row.optString(2).toDoubleOrNull() ?: continue
+                add(
+                    HistoricalClosePoint(
+                        symbol = request.symbol,
+                        market = request.market,
+                        date = date,
+                        closePrice = closePrice,
+                    ),
+                )
+            }
+        }
     }
 
     private fun fetchTencentQuotes(requests: List<QuoteRequest>): Map<String, QuoteSnapshotEntity> {
@@ -555,6 +679,46 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         Market.CASH -> error("Cash market does not support Sina quotes")
     }
 
+    private fun resolveHistoryCode(request: QuoteRequest): String = when (request.market) {
+        Market.A_SHARE -> {
+            val raw = request.symbol.substringBefore(".")
+            if (raw.startsWith("6")) "sh$raw" else "sz$raw"
+        }
+
+        Market.HONG_KONG -> {
+            val raw = request.symbol.substringBefore(".").padStart(5, '0')
+            "hk$raw"
+        }
+
+        Market.US -> {
+            val normalized = resolveUsHistorySymbol(request.symbol)
+            "us$normalized"
+        }
+
+        Market.CASH -> ""
+    }
+
+    private fun resolveUsHistorySymbol(symbol: String): String {
+        if ('.' in symbol) return symbol.uppercase()
+
+        val body = httpGet(
+            url = "http://qt.gtimg.cn/q=us${symbol.uppercase()}",
+            headers = mapOf(
+                "Referer" to "https://gu.qq.com/",
+                "User-Agent" to WEB_USER_AGENT,
+            ),
+            charsetName = "GB18030",
+        )
+        val payload = body.substringAfter("=\"", "")
+            .substringBeforeLast("\"", "")
+        val fields = payload.split("~")
+        return fields.getOrNull(2)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.uppercase()
+            ?: symbol.uppercase()
+    }
+
     private fun httpGet(
         url: String,
         headers: Map<String, String>,
@@ -697,6 +861,10 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         }.getOrElse { System.currentTimeMillis() }
     }
 
+    private fun parseHistoricalDateOrNull(raw: String): LocalDate? = runCatching {
+        LocalDate.parse(raw)
+    }.getOrNull()
+
     private fun requestKey(symbol: String, market: Market): String = "${market.name}:$symbol"
 
     private companion object {
@@ -739,6 +907,29 @@ class FakeQuoteDataSource : QuoteDataSource {
                     lastUpdatedAt = now,
                 )
             }
+        }
+    }
+
+    override suspend fun fetchHistoricalCloses(
+        requests: List<QuoteRequest>,
+        lookbackDays: Int,
+    ): List<HistoricalClosePoint> {
+        val startDate = LocalDate.now().minusDays(lookbackDays.toLong())
+        return requests.flatMap { request ->
+            val quote = baseQuotes[request.symbol] ?: BaseQuote(10.0, 9.9)
+            generateSequence(startDate) { current ->
+                current.plusDays(1).takeIf { !it.isAfter(LocalDate.now()) }
+            }.filterNot { it.dayOfWeek.value >= 6 }
+                .mapIndexed { index, date ->
+                    val drift = sin((index + request.symbol.hashCode()) * 0.11) *
+                        if (request.market == Market.A_SHARE) 2.1 else 2.8
+                    HistoricalClosePoint(
+                        symbol = request.symbol,
+                        market = request.market,
+                        date = date,
+                        closePrice = (quote.basePrice + drift).coerceAtLeast(1.0),
+                    )
+                }.toList()
         }
     }
 

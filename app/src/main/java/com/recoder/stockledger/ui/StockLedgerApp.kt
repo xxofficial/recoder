@@ -130,6 +130,16 @@ fun StockLedgerApp(
                 selectedMarketFilter = uiState.selectedMarketFilter,
                 onTradeFilterSelected = ledgerViewModel::selectTradeFilter,
                 onMarketFilterSelected = ledgerViewModel::selectMarketFilter,
+                onEditTradeClick = { transactionId ->
+                    val target = uiState.transactionSections
+                        .flatMap { it.items }
+                        .firstOrNull { it.id == transactionId }
+                    if (target != null) {
+                        ledgerViewModel.startEditingTrade(transactionId)
+                        navController.navigate(Routes.tradeEntry(target.tradeType))
+                    }
+                },
+                onDeleteTradeClick = ledgerViewModel::deleteTrade,
                 onAddTradeClick = {
                     ledgerViewModel.openTradeEntry(TradeType.BUY)
                     navController.navigate(Routes.tradeEntry(TradeType.BUY))
@@ -157,6 +167,7 @@ fun StockLedgerApp(
         ) {
             TradeEntryRoute(
                 state = uiState.draft,
+                isEditing = uiState.editingTransactionId != null,
                 displayCurrency = uiState.displayCurrency,
                 sellCandidates = uiState.sellCandidates,
                 symbolLookup = uiState.symbolLookup,

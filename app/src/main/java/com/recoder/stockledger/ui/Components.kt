@@ -1,5 +1,6 @@
 package com.recoder.stockledger.ui
 
+import android.app.DatePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -64,6 +67,7 @@ import com.recoder.stockledger.ui.theme.MarketUpSoft
 import com.recoder.stockledger.ui.theme.SurfaceInverse
 import com.recoder.stockledger.ui.theme.SurfaceMuted
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
+import java.time.LocalDate
 
 enum class TopLevelDestination(
     val label: String,
@@ -499,7 +503,11 @@ fun SymbolSuggestionSection(
 }
 
 @Composable
-fun TransactionRow(item: TransactionUiModel) {
+fun TransactionRow(
+    item: TransactionUiModel,
+    onEditClick: () -> Unit,
+    onDeleteClick: () -> Unit,
+) {
     val (badgeBackground, badgeForeground) = tradeTypeColors(item.tradeType)
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -532,6 +540,56 @@ fun TransactionRow(item: TransactionUiModel) {
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(item.feeLabel, color = ForegroundMuted, fontSize = 12.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(SurfaceMuted)
+                        .clickable(onClick = onEditClick)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "编辑记录",
+                        tint = ForegroundPrimary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "编辑",
+                        color = ForegroundPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(MarketDownSoft)
+                        .clickable(onClick = onDeleteClick)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "删除记录",
+                        tint = MarketDown,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "删除",
+                        color = MarketDown,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
         }
     }
 }
@@ -639,6 +697,7 @@ fun InputFieldBlock(
     keyboardType: KeyboardType = KeyboardType.Text,
     singleLine: Boolean = true,
     onValueChange: ((String) -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier) {
         Text(label, color = ForegroundSecondary, fontSize = 14.sp)
@@ -648,12 +707,18 @@ fun InputFieldBlock(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(SurfaceSecondary)
+                .clickable(enabled = onClick != null, onClick = { onClick?.invoke() })
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onValueChange == null) {
-                Text(value, color = ForegroundPrimary, fontSize = 16.sp)
+                Text(
+                    text = value.ifBlank { "请选择" },
+                    color = if (value.isBlank()) ForegroundMuted else ForegroundPrimary,
+                    fontSize = 16.sp,
+                    modifier = Modifier.weight(1f),
+                )
             } else {
                 EditableField(
                     value = value,
@@ -763,11 +828,25 @@ fun TradeEntryDateField(
     value: String,
     onValueChange: (String) -> Unit,
 ) {
+    val context = LocalContext.current
+    val selectedDate = remember(value) {
+        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
+    }
     InputFieldBlock(
         label = "交易日期",
         value = value,
         trailingIcon = Icons.Filled.DateRange,
-        onValueChange = onValueChange,
+        onClick = {
+            DatePickerDialog(
+                context,
+                { _, year, month, dayOfMonth ->
+                    onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
+                },
+                selectedDate.year,
+                selectedDate.monthValue - 1,
+                selectedDate.dayOfMonth,
+            ).show()
+        },
     )
 }
 

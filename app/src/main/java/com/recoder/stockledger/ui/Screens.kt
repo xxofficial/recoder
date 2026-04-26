@@ -43,6 +43,7 @@ import com.recoder.stockledger.data.TradeFormState
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.data.TransactionFilter
 import com.recoder.stockledger.data.TransactionSection
+import com.recoder.stockledger.data.TransactionUiModel
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -135,7 +136,7 @@ fun HoldingsRoute(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         SummaryMetric(
-                            label = "累计盈亏",
+                            label = "持仓浮盈",
                             value = summary.totalProfit,
                             hint = summary.totalProfitHint,
                             valueColor = if (summary.totalProfit.startsWith("-")) MarketDown else MarketUp,
@@ -304,9 +305,12 @@ fun TransactionsRoute(
     selectedMarketFilter: MarketFilter,
     onTradeFilterSelected: (TransactionFilter) -> Unit,
     onMarketFilterSelected: (MarketFilter) -> Unit,
+    onEditTradeClick: (Long) -> Unit,
+    onDeleteTradeClick: (Long) -> Unit,
     onAddTradeClick: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
+    var pendingDeleteTransaction by remember { mutableStateOf<TransactionUiModel?>(null) }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -378,7 +382,11 @@ fun TransactionsRoute(
                             verticalArrangement = Arrangement.spacedBy(16.dp),
                         ) {
                             section.items.forEach { item ->
-                                TransactionRow(item)
+                                TransactionRow(
+                                    item = item,
+                                    onEditClick = { onEditTradeClick(item.id) },
+                                    onDeleteClick = { pendingDeleteTransaction = item },
+                                )
                             }
                         }
                     }
@@ -397,12 +405,36 @@ fun TransactionsRoute(
             onDestinationSelected = onDestinationSelected,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
+
+        pendingDeleteTransaction?.let { transaction ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteTransaction = null },
+                title = { Text("删除记录") },
+                text = { Text("确认删除这条${transaction.tradeType.label}记录吗？删除后无法恢复。") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            onDeleteTradeClick(transaction.id)
+                            pendingDeleteTransaction = null
+                        },
+                    ) {
+                        Text("删除", color = MarketDown)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDeleteTransaction = null }) {
+                        Text("取消")
+                    }
+                },
+            )
+        }
     }
 }
 
 @Composable
 fun TradeEntryRoute(
     state: TradeFormState,
+    isEditing: Boolean,
     displayCurrency: DisplayCurrency,
     sellCandidates: List<SellCandidateUiModel>,
     symbolLookup: SymbolLookupUiModel,
@@ -442,7 +474,7 @@ fun TradeEntryRoute(
             .statusBarsPadding()
             .background(BackgroundPrimary),
     ) {
-        ScreenHeader(title = "录入交易", onBack = onBackClick)
+        ScreenHeader(title = if (isEditing) "编辑记录" else "录入交易", onBack = onBackClick)
 
         Box(
             modifier = Modifier.weight(1f),
@@ -564,11 +596,15 @@ fun TradeEntryRoute(
                 }
 
                 FilledActionButton(
-                    text = when (state.selectedType) {
-                        TradeType.BUY -> "确认买入"
-                        TradeType.SELL -> "确认卖出"
-                        TradeType.DEPOSIT -> "确认入金"
-                        TradeType.WITHDRAW -> "确认出金"
+                    text = if (isEditing) {
+                        "保存修改"
+                    } else {
+                        when (state.selectedType) {
+                            TradeType.BUY -> "确认买入"
+                            TradeType.SELL -> "确认卖出"
+                            TradeType.DEPOSIT -> "确认入金"
+                            TradeType.WITHDRAW -> "确认出金"
+                        }
                     },
                     onClick = onSubmit,
                     enabled = canSubmit,

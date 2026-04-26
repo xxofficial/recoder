@@ -119,6 +119,7 @@ data class TransactionSection(
 )
 
 data class TransactionUiModel(
+    val id: Long,
     val tradeType: TradeType,
     val stockName: String,
     val stockMeta: String,
