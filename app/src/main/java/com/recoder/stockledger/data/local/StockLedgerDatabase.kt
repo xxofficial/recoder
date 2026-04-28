@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [TransactionEntity::class, QuoteSnapshotEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class StockLedgerDatabase : RoomDatabase() {
@@ -20,6 +20,23 @@ abstract class StockLedgerDatabase : RoomDatabase() {
                     """
                     ALTER TABLE transactions
                     ADD COLUMN platform TEXT NOT NULL DEFAULT 'UNSPECIFIED'
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions
+                    ADD COLUMN sourceChannel TEXT
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions
+                    ADD COLUMN externalReference TEXT
                     """.trimIndent(),
                 )
             }

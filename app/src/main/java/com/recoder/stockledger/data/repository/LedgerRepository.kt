@@ -4,11 +4,27 @@ import android.util.Log
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.ExchangeRateRefreshResult
 import com.recoder.stockledger.data.ExchangeRates
+import com.recoder.stockledger.data.ImportSourceChannel
 import com.recoder.stockledger.data.Market
+import com.recoder.stockledger.data.TradeFeeEstimate
+import com.recoder.stockledger.data.TradeFeeEstimateContext
+import com.recoder.stockledger.data.TradeFeeEstimator
 import com.recoder.stockledger.data.TradeType
+import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
+import com.recoder.stockledger.data.importer.HsbcNotificationParser
+import com.recoder.stockledger.data.importer.HsbcNotificationStatus
+import com.recoder.stockledger.data.importer.ParsedZhuoruiEmail
+import com.recoder.stockledger.data.importer.ZhuoruiEmailParser
 import com.recoder.stockledger.data.local.LedgerDao
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
+import com.recoder.stockledger.data.rateToCny
+import jakarta.mail.BodyPart
+import jakarta.mail.Folder
+import jakarta.mail.Message
+import jakarta.mail.Multipart
+import jakarta.mail.Session
+import jakarta.mail.Store
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,8 +39,10 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.Charset
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -52,6 +70,8 @@ data class HistoricalClosePoint(
 data class TradeDraftInput(
     val tradeType: TradeType,
     val platform: BrokerPlatform,
+    val sourceChannel: ImportSourceChannel? = null,
+    val externalReference: String? = null,
     val market: Market,
     val symbol: String,
     val name: String,
@@ -70,6 +90,26 @@ data class ImportedBackup(
     val transactionCount: Int,
     val enabledPlatforms: List<BrokerPlatform>,
     val selectedPlatform: BrokerPlatform?,
+)
+
+enum class TradeImportOutcome {
+    IMPORTED,
+    DUPLICATE,
+    CANCELLED,
+    UNSUPPORTED,
+}
+
+data class TradeImportResult(
+    val outcome: TradeImportOutcome,
+    val message: String,
+    val externalReference: String? = null,
+)
+
+data class ZhuoruiMailboxSyncResult(
+    val importedCount: Int,
+    val duplicateCount: Int,
+    val ignoredCount: Int,
+    val latestSeenMessageAt: Long?,
 )
 
 interface QuoteDataSource {
@@ -94,6 +134,7 @@ class DefaultLedgerRepository(
     private val dao: LedgerDao,
     private val quoteDataSource: QuoteDataSource,
     private val exchangeRateDataSource: FrankfurterExchangeRateDataSource,
+    private val platformFeePlanSelectionProvider: () -> Map<BrokerPlatform, String> = { emptyMap() },
 ) {
     val transactions: Flow<List<TransactionEntity>> = dao.observeTransactions()
     val quotes: Flow<List<QuoteSnapshotEntity>> = dao.observeQuotes()
@@ -124,6 +165,8 @@ class DefaultLedgerRepository(
             TransactionEntity(
                 tradeType = input.tradeType.name,
                 platform = input.platform.name,
+                sourceChannel = input.sourceChannel?.name,
+                externalReference = input.externalReference,
                 market = input.market.name,
                 symbol = input.symbol,
                 name = input.name,
@@ -148,6 +191,8 @@ class DefaultLedgerRepository(
                 id = transactionId,
                 tradeType = input.tradeType.name,
                 platform = input.platform.name,
+                sourceChannel = input.sourceChannel?.name,
+                externalReference = input.externalReference,
                 market = input.market.name,
                 symbol = input.symbol,
                 name = input.name,
@@ -177,7 +222,7 @@ class DefaultLedgerRepository(
     ) = withContext(Dispatchers.IO) {
         val transactionsSnapshot = transactions.first()
         val payload = JSONObject().apply {
-            put("version", 2)
+            put("version", 3)
             put("exportedAt", System.currentTimeMillis())
             put("displayCurrency", displayCurrencyName)
             put("enabledPlatforms", org.json.JSONArray().apply {
@@ -191,6 +236,8 @@ class DefaultLedgerRepository(
                             put("id", transaction.id)
                             put("tradeType", transaction.tradeType)
                             put("platform", transaction.platform)
+                            put("sourceChannel", transaction.sourceChannel)
+                            put("externalReference", transaction.externalReference)
                             put("market", transaction.market)
                             put("symbol", transaction.symbol)
                             put("name", transaction.name)
@@ -232,6 +279,8 @@ class DefaultLedgerRepository(
                         id = item.optLong("id"),
                         tradeType = item.optString("tradeType"),
                         platform = item.optString("platform").ifBlank { BrokerPlatform.UNSPECIFIED.name },
+                        sourceChannel = item.optString("sourceChannel").takeIf { it.isNotBlank() },
+                        externalReference = item.optString("externalReference").takeIf { it.isNotBlank() },
                         market = item.optString("market"),
                         symbol = item.optString("symbol"),
                         name = item.optString("name"),
@@ -264,6 +313,167 @@ class DefaultLedgerRepository(
             transactionCount = importedTransactions.size,
             enabledPlatforms = restoredPlatforms,
             selectedPlatform = selectedPlatform?.takeIf { it in restoredPlatforms },
+        )
+    }
+
+    suspend fun importSharedTradeText(
+        rawText: String,
+        receivedAtMillis: Long = System.currentTimeMillis(),
+    ): TradeImportResult {
+        HsbcNotificationParser.parse(rawText)?.let { parsed ->
+            return importParsedHsbcNotification(parsed, receivedAtMillis)
+        }
+        ZhuoruiEmailParser.parse(rawText)?.let { parsed ->
+            return importParsedZhuoruiEmail(parsed)
+        }
+        return TradeImportResult(
+            outcome = TradeImportOutcome.UNSUPPORTED,
+            message = "未识别出可导入的交易邮件或通知格式",
+        )
+    }
+
+    suspend fun importHsbcNotificationText(
+        rawText: String,
+        receivedAtMillis: Long = System.currentTimeMillis(),
+    ): TradeImportResult {
+        val parsed = HsbcNotificationParser.parse(rawText)
+            ?: return TradeImportResult(
+                outcome = TradeImportOutcome.UNSUPPORTED,
+                message = "未识别出可导入的汇丰通知格式",
+            )
+        return importParsedHsbcNotification(parsed, receivedAtMillis)
+    }
+
+    private suspend fun importParsedHsbcNotification(
+        parsed: com.recoder.stockledger.data.importer.ParsedHsbcNotification,
+        receivedAtMillis: Long,
+    ): TradeImportResult {
+        if (parsed.status == HsbcNotificationStatus.CANCELLED) {
+            return TradeImportResult(
+                outcome = TradeImportOutcome.CANCELLED,
+                message = "已识别为撤销/未成交通知，未生成交易记录",
+                externalReference = parsed.externalReference,
+            )
+        }
+
+        val price = parsed.price
+            ?: return TradeImportResult(
+                outcome = TradeImportOutcome.UNSUPPORTED,
+                message = "通知缺少成交价，暂时无法自动导入",
+                externalReference = parsed.externalReference,
+            )
+
+        val existing = dao.findTransactionByExternalReference(
+            platform = BrokerPlatform.HSBC.name,
+            externalReference = parsed.externalReference,
+        )
+        if (existing != null) {
+            return TradeImportResult(
+                outcome = TradeImportOutcome.DUPLICATE,
+                message = "交易编号 ${parsed.externalReference} 已存在，已跳过重复导入",
+                externalReference = parsed.externalReference,
+            )
+        }
+
+        val receivedAt = Instant.ofEpochMilli(receivedAtMillis)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDateTime()
+        val feeEstimate = estimateImportedTradeFees(
+            tradeType = parsed.tradeType,
+            platform = BrokerPlatform.HSBC,
+            market = parsed.market,
+            price = price,
+            quantity = parsed.quantity,
+            tradeDate = receivedAt.toLocalDate().toString(),
+            tradeTime = receivedAt.toLocalTime().format(timeFormatter),
+        )
+        addTrade(
+            TradeDraftInput(
+                tradeType = parsed.tradeType,
+                platform = BrokerPlatform.HSBC,
+                sourceChannel = parsed.sourceChannel,
+                externalReference = parsed.externalReference,
+                market = parsed.market,
+                symbol = parsed.symbol,
+                name = parsed.name,
+                tradeDate = receivedAt.toLocalDate().toString(),
+                price = price,
+                quantity = parsed.quantity,
+                commission = feeEstimate.commission,
+                tax = feeEstimate.tax,
+                note = buildImportedNote(
+                    sourceChannel = parsed.sourceChannel,
+                    externalReference = parsed.externalReference,
+                    rawText = parsed.rawText,
+                    suffix = importedFeeNoteSuffix(feeEstimate),
+                ),
+                tradeTime = receivedAt.toLocalTime().format(timeFormatter),
+                createdAt = receivedAtMillis,
+            ),
+        )
+        return TradeImportResult(
+            outcome = TradeImportOutcome.IMPORTED,
+            message = "已自动导入汇丰${parsed.tradeType.label}记录 ${parsed.symbol} ${parsed.quantity} 股，费用已按方案估算",
+            externalReference = parsed.externalReference,
+        )
+    }
+
+    private suspend fun importParsedZhuoruiEmail(
+        parsed: ParsedZhuoruiEmail,
+    ): TradeImportResult {
+        val existing = dao.findTransactionByExternalReference(
+            platform = BrokerPlatform.ZHUORUI.name,
+            externalReference = parsed.externalReference,
+        )
+        if (existing != null) {
+            return TradeImportResult(
+                outcome = TradeImportOutcome.DUPLICATE,
+                message = "卓锐交易 ${parsed.symbol} ${parsed.quantity} 股已存在，已跳过重复导入",
+                externalReference = parsed.externalReference,
+            )
+        }
+
+        val createdAt = parsed.tradeDateTime
+            .atZone(ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
+        val feeEstimate = estimateImportedTradeFees(
+            tradeType = parsed.tradeType,
+            platform = BrokerPlatform.ZHUORUI,
+            market = parsed.market,
+            price = parsed.price,
+            quantity = parsed.quantity,
+            tradeDate = parsed.tradeDateTime.toLocalDate().toString(),
+            tradeTime = parsed.tradeDateTime.toLocalTime().format(timeFormatter),
+        )
+        addTrade(
+            TradeDraftInput(
+                tradeType = parsed.tradeType,
+                platform = BrokerPlatform.ZHUORUI,
+                sourceChannel = parsed.sourceChannel,
+                externalReference = parsed.externalReference,
+                market = parsed.market,
+                symbol = parsed.symbol,
+                name = parsed.name,
+                tradeDate = parsed.tradeDateTime.toLocalDate().toString(),
+                price = parsed.price,
+                quantity = parsed.quantity,
+                commission = feeEstimate.commission,
+                tax = feeEstimate.tax,
+                note = buildImportedNote(
+                    sourceChannel = parsed.sourceChannel,
+                    externalReference = parsed.externalReference,
+                    rawText = parsed.rawText,
+                    suffix = importedFeeNoteSuffix(feeEstimate),
+                ),
+                tradeTime = parsed.tradeDateTime.toLocalTime().format(timeFormatter),
+                createdAt = createdAt,
+            ),
+        )
+        return TradeImportResult(
+            outcome = TradeImportOutcome.IMPORTED,
+            message = "已自动导入卓锐${parsed.tradeType.label}记录 ${parsed.symbol} ${parsed.quantity} 股，费用已按方案估算",
+            externalReference = parsed.externalReference,
         )
     }
 
@@ -399,6 +609,263 @@ class DefaultLedgerRepository(
     private fun parseTradeDateOrNull(value: String): LocalDate? = runCatching {
         LocalDate.parse(value)
     }.getOrNull()
+
+    private fun buildImportedNote(
+        sourceChannel: ImportSourceChannel,
+        externalReference: String,
+        rawText: String,
+        suffix: String? = null,
+    ): String {
+        val preview = rawText
+            .replace('\n', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(80)
+        val suffixLabel = suffix?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+        return "${sourceChannel.label}自动导入 · 交易编号 $externalReference${if (preview.isBlank()) "" else " · $preview"}$suffixLabel"
+    }
+
+    private suspend fun estimateImportedTradeFees(
+        tradeType: TradeType,
+        platform: BrokerPlatform,
+        market: Market,
+        price: Double,
+        quantity: Int,
+        tradeDate: String,
+        tradeTime: String,
+    ): TradeFeeEstimate {
+        val selectedPlanId = TradeFeeEstimator.resolvePlanId(
+            platform,
+            platformFeePlanSelectionProvider()[platform],
+        )
+        val context = if (platform == BrokerPlatform.HSBC) {
+            TradeFeeEstimateContext(
+                monthlyTurnoverHkdBeforeTrade = calculateHsbcMonthlyTurnoverHkdBeforeTrade(
+                    tradeDate = tradeDate,
+                    tradeTime = tradeTime,
+                ),
+            )
+        } else {
+            TradeFeeEstimateContext()
+        }
+        return TradeFeeEstimator.estimate(
+            platform = platform,
+            market = market,
+            tradeType = tradeType,
+            price = price,
+            quantity = quantity,
+            planId = selectedPlanId,
+            context = context,
+        )
+    }
+
+    private suspend fun calculateHsbcMonthlyTurnoverHkdBeforeTrade(
+        tradeDate: String,
+        tradeTime: String,
+    ): Double {
+        val draftDate = runCatching { LocalDate.parse(tradeDate) }.getOrNull() ?: return 0.0
+        val draftTime = runCatching { LocalTime.parse(tradeTime, timeFormatter) }.getOrNull() ?: LocalTime.MAX
+        return transactions.first()
+            .asSequence()
+            .mapNotNull { transaction ->
+                val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
+                if (platform != BrokerPlatform.HSBC) return@mapNotNull null
+                val existingTradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull()
+                    ?: return@mapNotNull null
+                if (!existingTradeType.isSecurityTrade) return@mapNotNull null
+                val existingDate = runCatching { LocalDate.parse(transaction.tradeDate) }.getOrNull()
+                    ?: return@mapNotNull null
+                if (existingDate.year != draftDate.year || existingDate.month != draftDate.month) {
+                    return@mapNotNull null
+                }
+                val existingTime = runCatching { LocalTime.parse(transaction.tradeTime, timeFormatter) }.getOrNull() ?: LocalTime.MAX
+                val isBeforeDraft = existingDate.isBefore(draftDate) ||
+                    (existingDate == draftDate && existingTime <= draftTime)
+                if (!isBeforeDraft) return@mapNotNull null
+                val market = runCatching { Market.valueOf(transaction.market) }.getOrNull()
+                    ?: return@mapNotNull null
+                amountToHkdEquivalent(transaction.price * transaction.quantity, market)
+            }
+            .sum()
+    }
+
+    private fun amountToHkdEquivalent(amount: Double, market: Market): Double {
+        if (market == Market.HONG_KONG) return amount
+        val currentRates = exchangeRates.value
+        val amountCny = amount * currentRates.rateToCny(market)
+        val hkdRateToCny = currentRates.rateToCny(Market.HONG_KONG)
+        return if (hkdRateToCny <= 1e-6) amount else amountCny / hkdRateToCny
+    }
+
+    private fun importedFeeNoteSuffix(estimate: TradeFeeEstimate): String {
+        return when (estimate.coverage) {
+            com.recoder.stockledger.data.FeeEstimateCoverage.FULL ->
+                "费用已按当前费率方案自动计算"
+            com.recoder.stockledger.data.FeeEstimateCoverage.PARTIAL ->
+                "费用已按当前费率方案估算，建议复核"
+            com.recoder.stockledger.data.FeeEstimateCoverage.UNSUPPORTED ->
+                "费用暂未自动计算"
+        }
+    }
+
+    suspend fun syncZhuoruiMailbox(
+        config: ZhuoruiEmailSyncConfig,
+        lastSyncAtMillis: Long,
+        fetchCount: Int = DEFAULT_MAIL_FETCH_BATCH_SIZE,
+        earliestReceivedAtMillis: Long? = null,
+    ): ZhuoruiMailboxSyncResult = withContext(Dispatchers.IO) {
+        require(config.isComplete()) { "邮箱配置不完整" }
+
+        val store = openImapStore(config)
+        try {
+            val folder = store.getFolder(config.folder).apply { open(Folder.READ_ONLY) }
+            try {
+                val total = folder.messageCount
+                if (total <= 0) {
+                    return@withContext ZhuoruiMailboxSyncResult(
+                        importedCount = 0,
+                        duplicateCount = 0,
+                        ignoredCount = 0,
+                        latestSeenMessageAt = null,
+                    )
+                }
+
+                val startIndex = (total - fetchCount.coerceIn(1, 500) + 1).coerceAtLeast(1)
+                val messages = folder.getMessages(startIndex, total)
+                    .sortedByDescending { messageTimestampMillis(it) ?: 0L }
+
+                var importedCount = 0
+                var duplicateCount = 0
+                var ignoredCount = 0
+                var latestSeenMessageAt: Long? = null
+                val defaultThreshold = (lastSyncAtMillis - MAIL_RESYNC_LOOKBACK_MS)
+                    .coerceAtLeast(System.currentTimeMillis() - MAIL_MAX_LOOKBACK_MS)
+                val scanThreshold = earliestReceivedAtMillis ?: defaultThreshold
+
+                for (message in messages) {
+                    val messageTimestamp = messageTimestampMillis(message)
+                    if (messageTimestamp != null) {
+                        latestSeenMessageAt = maxOf(latestSeenMessageAt ?: 0L, messageTimestamp)
+                        if (messageTimestamp < scanThreshold) continue
+                    }
+
+                    val rawText = extractMessageText(message)
+                    if (rawText.isBlank()) {
+                        ignoredCount += 1
+                        continue
+                    }
+                    val normalizedText = rawText
+                        .replace('\u0000', ' ')
+                        .trim()
+                    val parsed = ZhuoruiEmailParser.parse(normalizedText)
+                    if (parsed == null) {
+                        ignoredCount += 1
+                        continue
+                    }
+                    when (importParsedZhuoruiEmail(parsed).outcome) {
+                        TradeImportOutcome.IMPORTED -> importedCount += 1
+                        TradeImportOutcome.DUPLICATE -> duplicateCount += 1
+                        else -> ignoredCount += 1
+                    }
+                }
+
+                if (importedCount > 0) {
+                    refreshQuotesForPortfolio(transactions.first())
+                }
+
+                ZhuoruiMailboxSyncResult(
+                    importedCount = importedCount,
+                    duplicateCount = duplicateCount,
+                    ignoredCount = ignoredCount,
+                    latestSeenMessageAt = latestSeenMessageAt,
+                )
+            } finally {
+                runCatching { folder.close(false) }
+            }
+        } finally {
+            runCatching { store.close() }
+        }
+    }
+
+    private fun openImapStore(config: ZhuoruiEmailSyncConfig): Store {
+        val session = Session.getInstance(
+            java.util.Properties().apply {
+                put("mail.store.protocol", "imaps")
+                put("mail.imaps.host", config.imapHost)
+                put("mail.imaps.port", config.resolvedPort().toString())
+                put("mail.imaps.ssl.enable", "true")
+                put("mail.imaps.timeout", "15000")
+                put("mail.imaps.connectiontimeout", "15000")
+                put("mail.mime.allowutf8", "true")
+            },
+        )
+        return session.getStore("imaps").apply {
+            connect(config.imapHost, config.resolvedPort(), config.account, config.password)
+        }
+    }
+
+    private fun extractMessageText(message: Message): String {
+        val subject = message.subject.orEmpty().trim()
+        val body = extractPartText(message).trim()
+        return listOf(subject, body)
+            .filter { it.isNotBlank() }
+            .joinToString(separator = "\n\n")
+    }
+
+    private fun extractPartText(part: jakarta.mail.Part): String {
+        return when {
+            part.isMimeType("text/plain") -> part.content?.toString().orEmpty()
+            part.isMimeType("text/html") -> htmlToPlainText(part.content?.toString().orEmpty())
+            part.isMimeType("multipart/*") -> {
+                val multipart = part.content as? Multipart ?: return ""
+                buildString {
+                    for (index in 0 until multipart.count) {
+                        val bodyPart = multipart.getBodyPart(index)
+                        appendLine(extractBodyPartText(bodyPart))
+                    }
+                }
+            }
+
+            else -> ""
+        }
+    }
+
+    private fun extractBodyPartText(bodyPart: BodyPart): String = extractPartText(bodyPart)
+
+    private fun htmlToPlainText(html: String): String {
+        if (html.isBlank()) return ""
+        return html
+            .replace(Regex("(?i)<br\\s*/?>"), "\n")
+            .replace(Regex("(?i)</p>"), "\n")
+            .replace(Regex("(?i)</div>"), "\n")
+            .replace(Regex("(?i)</tr>"), "\n")
+            .replace(Regex("(?i)</td>"), "\n")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace(Regex("\\s+"), " ")
+            .replace(" 股票名称 ", "\n股票名称\n")
+            .replace(" 股票代码 ", "\n股票代码\n")
+            .replace(" 币种 ", "\n币种\n")
+            .replace(" 成交价格 ", "\n成交价格\n")
+            .replace(" 成交数量 ", "\n成交数量\n")
+            .replace(" 成交金额 ", "\n成交金额\n")
+            .replace(" 累计成交数量 ", "\n累计成交数量\n")
+            .replace(" 累计成交金额 ", "\n累计成交金额\n")
+            .trim()
+    }
+
+    private fun messageTimestampMillis(message: Message): Long? =
+        message.receivedDate?.time ?: message.sentDate?.time
+
+    private companion object {
+        val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+        const val DEFAULT_MAIL_FETCH_BATCH_SIZE = 80
+        const val MAIL_RESYNC_LOOKBACK_MS = 24L * 60 * 60 * 1000
+        const val MAIL_MAX_LOOKBACK_MS = 14L * 24 * 60 * 60 * 1000
+    }
 }
 
 class TencentSinaQuoteDataSource : QuoteDataSource {

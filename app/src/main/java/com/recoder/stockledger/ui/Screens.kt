@@ -24,12 +24,15 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +52,7 @@ import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.HoldingUiModel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.MarketFilter
+import com.recoder.stockledger.data.PlatformFeePlanUiModel
 import com.recoder.stockledger.data.PortfolioSummary
 import com.recoder.stockledger.data.RefreshState
 import com.recoder.stockledger.data.SecuritySuggestionUiModel
@@ -60,6 +64,8 @@ import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.data.TransactionFilter
 import com.recoder.stockledger.data.TransactionSection
 import com.recoder.stockledger.data.TransactionUiModel
+import com.recoder.stockledger.data.ZhuoruiEmailManualSyncOptions
+import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -237,8 +243,26 @@ fun OperationsRoute(
     onExportBackupClick: () -> Unit,
     onImportBackupClick: () -> Unit,
     backupStatusMessage: String?,
+    selectedPlatformFeePlan: PlatformFeePlanUiModel?,
+    onPlatformFeePlanSelected: (String) -> Unit,
+    hsbcImportDraftText: String,
+    hsbcImportStatusMessage: String?,
+    onHsbcImportDraftTextChange: (String) -> Unit,
+    onImportHsbcNotificationText: () -> Unit,
+    zhuoruiEmailSyncConfig: ZhuoruiEmailSyncConfig,
+    zhuoruiEmailManualSyncOptions: ZhuoruiEmailManualSyncOptions,
+    zhuoruiEmailAutoImportEnabled: Boolean,
+    zhuoruiEmailSyncStatusMessage: String?,
+    onZhuoruiEmailSyncConfigChange: (ZhuoruiEmailSyncConfig) -> Unit,
+    onZhuoruiEmailManualSyncOptionsChange: (ZhuoruiEmailManualSyncOptions) -> Unit,
+    onSaveZhuoruiEmailSyncConfig: () -> Unit,
+    onSyncZhuoruiMailboxNow: () -> Unit,
+    onEnableZhuoruiEmailAutoImport: () -> Unit,
+    onDisableZhuoruiEmailAutoImport: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
+    var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -258,12 +282,6 @@ fun OperationsRoute(
                     .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                CurrentPlatformBanner(
-                    selectedPlatform = selectedPlatform,
-                    title = "默认交易平台",
-                    subtitle = "买入、卖出、入金、出金会默认带出当前选中的平台。",
-                )
-
                 TradeActionButtons(
                     onBuyClick = onBuyClick,
                     onSellClick = onSellClick,
@@ -308,6 +326,265 @@ fun OperationsRoute(
                             color = ForegroundMuted,
                             fontSize = 12.sp,
                         )
+                    }
+                }
+
+                selectedPlatformFeePlan?.let { feePlan ->
+                    val selectedOption = feePlan.options.firstOrNull { it.isSelected } ?: feePlan.options.first()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("费率方案", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "只影响后续自动估算，不会改动已保存记录；切换后录入页会立刻按新方案重新估算。",
+                            color = ForegroundSecondary,
+                            fontSize = 13.sp,
+                        )
+                        Text(
+                            "当前平台：${feePlan.platform.label}",
+                            color = ForegroundMuted,
+                            fontSize = 12.sp,
+                        )
+                        FilterChipWrapRow(
+                            options = feePlan.options,
+                            selected = selectedOption,
+                            label = { it.label },
+                            onSelected = { option ->
+                                if (!option.isSelected) {
+                                    onPlatformFeePlanSelected(option.id)
+                                }
+                            },
+                        )
+                        if (feePlan.options.size == 1) {
+                            Text(
+                                "当前只收录 1 套公开方案，后续如果平台公布更多完整费率规则，我再继续补。",
+                                color = ForegroundMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Text(
+                            "当前：${feePlan.selectedPlanLabel}",
+                            color = ForegroundPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            feePlan.selectedPlanDescription,
+                            color = ForegroundMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+
+                if (selectedPlatform == BrokerPlatform.HSBC) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("汇丰短信导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "把汇丰成交短信完整复制到这里，点“解析导入”后会自动识别买入、卖出和撤销通知。",
+                            color = ForegroundSecondary,
+                            fontSize = 13.sp,
+                        )
+                        InputFieldBlock(
+                            label = "短信文本",
+                            value = hsbcImportDraftText,
+                            placeholder = "粘贴汇丰短信全文",
+                            singleLine = false,
+                            supportingText = "支持直接粘贴短信 App 里的原文内容",
+                            onValueChange = onHsbcImportDraftTextChange,
+                        )
+                        FilledActionButton(
+                            text = "解析导入",
+                            onClick = onImportHsbcNotificationText,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        hsbcImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                            Text(
+                                text = message,
+                                color = ForegroundMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+
+                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("卓锐邮箱自动导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("自动同步", color = ForegroundPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Switch(
+                                checked = zhuoruiEmailAutoImportEnabled,
+                                onCheckedChange = { checked ->
+                                    if (checked) onEnableZhuoruiEmailAutoImport() else onDisableZhuoruiEmailAutoImport()
+                                },
+                            )
+                        }
+                        if (!zhuoruiEmailSyncStatusMessage.isNullOrBlank()) {
+                            Text(
+                                text = zhuoruiEmailSyncStatusMessage,
+                                color = ForegroundMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        InputFieldBlock(
+                            label = "IMAP 地址",
+                            value = zhuoruiEmailSyncConfig.imapHost,
+                            placeholder = "例如 imap.qq.com",
+                            onValueChange = { value ->
+                                onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(imapHost = value))
+                            },
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            InputFieldBlock(
+                                label = "端口",
+                                value = zhuoruiEmailSyncConfig.imapPort,
+                                placeholder = "993",
+                                keyboardType = KeyboardType.Number,
+                                modifier = Modifier.weight(1f),
+                                onValueChange = { value ->
+                                    onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(imapPort = value))
+                                },
+                            )
+                            InputFieldBlock(
+                                label = "文件夹",
+                                value = zhuoruiEmailSyncConfig.folder,
+                                placeholder = "INBOX",
+                                modifier = Modifier.weight(1f),
+                                onValueChange = { value ->
+                                    onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(folder = value))
+                                },
+                            )
+                        }
+                        InputFieldBlock(
+                            label = "邮箱账号",
+                            value = zhuoruiEmailSyncConfig.account,
+                            placeholder = "your@mail.com",
+                            onValueChange = { value ->
+                                onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(account = value))
+                            },
+                        )
+                        InputFieldBlock(
+                            label = "授权码 / 密码",
+                            value = zhuoruiEmailSyncConfig.password,
+                            placeholder = "建议填写邮箱 IMAP 授权码",
+                            isPassword = true,
+                            keyboardType = KeyboardType.Password,
+                            onValueChange = { value ->
+                                onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(password = value))
+                            },
+                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text("高级同步选项", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "仅对本次“立即同步”生效，不会保存，也不会影响后台自动同步。",
+                                        color = ForegroundMuted,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                                Icon(
+                                    imageVector = if (showZhuoruiManualSyncOptions) {
+                                        Icons.Filled.KeyboardArrowUp
+                                    } else {
+                                        Icons.Filled.KeyboardArrowDown
+                                    },
+                                    contentDescription = if (showZhuoruiManualSyncOptions) "收起高级同步选项" else "展开高级同步选项",
+                                    tint = ForegroundMuted,
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clickable { showZhuoruiManualSyncOptions = !showZhuoruiManualSyncOptions },
+                                )
+                            }
+
+                            if (showZhuoruiManualSyncOptions) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    InputFieldBlock(
+                                        label = "拉取封数",
+                                        value = zhuoruiEmailManualSyncOptions.fetchCount,
+                                        placeholder = "80",
+                                        keyboardType = KeyboardType.Number,
+                                        supportingText = "建议 50 - 200",
+                                        modifier = Modifier.weight(1f),
+                                        onValueChange = { value ->
+                                            onZhuoruiEmailManualSyncOptionsChange(
+                                                zhuoruiEmailManualSyncOptions.copy(fetchCount = value),
+                                            )
+                                        },
+                                    )
+                                    ManualSyncDateField(
+                                        label = "最早到达日期",
+                                        value = zhuoruiEmailManualSyncOptions.earliestReceivedAt,
+                                        modifier = Modifier.weight(1f),
+                                        onValueChange = { value ->
+                                            onZhuoruiEmailManualSyncOptionsChange(
+                                                zhuoruiEmailManualSyncOptions.copy(earliestReceivedAt = value),
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            OutlineActionButton(
+                                text = "保存配置",
+                                onClick = onSaveZhuoruiEmailSyncConfig,
+                                modifier = Modifier.weight(1f),
+                            )
+                            FilledActionButton(
+                                text = "立即同步",
+                                onClick = onSyncZhuoruiMailboxNow,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                 }
             }
@@ -374,11 +651,12 @@ fun TransactionsRoute(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Bottom,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     InputFieldBlock(
-                        label = "搜索证券名称或代码",
+                        label = "",
                         value = transactionKeyword,
+                        placeholder = "搜索证券名称或代码",
                         modifier = Modifier.weight(1f),
                         onValueChange = onTransactionKeywordChange,
                     )
@@ -394,18 +672,8 @@ fun TransactionsRoute(
                     )
                 }
 
-                if (hasActiveFilters) {
-                    ActiveTransactionFilterSummary(
-                        tradeFilter = selectedTradeFilter,
-                        marketFilter = selectedMarketFilter,
-                        keyword = transactionKeyword,
-                        startDate = transactionDateStart,
-                        endDate = transactionDateEnd,
-                    )
-                }
-
                 if (sections.isEmpty()) {
-                    Text("当前筛选条件下没有交易记录。", color = ForegroundMuted, fontSize = 14.sp)
+                    Text("当前条件下没有流水记录。", color = ForegroundMuted, fontSize = 14.sp)
                 } else {
                     sections.forEach { section ->
                         Text(section.title, color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -416,8 +684,8 @@ fun TransactionsRoute(
                                     color = SurfaceSecondary,
                                     shape = RoundedCornerShape(16.dp),
                                 )
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             section.items.forEach { item ->
                                 TransactionRow(
@@ -523,13 +791,13 @@ fun TradeEntryRoute(
     state: TradeFormState,
     isEditing: Boolean,
     displayCurrency: DisplayCurrency,
+    availablePlatforms: List<BrokerPlatform>,
     sellCandidates: List<SellCandidateUiModel>,
     symbolLookup: SymbolLookupUiModel,
     symbolSuggestions: List<SecuritySuggestionUiModel>,
     canSubmit: Boolean,
     validationMessage: String?,
     onBackClick: () -> Unit,
-    onTradeTypeSelected: (TradeType) -> Unit,
     onTradePlatformSelected: (BrokerPlatform) -> Unit,
     onSellCandidateSelected: (SellCandidateUiModel) -> Unit,
     onSymbolSuggestionSelected: (SecuritySuggestionUiModel) -> Unit,
@@ -540,6 +808,7 @@ fun TradeEntryRoute(
     onQuantityChange: (String) -> Unit,
     onCommissionChange: (String) -> Unit,
     onTaxChange: (String) -> Unit,
+    onRecalculateFees: () -> Unit,
     onNoteChange: (String) -> Unit,
     onDeleteTradeClick: (() -> Unit)? = null,
     onSubmit: () -> Unit,
@@ -594,41 +863,35 @@ fun TradeEntryRoute(
                     .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 132.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                if (isEditing) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("浜ゆ槗绫诲瀷", color = ForegroundSecondary, fontSize = 14.sp)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    color = SurfaceSecondary,
-                                    shape = RoundedCornerShape(12.dp),
-                                )
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            PillLabel(
-                                text = state.selectedType.label,
-                                background = tradeTypeBadgeBackground,
-                                foreground = tradeTypeBadgeForeground,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("交易类型", color = ForegroundSecondary, fontSize = 14.sp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(12.dp),
                             )
-                            Text(
-                                text = "编辑时不可修改",
-                                color = ForegroundMuted,
-                                fontSize = 12.sp,
-                            )
-                        }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        PillLabel(
+                            text = state.selectedType.label,
+                            background = tradeTypeBadgeBackground,
+                            foreground = tradeTypeBadgeForeground,
+                        )
+                        Text(
+                            text = if (isEditing) "编辑时不可修改" else "由操作页入口决定",
+                            color = ForegroundMuted,
+                            fontSize = 12.sp,
+                        )
                     }
-                } else {
-                    TradeTypeSelector(
-                        selected = state.selectedType,
-                        onSelected = onTradeTypeSelected,
-                    )
                 }
 
                 PlatformDropdownField(
                     selectedPlatform = state.platform,
+                    availablePlatforms = availablePlatforms,
                     onSelected = onTradePlatformSelected,
                 )
 
@@ -643,7 +906,7 @@ fun TradeEntryRoute(
 
                 if (isSecurityTrade) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("甯傚満", color = ForegroundSecondary, fontSize = 14.sp)
+                        Text("市场", color = ForegroundSecondary, fontSize = 14.sp)
                         TradeEntryMarketSelector(
                             selected = state.market,
                             onSelected = onMarketSelected,
@@ -653,7 +916,7 @@ fun TradeEntryRoute(
 
                 if (isSecurityTrade) {
                     InputFieldBlock(
-                        label = "璇佸埜浠ｇ爜 / 鍚嶇О",
+                        label = "证券代码 / 名称",
                         value = state.symbolOrName,
                         supportingText = symbolLookup.message,
                         supportingColor = when (symbolLookup.state) {
@@ -682,14 +945,14 @@ fun TradeEntryRoute(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         InputFieldBlock(
-                            label = "鎴愪氦浠锋牸",
+                            label = "成交价格",
                             value = state.priceLabel,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Decimal,
                             onValueChange = onPriceChange,
                         )
                         InputFieldBlock(
-                            label = "鎴愪氦鏁伴噺",
+                            label = "成交数量",
                             value = state.quantityLabel,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Number,
@@ -714,8 +977,13 @@ fun TradeEntryRoute(
                     TradeEntryFeeCard(
                         commission = state.commissionLabel,
                         tax = state.taxLabel,
+                        feeEstimateStatus = state.feeEstimateStatus,
+                        feeEstimateSummary = state.feeEstimateSummary,
+                        feeEstimateDetail = state.feeEstimateDetail,
+                        canAutoEstimateFees = state.canAutoEstimateFees,
                         onCommissionChange = onCommissionChange,
                         onTaxChange = onTaxChange,
+                        onRecalculateFees = onRecalculateFees,
                     )
                 }
 
@@ -854,37 +1122,6 @@ private fun FilterActionButton(
 }
 
 @Composable
-private fun ActiveTransactionFilterSummary(
-    tradeFilter: TransactionFilter,
-    marketFilter: MarketFilter,
-    keyword: String,
-    startDate: String,
-    endDate: String,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                color = SurfaceSecondary,
-                shape = RoundedCornerShape(16.dp),
-            )
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text("当前筛选", color = ForegroundSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        val summaryItems = buildList {
-            if (tradeFilter != TransactionFilter.ALL) add(tradeFilter.label)
-            if (marketFilter != MarketFilter.ALL) add(marketFilter.label)
-            if (keyword.isNotBlank()) add("关键词：$keyword")
-            if (startDate.isNotBlank() || endDate.isNotBlank()) {
-                add("${startDate.ifBlank { "最早" }} - ${endDate.ifBlank { "今天" }}")
-            }
-        }
-        Text(summaryItems.joinToString(" 路 "), color = ForegroundPrimary, fontSize = 13.sp)
-    }
-}
-
-@Composable
 private fun <T> FilterChipWrapRow(
     options: List<T>,
     selected: T,
@@ -946,12 +1183,13 @@ private fun FilterDateField(
 @Composable
 private fun PlatformDropdownField(
     selectedPlatform: BrokerPlatform,
+    availablePlatforms: List<BrokerPlatform>,
     onSelected: (BrokerPlatform) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("浜ゆ槗骞冲彴", color = ForegroundSecondary, fontSize = 14.sp)
+        Text("交易平台", color = ForegroundSecondary, fontSize = 14.sp)
         Box {
             InputFieldBlock(
                 label = "",
@@ -964,7 +1202,7 @@ private fun PlatformDropdownField(
                 onDismissRequest = { expanded = false },
                 modifier = Modifier.background(BackgroundPrimary),
             ) {
-                BrokerPlatform.configurableEntries.forEach { platform ->
+                availablePlatforms.forEach { platform ->
                     DropdownMenuItem(
                         text = {
                             Row(
@@ -986,6 +1224,49 @@ private fun PlatformDropdownField(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ManualSyncDateField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val selectedDate = remember(value) {
+        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
+    }
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        InputFieldBlock(
+            label = label,
+            value = value,
+            placeholder = "请选择",
+            trailingIcon = Icons.Filled.DateRange,
+            supportingText = "留空则按增量拉取",
+            onClick = {
+                DatePickerDialog(
+                    context,
+                    { _, year, month, dayOfMonth ->
+                        onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
+                    },
+                    selectedDate.year,
+                    selectedDate.monthValue - 1,
+                    selectedDate.dayOfMonth,
+                ).show()
+            },
+        )
+        Text(
+            text = if (value.isBlank()) "未限制开始日期" else "清空日期",
+            color = ForegroundMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.clickable { onValueChange("") },
+        )
     }
 }
 

@@ -97,6 +97,33 @@ enum class BrokerPlatform(
     }
 }
 
+enum class FeeEstimateStatus {
+    UNAVAILABLE,
+    AUTO_APPLIED,
+    MANUAL_OVERRIDE,
+}
+
+data class TradeFeePlanOptionUiModel(
+    val id: String,
+    val label: String,
+    val description: String,
+    val isSelected: Boolean,
+)
+
+data class PlatformFeePlanUiModel(
+    val platform: BrokerPlatform,
+    val selectedPlanId: String,
+    val selectedPlanLabel: String,
+    val selectedPlanDescription: String,
+    val options: List<TradeFeePlanOptionUiModel>,
+)
+
+enum class ImportSourceChannel(val label: String) {
+    HSBC_SMS("汇丰短信"),
+    HSBC_EMAIL("汇丰邮件"),
+    ZHUORUI_EMAIL("卓锐邮件"),
+}
+
 data class PortfolioSummary(
     val totalAssets: String,
     val totalCost: String,
@@ -147,7 +174,8 @@ data class TransactionUiModel(
     val id: Long,
     val tradeType: TradeType,
     val stockName: String,
-    val stockMeta: String,
+    val primaryMeta: String,
+    val secondaryMeta: String?,
     val amountLabel: String,
     val timeLabel: String,
     val feeLabel: String,
@@ -158,7 +186,15 @@ data class TransactionUiModel(
 data class ManagedPlatformUiModel(
     val platform: BrokerPlatform?,
     val label: String,
+    val totalAssetsLabel: String,
     val isSelected: Boolean,
+)
+
+data class PlatformVisibilityUiModel(
+    val platform: BrokerPlatform,
+    val label: String,
+    val totalAssetsLabel: String,
+    val isEnabled: Boolean,
 )
 
 data class TradeFormState(
@@ -172,6 +208,10 @@ data class TradeFormState(
     val commissionLabel: String,
     val taxLabel: String,
     val note: String,
+    val feeEstimateStatus: FeeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+    val feeEstimateSummary: String? = null,
+    val feeEstimateDetail: String? = null,
+    val canAutoEstimateFees: Boolean = false,
 )
 
 data class SymbolLookupUiModel(

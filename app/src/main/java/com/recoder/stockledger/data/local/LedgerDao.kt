@@ -23,6 +23,19 @@ interface LedgerDao {
     @Insert
     suspend fun insertTransactions(transactions: List<TransactionEntity>)
 
+    @Query(
+        """
+        SELECT * FROM transactions
+        WHERE platform = :platform AND externalReference = :externalReference
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun findTransactionByExternalReference(
+        platform: String,
+        externalReference: String,
+    ): TransactionEntity?
+
     @Query("DELETE FROM transactions")
     suspend fun clearTransactions()
 

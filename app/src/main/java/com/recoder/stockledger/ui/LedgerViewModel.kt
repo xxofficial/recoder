@@ -5,15 +5,20 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.recoder.stockledger.StockLedgerApplication
+import com.recoder.stockledger.StockLedgerPreferences
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.ExchangeRateOrigin
 import com.recoder.stockledger.data.ExchangeRates
-import com.recoder.stockledger.StockLedgerApplication
+import com.recoder.stockledger.data.FeeEstimateStatus
 import com.recoder.stockledger.data.HoldingUiModel
+import com.recoder.stockledger.data.ImportSourceChannel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.MarketFilter
 import com.recoder.stockledger.data.ManagedPlatformUiModel
+import com.recoder.stockledger.data.PlatformFeePlanUiModel
+import com.recoder.stockledger.data.PlatformVisibilityUiModel
 import com.recoder.stockledger.data.PortfolioSummary
 import com.recoder.stockledger.data.PriceTrend
 import com.recoder.stockledger.data.ProfitAnalysisPointUiModel
@@ -26,14 +31,20 @@ import com.recoder.stockledger.data.SecuritySuggestionUiModel
 import com.recoder.stockledger.data.SellCandidateUiModel
 import com.recoder.stockledger.data.SymbolLookupState
 import com.recoder.stockledger.data.SymbolLookupUiModel
+import com.recoder.stockledger.data.TradeFeeEstimator
+import com.recoder.stockledger.data.TradeFeeEstimateContext
 import com.recoder.stockledger.data.TradeFormState
+import com.recoder.stockledger.data.TradeFeePlanOptionUiModel
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.data.TransactionFilter
 import com.recoder.stockledger.data.TransactionSection
 import com.recoder.stockledger.data.TransactionUiModel
+import com.recoder.stockledger.data.ZhuoruiEmailManualSyncOptions
+import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
 import com.recoder.stockledger.data.rateToCny
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
+import com.recoder.stockledger.importer.ZhuoruiEmailSyncWorker
 import com.recoder.stockledger.data.repository.DefaultLedgerRepository
 import com.recoder.stockledger.data.repository.HistoricalClosePoint
 import com.recoder.stockledger.data.repository.ImportedBackup
@@ -44,6 +55,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -85,6 +97,9 @@ data class LedgerUiState(
     val transactionDateStart: String = "",
     val transactionDateEnd: String = "",
     val managedPlatforms: List<ManagedPlatformUiModel> = emptyList(),
+    val platformVisibilityOptions: List<PlatformVisibilityUiModel> = emptyList(),
+    val selectedPlatformFeePlan: PlatformFeePlanUiModel? = null,
+    val availableTradePlatforms: List<BrokerPlatform> = emptyList(),
     val selectedPlatform: BrokerPlatform? = null,
     val draft: TradeFormState = SampleData.tradeForm(TradeType.BUY),
     val symbolLookup: SymbolLookupUiModel = SymbolLookupUiModel(),
@@ -95,12 +110,21 @@ data class LedgerUiState(
     val displayCurrency: DisplayCurrency = DisplayCurrency.CNY,
     val exchangeRates: ExchangeRates = ExchangeRates(),
     val backupStatusMessage: String? = null,
+    val hsbcImportDraftText: String = "",
+    val hsbcImportStatusMessage: String? = null,
+    val zhuoruiEmailSyncConfig: ZhuoruiEmailSyncConfig = ZhuoruiEmailSyncConfig(),
+    val zhuoruiEmailManualSyncOptions: ZhuoruiEmailManualSyncOptions = ZhuoruiEmailManualSyncOptions(),
+    val zhuoruiEmailAutoImportEnabled: Boolean = false,
+    val zhuoruiEmailSyncStatusMessage: String? = null,
 )
 
 class LedgerViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: DefaultLedgerRepository =
         (application as StockLedgerApplication).repository
-    private val preferences = application.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val preferences = application.getSharedPreferences(
+        StockLedgerPreferences.PREFERENCES_NAME,
+        Context.MODE_PRIVATE,
+    )
 
     private val tradeFilter = MutableStateFlow(TransactionFilter.ALL)
     private val marketFilter = MutableStateFlow(MarketFilter.ALL)
@@ -108,6 +132,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val transactionDateStart = MutableStateFlow<String?>(null)
     private val transactionDateEnd = MutableStateFlow<String?>(null)
     private val selectedPlatform = MutableStateFlow(loadSavedSelectedPlatform())
+    private val enabledPlatforms = MutableStateFlow(loadEnabledPlatforms())
+    private val platformFeePlanSelections = MutableStateFlow(loadPlatformFeePlanSelections())
+    private val transactionSnapshot = MutableStateFlow<List<TransactionEntity>>(emptyList())
     private val draft = MutableStateFlow(SampleData.tradeForm(TradeType.BUY))
     private val symbolLookup = MutableStateFlow(SymbolLookupUiModel())
     private val symbolSuggestions = MutableStateFlow<List<SecuritySuggestionUiModel>>(emptyList())
@@ -118,6 +145,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val displayCurrency = MutableStateFlow(loadSavedDisplayCurrency())
     private val editingTrade = MutableStateFlow<EditingTradeSession?>(null)
     private val backupStatusMessage = MutableStateFlow<String?>(null)
+    private val hsbcImportDraftText = MutableStateFlow("")
+    private val hsbcImportStatusMessage = MutableStateFlow<String?>(null)
+    private val zhuoruiEmailSyncConfig = MutableStateFlow(loadZhuoruiEmailSyncConfig())
+    private val zhuoruiEmailManualSyncOptions = MutableStateFlow(ZhuoruiEmailManualSyncOptions())
+    private val zhuoruiEmailAutoImportEnabled = MutableStateFlow(loadZhuoruiEmailAutoImportEnabled())
+    private val zhuoruiEmailSyncStatusMessage = MutableStateFlow(loadZhuoruiEmailSyncStatusMessage())
 
     private var lastManualRefreshTriggeredAt: Long = 0L
     private var symbolLookupJob: Job? = null
@@ -197,22 +230,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         historicalCloses to quotes
     }
 
-    private val platformSetup = combine(repository.transactions, selectedPlatform) { transactions, active ->
-        val recordedPlatforms = transactions
-            .mapNotNull { transaction ->
-                BrokerPlatform.entries.firstOrNull { platform ->
-                    platform.name == transaction.platform && platform.isConfigurable
-                }
-            }
-            .distinctBy { it.name }
-            .sortedBy { it.label }
-        val resolvedSelection = active?.takeIf { it in recordedPlatforms }
+    private val platformSetup = combine(enabledPlatforms, selectedPlatform) { enabled, active ->
+        val resolvedEnabled = BrokerPlatform.configurableEntries.filter { it in enabled }
+            .ifEmpty { BrokerPlatform.configurableEntries }
+        val resolvedSelection = active?.takeIf { it in resolvedEnabled }
         if (resolvedSelection != active) {
             selectedPlatform.value = resolvedSelection
             saveSelectedPlatform(resolvedSelection)
         }
         PlatformSetup(
-            recorded = recordedPlatforms,
+            enabled = resolvedEnabled,
             selected = resolvedSelection,
         )
     }
@@ -256,6 +283,25 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             portfolio = context.draftReferencePortfolio,
             lookup = lookup,
         )
+        val allTransactionsPortfolio = computePortfolio(
+            transactions = context.transactions,
+            quotes = context.quotes,
+            exchangeRates = repository.exchangeRates.value,
+        )
+        val totalAssetsByPlatform = buildPlatformAssetLabels(
+            transactions = context.transactions,
+            quotes = context.quotes,
+            exchangeRates = repository.exchangeRates.value,
+            displayCurrency = selectedDisplayCurrency,
+            enabledPlatforms = platforms.enabled,
+            summaryPortfolio = allTransactionsPortfolio,
+        )
+        val availableTradePlatforms = buildList {
+            addAll(platforms.enabled)
+            state.upstream.draft.platform
+                .takeIf { current -> current !in platforms.enabled && current.isConfigurable }
+                ?.let(::add)
+        }
         LedgerUiState(
             summary = buildSummary(
                 portfolio = context.portfolio,
@@ -293,19 +339,36 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     ManagedPlatformUiModel(
                         platform = null,
                         label = "汇总",
+                        totalAssetsLabel = totalAssetsByPlatform[null] ?: formatDisplayAmount(
+                            allTransactionsPortfolio.totalAssetsCny,
+                            selectedDisplayCurrency,
+                            repository.exchangeRates.value,
+                        ),
                         isSelected = platforms.selected == null,
                     ),
                 )
-                platforms.recorded.forEach { platform ->
+                platforms.enabled.forEach { platform ->
                     add(
                         ManagedPlatformUiModel(
                             platform = platform,
                             label = platform.label,
+                            totalAssetsLabel = totalAssetsByPlatform[platform]
+                                ?: formatDisplayAmount(0.0, selectedDisplayCurrency, repository.exchangeRates.value),
                             isSelected = platform == platforms.selected,
                         ),
                     )
                 }
             },
+            platformVisibilityOptions = BrokerPlatform.configurableEntries.map { platform ->
+                PlatformVisibilityUiModel(
+                    platform = platform,
+                    label = platform.label,
+                    totalAssetsLabel = totalAssetsByPlatform[platform]
+                        ?: formatDisplayAmount(0.0, selectedDisplayCurrency, repository.exchangeRates.value),
+                    isEnabled = platform in platforms.enabled,
+                )
+            },
+            availableTradePlatforms = availableTradePlatforms,
             selectedPlatform = platforms.selected,
             draft = state.upstream.draft,
             symbolLookup = lookup,
@@ -317,8 +380,27 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         )
     }.combine(symbolSuggestions) { state, suggestions ->
         state.copy(symbolSuggestions = suggestions)
+    }.combine(platformFeePlanSelections) { state, selections ->
+        state.copy(
+            selectedPlatformFeePlan = buildPlatformFeePlanUiModel(
+                selectedPlatform = state.selectedPlatform,
+                selections = selections,
+            ),
+        )
     }.combine(backupStatusMessage) { state, message ->
         state.copy(backupStatusMessage = message)
+    }.combine(hsbcImportDraftText) { state, value ->
+        state.copy(hsbcImportDraftText = value)
+    }.combine(hsbcImportStatusMessage) { state, message ->
+        state.copy(hsbcImportStatusMessage = message)
+    }.combine(zhuoruiEmailSyncConfig) { state, config ->
+        state.copy(zhuoruiEmailSyncConfig = config)
+    }.combine(zhuoruiEmailManualSyncOptions) { state, options ->
+        state.copy(zhuoruiEmailManualSyncOptions = options)
+    }.combine(zhuoruiEmailAutoImportEnabled) { state, enabled ->
+        state.copy(zhuoruiEmailAutoImportEnabled = enabled)
+    }.combine(zhuoruiEmailSyncStatusMessage) { state, message ->
+        state.copy(zhuoruiEmailSyncStatusMessage = message)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -326,6 +408,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     init {
+        reconcileZhuoruiEmailAutoSync()
+        viewModelScope.launch {
+            repository.transactions.collect { transactions ->
+                transactionSnapshot.value = transactions
+            }
+        }
         viewModelScope.launch {
             repository.purgeLegacySeedData()
             repository.seedIfEmpty()
@@ -341,7 +429,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openTradeEntry(type: TradeType) {
-        val activePlatform = selectedPlatform.value ?: draft.value.platform
+        val activePlatform = selectedPlatform.value
+            ?.takeIf { it in enabledPlatforms.value }
+            ?: draft.value.platform.takeIf { it in enabledPlatforms.value }
+            ?: enabledPlatforms.value.firstOrNull()
+            ?: SampleData.tradeForm(type).platform
         symbolLookupJob?.cancel()
         editingTrade.value = null
         symbolLookup.value = SymbolLookupUiModel()
@@ -390,6 +482,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 transactionId = transaction.id,
                 tradeTime = transaction.tradeTime,
                 createdAt = transaction.createdAt,
+                sourceChannel = transaction.sourceChannel,
+                externalReference = transaction.externalReference,
             )
             symbolLookup.value = resolvedLookup
             symbolSuggestions.value = emptyList()
@@ -409,6 +503,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     commissionLabel = formatEditableAmount(transaction.commission),
                     taxLabel = formatEditableAmount(transaction.tax),
                     note = transaction.note,
+                    feeEstimateStatus = FeeEstimateStatus.MANUAL_OVERRIDE,
                 ),
                 lookup = resolvedLookup,
                 positions = referencePortfolio.positions,
@@ -492,12 +587,164 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         backupStatusMessage.value = null
     }
 
+    override fun onCleared() {
+        super.onCleared()
+    }
+
+    fun setPlatformVisibility(platform: BrokerPlatform, enabled: Boolean) {
+        if (!platform.isConfigurable) return
+        val current = enabledPlatforms.value.toMutableList()
+        if (enabled) {
+            if (platform !in current) {
+                current += platform
+            }
+        } else {
+            if (platform !in current || current.size <= 1) return
+            current -= platform
+        }
+        val ordered = BrokerPlatform.configurableEntries.filter { it in current }
+        enabledPlatforms.value = ordered
+        saveEnabledPlatforms(ordered)
+        if (selectedPlatform.value !in ordered) {
+            selectedPlatform.value = null
+            saveSelectedPlatform(null)
+        }
+        if (editingTrade.value == null && draft.value.platform !in ordered) {
+            val fallbackPlatform = ordered.firstOrNull() ?: return
+            draft.value = applyDraftRules(draft.value.copy(platform = fallbackPlatform))
+        }
+    }
+
     fun selectDisplayCurrency(currency: DisplayCurrency) {
         saveDisplayCurrency(currency)
         displayCurrency.value = currency
         if (!draft.value.selectedType.isSecurityTrade) {
             draft.update { current ->
                 applyDraftRules(current.copy(market = cashMarketFor(currency)))
+            }
+        }
+    }
+
+    fun updateHsbcImportDraftText(value: String) {
+        hsbcImportDraftText.value = value
+    }
+
+    fun importHsbcNotificationText() {
+        val rawText = hsbcImportDraftText.value.trim()
+        if (rawText.isBlank()) {
+            hsbcImportStatusMessage.value = "请先粘贴汇丰短信文本"
+            return
+        }
+        viewModelScope.launch {
+            hsbcImportStatusMessage.value = "正在解析短信文本，请稍候..."
+            runCatching {
+                repository.importHsbcNotificationText(rawText)
+            }.onSuccess { result ->
+                hsbcImportStatusMessage.value = result.message
+                if (result.outcome == com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED) {
+                    hsbcImportDraftText.value = ""
+                    repository.refreshQuotesForPortfolio(repository.transactions.first())
+                }
+            }.onFailure { error ->
+                hsbcImportStatusMessage.value = "短信解析失败：${error.message ?: "请稍后重试"}"
+            }
+        }
+    }
+
+    fun updateZhuoruiEmailSyncConfig(transform: (ZhuoruiEmailSyncConfig) -> ZhuoruiEmailSyncConfig) {
+        zhuoruiEmailSyncConfig.update(transform)
+    }
+
+    fun saveZhuoruiEmailSyncConfig() {
+        val config = zhuoruiEmailSyncConfig.value
+        val validationMessage = config.validationMessage()
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_HOST, config.imapHost)
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_PORT, config.imapPort)
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, config.account)
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, config.password)
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, config.folder)
+            .apply()
+        val message = validationMessage?.let { "邮箱配置已保存，但$it" } ?: "邮箱配置已保存"
+        zhuoruiEmailSyncStatusMessage.value = message
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
+            .apply()
+        reconcileZhuoruiEmailAutoSync()
+    }
+
+    fun updateZhuoruiEmailManualSyncOptions(transform: (ZhuoruiEmailManualSyncOptions) -> ZhuoruiEmailManualSyncOptions) {
+        zhuoruiEmailManualSyncOptions.update(transform)
+    }
+
+    fun setZhuoruiEmailAutoImportEnabled(enabled: Boolean) {
+        val config = zhuoruiEmailSyncConfig.value
+        val validationMessage = config.validationMessage()
+        if (enabled && validationMessage != null) {
+            val message = "请先完成邮箱配置并保存，再开启自动同步：$validationMessage"
+            zhuoruiEmailSyncStatusMessage.value = message
+            preferences.edit()
+                .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
+                .apply()
+            return
+        }
+        preferences.edit()
+            .putBoolean(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_AUTO_IMPORT_ENABLED, enabled)
+            .apply()
+        zhuoruiEmailAutoImportEnabled.value = enabled
+        reconcileZhuoruiEmailAutoSync()
+        val message = if (enabled) "已开启邮箱自动同步" else "已关闭邮箱自动同步"
+        zhuoruiEmailSyncStatusMessage.value = message
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
+            .apply()
+    }
+
+    fun syncZhuoruiMailboxNow() {
+        val config = zhuoruiEmailSyncConfig.value
+        val configValidationMessage = config.validationMessage()
+        if (configValidationMessage != null) {
+            zhuoruiEmailSyncStatusMessage.value = configValidationMessage
+            return
+        }
+        val manualOptions = zhuoruiEmailManualSyncOptions.value
+        val optionsValidationMessage = manualOptions.validationMessage()
+        if (optionsValidationMessage != null) {
+            zhuoruiEmailSyncStatusMessage.value = optionsValidationMessage
+            return
+        }
+        viewModelScope.launch {
+            zhuoruiEmailSyncStatusMessage.value = "正在同步邮箱，请稍候..."
+            runCatching {
+                repository.syncZhuoruiMailbox(
+                    config = config,
+                    lastSyncAtMillis = loadZhuoruiEmailLastSyncAt(),
+                    fetchCount = manualOptions.resolvedFetchCount(),
+                    earliestReceivedAtMillis = manualOptions.resolvedEarliestReceivedAtMillis(),
+                )
+            }.onSuccess { result ->
+                val syncAt = result.latestSeenMessageAt ?: System.currentTimeMillis()
+                preferences.edit()
+                    .putLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, syncAt)
+                    .apply()
+                val message = when {
+                    result.importedCount > 0 ->
+                        "同步完成：新增 ${result.importedCount} 条，重复 ${result.duplicateCount} 条"
+                    result.duplicateCount > 0 ->
+                        "同步完成：没有新增记录，重复 ${result.duplicateCount} 条"
+                    else ->
+                        "同步完成：未发现可导入的新邮件"
+                }
+                zhuoruiEmailSyncStatusMessage.value = message
+                preferences.edit()
+                    .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
+                    .apply()
+            }.onFailure { error ->
+                val message = "邮箱同步失败：${error.message ?: "请检查 IMAP 配置"}"
+                zhuoruiEmailSyncStatusMessage.value = message
+                preferences.edit()
+                    .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
+                    .apply()
             }
         }
     }
@@ -510,8 +757,28 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectTradePlatform(platform: BrokerPlatform) {
+        if (platform !in enabledPlatforms.value) return
         draft.update { current ->
             applyDraftRules(current.copy(platform = platform))
+        }
+    }
+
+    fun selectPlatformFeePlan(planId: String) {
+        val platform = selectedPlatform.value ?: return
+        val resolvedPlanId = TradeFeeEstimator.resolvePlanId(platform, planId)
+        if (resolvedPlanId.isBlank()) return
+        platformFeePlanSelections.update { current ->
+            current.toMutableMap().apply {
+                put(platform, resolvedPlanId)
+            }
+        }
+        savePlatformFeePlanSelections(platformFeePlanSelections.value)
+        draft.update { current ->
+            if (current.platform == platform) {
+                applyDraftRules(current)
+            } else {
+                current
+            }
         }
     }
 
@@ -547,6 +814,38 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun updateDraft(transform: (TradeFormState) -> TradeFormState) {
         draft.update { current ->
             applyDraftRules(transform(current))
+        }
+    }
+
+    fun updateTradeCommission(value: String) {
+        draft.update { current ->
+            applyDraftRules(
+                current.copy(
+                    commissionLabel = value,
+                    feeEstimateStatus = FeeEstimateStatus.MANUAL_OVERRIDE,
+                ),
+            )
+        }
+    }
+
+    fun updateTradeTax(value: String) {
+        draft.update { current ->
+            applyDraftRules(
+                current.copy(
+                    taxLabel = value,
+                    feeEstimateStatus = FeeEstimateStatus.MANUAL_OVERRIDE,
+                ),
+            )
+        }
+    }
+
+    fun recalculateTradeFees() {
+        draft.update { current ->
+            applyDraftRules(
+                current.copy(
+                    feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+                ),
+            )
         }
     }
 
@@ -626,7 +925,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         )
         val currentLookup = symbolLookup.value
         val validationMessage = validateTradeDraft(currentDraft, portfolioState, currentLookup)
-        if (validationMessage != null) return false
+        if (validationMessage != null) {
+            return false
+        }
 
         val resolved = if (currentDraft.selectedType.isSecurityTrade) {
             resolveSecurity(currentDraft, portfolioState.positions, currentLookup) ?: return false
@@ -640,6 +941,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val input = TradeDraftInput(
             tradeType = currentDraft.selectedType,
             platform = currentDraft.platform,
+            sourceChannel = currentEditingTrade?.sourceChannel?.let { sourceName ->
+                runCatching { ImportSourceChannel.valueOf(sourceName) }.getOrNull()
+            },
+            externalReference = currentEditingTrade?.externalReference,
             market = resolved.market,
             symbol = resolved.symbol,
             name = resolved.name,
@@ -670,13 +975,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 preferredPlatform = currentDraft.platform,
             ),
         )
-        refreshQuotes(
-            trigger = if (currentEditingTrade == null) {
-                RefreshTrigger.TRADE_CREATE
-            } else {
-                RefreshTrigger.TRADE_UPDATE
-            },
-        )
+        viewModelScope.launch {
+            refreshQuotes(
+                trigger = if (currentEditingTrade == null) {
+                    RefreshTrigger.TRADE_CREATE
+                } else {
+                    RefreshTrigger.TRADE_UPDATE
+                },
+            )
+        }
         return true
     }
 
@@ -684,17 +991,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             runCatching {
                 val recordedPlatforms = repository.transactions.first()
-                    .mapNotNull { transaction ->
-                        BrokerPlatform.entries.firstOrNull { platform ->
-                            platform.name == transaction.platform && platform.isConfigurable
-                        }
-                    }
-                    .distinctBy { it.name }
                 getApplication<Application>().contentResolver.openOutputStream(uri)?.use { outputStream ->
                     repository.exportBackup(
                         outputStream = outputStream,
                         displayCurrencyName = displayCurrency.value.name,
-                        enabledPlatforms = recordedPlatforms,
+                        enabledPlatforms = enabledPlatforms.value,
                         selectedPlatform = selectedPlatform.value,
                     )
                 } ?: error("无法创建备份文件")
@@ -951,16 +1252,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (quantity <= 0) return "成交数量必须大于 0"
 
         when (draft.selectedType) {
-            TradeType.BUY -> {
-                val requiredCash = convertToCny(
-                    price * quantity + parseDecimal(draft.commissionLabel) + parseDecimal(draft.taxLabel),
-                    resolved.market,
-                    repository.exchangeRates.value,
-                )
-                if (portfolio.cashBalanceCny + EPSILON < requiredCash) {
-                    return "可用现金不足，请先入金"
-                }
-            }
+            TradeType.BUY -> Unit
 
             TradeType.SELL -> {
                 val position = portfolio.positions[positionKey(resolved.symbol, resolved.market)]
@@ -980,7 +1272,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         lookup: SymbolLookupUiModel = symbolLookup.value,
         positions: Map<String, PositionComputation> = draftReferencePortfolio.value.positions,
     ): TradeFormState {
-        val normalized = if (draft.selectedType.isSecurityTrade) {
+        val normalizedBase = if (draft.selectedType.isSecurityTrade) {
             draft.copy(
                 market = if (draft.market == Market.CASH) Market.A_SHARE else draft.market,
             )
@@ -991,19 +1283,127 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 quantityLabel = "1",
                 commissionLabel = "0.00",
                 taxLabel = "0.00",
+                feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+                feeEstimateSummary = null,
+                feeEstimateDetail = null,
+                canAutoEstimateFees = false,
             )
         }
 
-        if (normalized.selectedType != TradeType.SELL) return normalized
+        val normalized = if (normalizedBase.selectedType == TradeType.SELL) {
+            val requestedQuantity = parseQuantity(normalizedBase.quantityLabel)
+            if (requestedQuantity <= 0) {
+                normalizedBase
+            } else {
+                val resolved = resolveSecurity(normalizedBase, positions, lookup)
+                val availableQuantity = resolved
+                    ?.let { positions[positionKey(it.symbol, it.market)]?.quantity }
+                    ?: 0
+                if (resolved == null || requestedQuantity <= availableQuantity || availableQuantity <= 0) {
+                    normalizedBase
+                } else {
+                    normalizedBase.copy(quantityLabel = availableQuantity.toString())
+                }
+            }
+        } else {
+            normalizedBase
+        }
 
-        val requestedQuantity = parseQuantity(normalized.quantityLabel)
-        if (requestedQuantity <= 0) return normalized
+        return applyFeeEstimateRules(normalized)
+    }
 
-        val resolved = resolveSecurity(normalized, positions, lookup) ?: return normalized
-        val availableQuantity = positions[positionKey(resolved.symbol, resolved.market)]?.quantity ?: return normalized
-        if (requestedQuantity <= availableQuantity) return normalized
+    private fun applyFeeEstimateRules(draft: TradeFormState): TradeFormState {
+        if (!draft.selectedType.isSecurityTrade) return draft
 
-        return normalized.copy(quantityLabel = availableQuantity.toString())
+        val selectedPlanId = resolveSelectedFeePlanId(draft.platform)
+        val profile = TradeFeeEstimator.profile(draft.platform, draft.market, selectedPlanId)
+        val price = parseDecimal(draft.priceLabel)
+        val quantity = parseQuantity(draft.quantityLabel)
+        val manualOverride = draft.feeEstimateStatus == FeeEstimateStatus.MANUAL_OVERRIDE
+
+        if (profile.coverage == com.recoder.stockledger.data.FeeEstimateCoverage.UNSUPPORTED) {
+            return if (manualOverride) {
+                draft.copy(
+                    feeEstimateSummary = "当前费用为手动输入。${profile.note}",
+                    feeEstimateDetail = profile.note,
+                    canAutoEstimateFees = false,
+                )
+            } else {
+                draft.copy(
+                    commissionLabel = "0.00",
+                    taxLabel = "0.00",
+                    feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+                    feeEstimateSummary = profile.note,
+                    feeEstimateDetail = null,
+                    canAutoEstimateFees = false,
+                )
+            }
+        }
+
+        if (price <= 0.0 || quantity <= 0) {
+            val pendingMessage = "补全成交价格和数量后，将按公开费率自动估算。"
+            return if (manualOverride) {
+                draft.copy(
+                    feeEstimateSummary = "当前费用为手动输入。$pendingMessage",
+                    feeEstimateDetail = profile.note,
+                    canAutoEstimateFees = true,
+                )
+            } else {
+                draft.copy(
+                    commissionLabel = "0.00",
+                    taxLabel = "0.00",
+                    feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+                    feeEstimateSummary = pendingMessage,
+                    feeEstimateDetail = profile.note,
+                    canAutoEstimateFees = true,
+                )
+            }
+        }
+
+        val estimate = TradeFeeEstimator.estimate(
+            platform = draft.platform,
+            market = draft.market,
+            tradeType = draft.selectedType,
+            price = price,
+            quantity = quantity,
+            planId = selectedPlanId,
+            context = buildTradeFeeEstimateContext(draft),
+        )
+        if (!estimate.canAutoApply) {
+            return if (manualOverride) {
+                draft.copy(
+                    feeEstimateSummary = "当前费用为手动输入。${estimate.summary}",
+                    feeEstimateDetail = estimate.detail,
+                    canAutoEstimateFees = false,
+                )
+            } else {
+                draft.copy(
+                    commissionLabel = "0.00",
+                    taxLabel = "0.00",
+                    feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+                    feeEstimateSummary = estimate.summary,
+                    feeEstimateDetail = estimate.detail,
+                    canAutoEstimateFees = false,
+                )
+            }
+        }
+
+        return if (manualOverride) {
+            draft.copy(
+                feeEstimateSummary = "当前费用为手动输入。${estimate.summary}",
+                feeEstimateDetail = estimate.detail,
+                canAutoEstimateFees = true,
+            )
+        } else {
+            draft.copy(
+                commissionLabel = formatEditableAmount(estimate.commission),
+                taxLabel = formatEditableAmount(estimate.tax),
+                feeEstimateStatus = FeeEstimateStatus.AUTO_APPLIED,
+                feeEstimateSummary = estimate.summary,
+                feeEstimateDetail = estimate.detail,
+                canAutoEstimateFees = true,
+            )
+        }
     }
 
     private fun resolveSecurity(
@@ -1209,6 +1609,27 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    private fun buildPlatformAssetLabels(
+        transactions: List<TransactionEntity>,
+        quotes: List<QuoteSnapshotEntity>,
+        exchangeRates: ExchangeRates,
+        displayCurrency: DisplayCurrency,
+        enabledPlatforms: List<BrokerPlatform>,
+        summaryPortfolio: PortfolioComputation,
+    ): Map<BrokerPlatform?, String> {
+        val labels = linkedMapOf<BrokerPlatform?, String>()
+        labels[null] = "总资产 ${formatDisplayAmount(summaryPortfolio.totalAssetsCny, displayCurrency, exchangeRates)}"
+        enabledPlatforms.forEach { platform ->
+            val portfolio = computePortfolio(
+                transactions = filterTransactionsByPlatform(transactions, platform),
+                quotes = quotes,
+                exchangeRates = exchangeRates,
+            )
+            labels[platform] = "总资产 ${formatDisplayAmount(portfolio.totalAssetsCny, displayCurrency, exchangeRates)}"
+        }
+        return labels
+    }
+
     private fun buildSellCandidates(
         positions: Map<String, PositionComputation>,
     ): List<SellCandidateUiModel> = positions.values
@@ -1269,17 +1690,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                             id = transaction.id,
                             tradeType = tradeType,
                             stockName = if (tradeType.isSecurityTrade) {
-                                "${transaction.name} ${transaction.symbol}"
+                                "${transaction.symbol} ${transaction.name}"
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
-                            stockMeta = if (tradeType.isSecurityTrade) {
-                                "${market.label} · 成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
+                            primaryMeta = if (tradeType.isSecurityTrade) {
+                                "${platform.label} · ${market.label}"
                             } else {
-                                transaction.note.ifBlank { "${platform.label} 现金账户流水" }
+                                platform.label
+                            },
+                            secondaryMeta = if (tradeType.isSecurityTrade) {
+                                "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
+                            } else {
+                                transaction.note.ifBlank { "现金账户流水" }
                             },
                             amountLabel = formatSignedMarketAmount(cashFlow, market),
-                            timeLabel = "${tradeType.label} ${transaction.tradeTime}",
+                            timeLabel = transaction.tradeTime,
                             feeLabel = if (tradeType.isSecurityTrade) {
                                 "费用 ${formatMarketAmount(transaction.commission + transaction.tax, market)}"
                             } else {
@@ -1896,6 +2322,90 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         LocalDate.parse(value)
     }.getOrNull()
 
+    private fun parseTradeTimeOrNull(value: String): LocalTime? = runCatching {
+        LocalTime.parse(value)
+    }.getOrNull()
+
+    private fun resolveSelectedFeePlanId(platform: BrokerPlatform): String =
+        TradeFeeEstimator.resolvePlanId(platform, platformFeePlanSelections.value[platform])
+
+    private fun buildPlatformFeePlanUiModel(
+        selectedPlatform: BrokerPlatform?,
+        selections: Map<BrokerPlatform, String>,
+    ): PlatformFeePlanUiModel? {
+        val platform = selectedPlatform ?: return null
+        val options = TradeFeeEstimator.availablePlans(platform)
+        if (options.isEmpty()) return null
+        val selectedPlanId = TradeFeeEstimator.resolvePlanId(platform, selections[platform])
+        val selectedOption = options.firstOrNull { it.id == selectedPlanId } ?: options.first()
+        return PlatformFeePlanUiModel(
+            platform = platform,
+            selectedPlanId = selectedOption.id,
+            selectedPlanLabel = selectedOption.label,
+            selectedPlanDescription = selectedOption.description,
+            options = options.map { option ->
+                TradeFeePlanOptionUiModel(
+                    id = option.id,
+                    label = option.label,
+                    description = option.description,
+                    isSelected = option.id == selectedOption.id,
+                )
+            },
+        )
+    }
+
+    private fun buildTradeFeeEstimateContext(draft: TradeFormState): TradeFeeEstimateContext {
+        return if (draft.platform == BrokerPlatform.HSBC) {
+            TradeFeeEstimateContext(
+                monthlyTurnoverHkdBeforeTrade = calculateHsbcMonthlyTurnoverHkdBeforeTrade(draft),
+            )
+        } else {
+            TradeFeeEstimateContext()
+        }
+    }
+
+    private fun calculateHsbcMonthlyTurnoverHkdBeforeTrade(draft: TradeFormState): Double {
+        val draftDate = parseTradeDateOrNull(draft.tradeDate) ?: return 0.0
+        val editingSession = editingTrade.value
+        val draftTime = editingSession?.tradeTime
+            ?.let(::parseTradeTimeOrNull)
+            ?: if (draftDate == LocalDate.now()) LocalTime.now() else LocalTime.MAX
+        return transactionSnapshot.value
+            .asSequence()
+            .filterNot { transaction -> transaction.id == editingSession?.transactionId }
+            .mapNotNull { transaction ->
+                val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
+                if (platform != BrokerPlatform.HSBC) return@mapNotNull null
+                val tradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull()
+                    ?: return@mapNotNull null
+                if (!tradeType.isSecurityTrade) return@mapNotNull null
+                val transactionDate = parseTradeDateOrNull(transaction.tradeDate) ?: return@mapNotNull null
+                if (transactionDate.year != draftDate.year || transactionDate.month != draftDate.month) {
+                    return@mapNotNull null
+                }
+                val transactionTime = parseTradeTimeOrNull(transaction.tradeTime) ?: LocalTime.MAX
+                val isBeforeDraft = transactionDate.isBefore(draftDate) ||
+                    (transactionDate == draftDate && transactionTime <= draftTime)
+                if (!isBeforeDraft) return@mapNotNull null
+                val market = runCatching { Market.valueOf(transaction.market) }.getOrNull()
+                    ?: return@mapNotNull null
+                amountToHkdEquivalent(transaction.price * transaction.quantity, market)
+            }
+            .sum()
+    }
+
+    private fun amountToHkdEquivalent(amount: Double, market: Market): Double {
+        if (market == Market.HONG_KONG) return amount
+        val exchangeRates = repository.exchangeRates.value
+        val amountCny = convertToCny(amount, market, exchangeRates)
+        val hkdRateToCny = exchangeRates.rateToCny(Market.HONG_KONG)
+        return if (hkdRateToCny <= EPSILON) {
+            amount
+        } else {
+            amountCny / hkdRateToCny
+        }
+    }
+
     private fun formatEditableAmount(value: Double): String =
         BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
 
@@ -1982,7 +2492,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 saveDisplayCurrency(currency)
                 displayCurrency.value = currency
             }
+        val restoredEnabledPlatforms = importedBackup.enabledPlatforms.ifEmpty {
+            BrokerPlatform.configurableEntries
+        }
+        enabledPlatforms.value = restoredEnabledPlatforms
+        saveEnabledPlatforms(restoredEnabledPlatforms)
         val restoredSelectedPlatform = importedBackup.selectedPlatform
+            ?.takeIf { it in restoredEnabledPlatforms }
         selectedPlatform.value = restoredSelectedPlatform
         saveSelectedPlatform(restoredSelectedPlatform)
         tradeFilter.value = TransactionFilter.ALL
@@ -1995,7 +2511,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         draft.value = applyDraftRules(
             resetDraftForType(
                 type = TradeType.BUY,
-                preferredPlatform = restoredSelectedPlatform ?: SampleData.tradeForm(TradeType.BUY).platform,
+                preferredPlatform = restoredSelectedPlatform
+                    ?: restoredEnabledPlatforms.firstOrNull()
+                    ?: SampleData.tradeForm(TradeType.BUY).platform,
             ),
         )
         backupStatusMessage.value = "已导入 ${importedBackup.transactionCount} 条交易记录"
@@ -2032,6 +2550,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val transactionId: Long,
         val tradeTime: String,
         val createdAt: Long,
+        val sourceChannel: String?,
+        val externalReference: String?,
     )
 
     private data class ResolvedSecurity(
@@ -2098,11 +2618,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private data class PlatformSetup(
-        val recorded: List<BrokerPlatform>,
+        val enabled: List<BrokerPlatform>,
         val selected: BrokerPlatform?,
     )
 
-    private data class RefreshMeta(
+private data class RefreshMeta(
         val refresh: RefreshState,
         val refreshedAt: Long,
         val note: String,
@@ -2125,25 +2645,112 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private fun loadSavedDisplayCurrency(): DisplayCurrency {
-        val savedName = preferences.getString(KEY_DISPLAY_CURRENCY, DisplayCurrency.CNY.name)
+        val savedName = preferences.getString(
+            StockLedgerPreferences.KEY_DISPLAY_CURRENCY,
+            DisplayCurrency.CNY.name,
+        )
         return DisplayCurrency.entries.firstOrNull { it.name == savedName } ?: DisplayCurrency.CNY
     }
 
     private fun saveDisplayCurrency(currency: DisplayCurrency) {
         preferences.edit()
-            .putString(KEY_DISPLAY_CURRENCY, currency.name)
+            .putString(StockLedgerPreferences.KEY_DISPLAY_CURRENCY, currency.name)
             .apply()
     }
 
     private fun loadSavedSelectedPlatform(): BrokerPlatform? {
-        val savedName = preferences.getString(KEY_SELECTED_PLATFORM, null).orEmpty()
+        val savedName = preferences.getString(StockLedgerPreferences.KEY_SELECTED_PLATFORM, null).orEmpty()
         return BrokerPlatform.entries.firstOrNull { it.name == savedName && it.isConfigurable }
+    }
+
+    private fun loadEnabledPlatforms(): List<BrokerPlatform> {
+        val saved = preferences.getStringSet(StockLedgerPreferences.KEY_ENABLED_PLATFORMS, null)
+            ?.mapNotNull { name -> BrokerPlatform.entries.firstOrNull { it.name == name && it.isConfigurable } }
+            .orEmpty()
+        return if (saved.isEmpty()) {
+            BrokerPlatform.configurableEntries
+        } else {
+            BrokerPlatform.configurableEntries.filter { it in saved }
+        }
+    }
+
+    private fun loadPlatformFeePlanSelections(): Map<BrokerPlatform, String> {
+        val serialized = preferences.getString(
+            StockLedgerPreferences.KEY_PLATFORM_FEE_PLAN_SELECTIONS,
+            null,
+        ).orEmpty()
+        if (serialized.isBlank()) return emptyMap()
+        return serialized.split("|")
+            .mapNotNull { entry ->
+                val separatorIndex = entry.indexOf('=')
+                if (separatorIndex <= 0 || separatorIndex >= entry.lastIndex) {
+                    return@mapNotNull null
+                }
+                val platform = BrokerPlatform.entries.firstOrNull { it.name == entry.substring(0, separatorIndex) }
+                    ?: return@mapNotNull null
+                val planId = entry.substring(separatorIndex + 1)
+                val resolvedPlanId = TradeFeeEstimator.resolvePlanId(platform, planId)
+                if (resolvedPlanId.isBlank()) {
+                    null
+                } else {
+                    platform to resolvedPlanId
+                }
+            }
+            .toMap()
+    }
+
+    private fun saveEnabledPlatforms(platforms: List<BrokerPlatform>) {
+        preferences.edit()
+            .putStringSet(
+                StockLedgerPreferences.KEY_ENABLED_PLATFORMS,
+                platforms.map { it.name }.toSet(),
+            )
+            .apply()
+    }
+
+    private fun savePlatformFeePlanSelections(selections: Map<BrokerPlatform, String>) {
+        val serialized = selections.entries
+            .sortedBy { it.key.name }
+            .joinToString("|") { (platform, planId) -> "${platform.name}=$planId" }
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_PLATFORM_FEE_PLAN_SELECTIONS, serialized.ifBlank { null })
+            .apply()
     }
 
     private fun saveSelectedPlatform(platform: BrokerPlatform?) {
         preferences.edit()
-            .putString(KEY_SELECTED_PLATFORM, platform?.name)
+            .putString(StockLedgerPreferences.KEY_SELECTED_PLATFORM, platform?.name)
             .apply()
+    }
+
+    private fun loadZhuoruiEmailSyncConfig(): ZhuoruiEmailSyncConfig = ZhuoruiEmailSyncConfig(
+        imapHost = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_HOST, "").orEmpty(),
+        imapPort = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_PORT, "993").orEmpty(),
+        account = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, "").orEmpty(),
+        password = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, "").orEmpty(),
+        folder = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, "INBOX").orEmpty().ifBlank { "INBOX" },
+    )
+
+    private fun loadZhuoruiEmailAutoImportEnabled(): Boolean {
+        return preferences.getBoolean(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_AUTO_IMPORT_ENABLED, false)
+    }
+
+    private fun loadZhuoruiEmailSyncStatusMessage(): String? {
+        return preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, null)
+    }
+
+    private fun loadZhuoruiEmailLastSyncAt(): Long {
+        return preferences.getLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, 0L)
+    }
+
+    private fun reconcileZhuoruiEmailAutoSync() {
+        val enabled = zhuoruiEmailAutoImportEnabled.value
+        val config = zhuoruiEmailSyncConfig.value
+        if (enabled && config.isComplete()) {
+            ZhuoruiEmailSyncWorker.schedule(getApplication(), config)
+        } else {
+            ZhuoruiEmailSyncWorker.cancel(getApplication())
+        }
     }
 
     private companion object {
@@ -2152,9 +2759,6 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         const val CASH_ACCOUNT_SYMBOL = "CASH"
         const val CASH_ACCOUNT_NAME = "资金账户"
         const val EPSILON = 1e-6
-        const val PREFERENCES_NAME = "stock_ledger_preferences"
-        const val KEY_DISPLAY_CURRENCY = "display_currency"
-        const val KEY_SELECTED_PLATFORM = "selected_platform"
 
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val monthDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM/dd")

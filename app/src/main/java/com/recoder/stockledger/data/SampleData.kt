@@ -14,5 +14,9 @@ object SampleData {
         commissionLabel = "0.00",
         taxLabel = "0.00",
         note = "",
+        feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+        feeEstimateSummary = null,
+        feeEstimateDetail = null,
+        canAutoEstimateFees = false,
     )
 }

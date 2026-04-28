@@ -13,18 +13,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,6 +46,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.ManagedPlatformUiModel
+import com.recoder.stockledger.data.PlatformVisibilityUiModel
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.BorderSubtle
@@ -88,10 +97,12 @@ fun StockLedgerApp(
             ) {
                 PlatformDrawerContent(
                     options = uiState.managedPlatforms,
+                    visibilityOptions = uiState.platformVisibilityOptions,
                     onSelect = { platform ->
                         ledgerViewModel.selectGlobalPlatform(platform)
                         coroutineScope.launch { drawerState.close() }
                     },
+                    onPlatformVisibilityChange = ledgerViewModel::setPlatformVisibility,
                 )
             }
         },
@@ -171,6 +182,26 @@ fun StockLedgerApp(
                             importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                         },
                         backupStatusMessage = uiState.backupStatusMessage,
+                        selectedPlatformFeePlan = uiState.selectedPlatformFeePlan,
+                        onPlatformFeePlanSelected = ledgerViewModel::selectPlatformFeePlan,
+                        hsbcImportDraftText = uiState.hsbcImportDraftText,
+                        hsbcImportStatusMessage = uiState.hsbcImportStatusMessage,
+                        onHsbcImportDraftTextChange = ledgerViewModel::updateHsbcImportDraftText,
+                        onImportHsbcNotificationText = ledgerViewModel::importHsbcNotificationText,
+                        zhuoruiEmailSyncConfig = uiState.zhuoruiEmailSyncConfig,
+                        zhuoruiEmailManualSyncOptions = uiState.zhuoruiEmailManualSyncOptions,
+                        zhuoruiEmailAutoImportEnabled = uiState.zhuoruiEmailAutoImportEnabled,
+                        zhuoruiEmailSyncStatusMessage = uiState.zhuoruiEmailSyncStatusMessage,
+                        onZhuoruiEmailSyncConfigChange = { config ->
+                            ledgerViewModel.updateZhuoruiEmailSyncConfig { config }
+                        },
+                        onZhuoruiEmailManualSyncOptionsChange = { options ->
+                            ledgerViewModel.updateZhuoruiEmailManualSyncOptions { options }
+                        },
+                        onSaveZhuoruiEmailSyncConfig = ledgerViewModel::saveZhuoruiEmailSyncConfig,
+                        onSyncZhuoruiMailboxNow = ledgerViewModel::syncZhuoruiMailboxNow,
+                        onEnableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(true) },
+                        onDisableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(false) },
                         onDestinationSelected = { destination ->
                             when (destination) {
                                 TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) { launchSingleTop = true }
@@ -225,13 +256,13 @@ fun StockLedgerApp(
                         state = uiState.draft,
                         isEditing = uiState.editingTransactionId != null,
                         displayCurrency = uiState.displayCurrency,
+                        availablePlatforms = uiState.availableTradePlatforms,
                         sellCandidates = uiState.sellCandidates,
                         symbolLookup = uiState.symbolLookup,
                         symbolSuggestions = uiState.symbolSuggestions,
                         canSubmit = uiState.canSubmitTrade,
                         validationMessage = uiState.tradeValidationMessage,
                         onBackClick = { navController.popBackStack() },
-                        onTradeTypeSelected = ledgerViewModel::selectTradeType,
                         onTradePlatformSelected = ledgerViewModel::selectTradePlatform,
                         onSellCandidateSelected = ledgerViewModel::selectSellCandidate,
                         onSymbolSuggestionSelected = ledgerViewModel::selectSymbolSuggestion,
@@ -240,8 +271,9 @@ fun StockLedgerApp(
                         onDateChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(tradeDate = value) } },
                         onPriceChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(priceLabel = value) } },
                         onQuantityChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(quantityLabel = value) } },
-                        onCommissionChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(commissionLabel = value) } },
-                        onTaxChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(taxLabel = value) } },
+                        onCommissionChange = ledgerViewModel::updateTradeCommission,
+                        onTaxChange = ledgerViewModel::updateTradeTax,
+                        onRecalculateFees = ledgerViewModel::recalculateTradeFees,
                         onNoteChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(note = value) } },
                         onDeleteTradeClick = uiState.editingTransactionId?.let { transactionId ->
                             {
@@ -250,11 +282,23 @@ fun StockLedgerApp(
                             }
                         },
                         onSubmit = {
+                            val isEditingSession = uiState.editingTransactionId != null
                             coroutineScope.launch {
                                 if (ledgerViewModel.submitTrade()) {
-                                    navController.navigate(Routes.Transactions) {
-                                        popUpTo(Routes.Holdings)
-                                        launchSingleTop = true
+                                    if (isEditingSession) {
+                                        navController.navigate(Routes.Transactions) {
+                                            popUpTo(Routes.Transactions) {
+                                                inclusive = false
+                                            }
+                                            launchSingleTop = true
+                                        }
+                                    } else {
+                                        navController.navigate(Routes.Transactions) {
+                                            popUpTo(Routes.Operations) {
+                                                inclusive = false
+                                            }
+                                            launchSingleTop = true
+                                        }
                                     }
                                 }
                             }
@@ -294,57 +338,148 @@ private fun DrawerToggleButton(
 @Composable
 private fun PlatformDrawerContent(
     options: List<ManagedPlatformUiModel>,
+    visibilityOptions: List<PlatformVisibilityUiModel>,
     onSelect: (BrokerPlatform?) -> Unit,
+    onPlatformVisibilityChange: (BrokerPlatform, Boolean) -> Unit,
 ) {
+    var showVisibilitySettings by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundPrimary)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("交易平台", color = ForegroundPrimary, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
         Text("侧边栏切换后，持仓、盈亏和流水会同步显示对应平台的数据。", color = ForegroundSecondary, fontSize = 13.sp)
+        if (!showVisibilitySettings) {
+            Text("当前显示", color = ForegroundMuted, fontSize = 12.sp)
 
-        options.forEach { option ->
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        color = if (option.isSelected) SurfaceSecondary else BackgroundPrimary,
-                        shape = RoundedCornerShape(16.dp),
+                        color = SurfaceSecondary,
+                        shape = RoundedCornerShape(22.dp),
                     )
-                    .clickable { onSelect(option.platform) }
-                    .padding(horizontal = 14.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (option.platform != null) {
-                    PlatformLogoBadge(
-                        platform = option.platform,
-                        modifier = Modifier.size(42.dp),
-                    )
-                } else {
-                    Box(
+                options.forEach { option ->
+                    Row(
                         modifier = Modifier
-                            .size(42.dp)
-                            .background(SurfaceSecondary, RoundedCornerShape(12.dp))
-                            .padding(8.dp),
-                        contentAlignment = Alignment.Center,
+                            .fillMaxWidth()
+                            .background(
+                                color = if (option.isSelected) BackgroundPrimary else SurfaceSecondary,
+                                shape = RoundedCornerShape(18.dp),
+                            )
+                            .clickable { onSelect(option.platform) }
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("汇", color = ForegroundPrimary, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        if (option.platform != null) {
+                            PlatformLogoBadge(
+                                platform = option.platform,
+                                modifier = Modifier.size(40.dp),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(BackgroundPrimary, RoundedCornerShape(12.dp))
+                                    .padding(8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("汇", color = ForegroundPrimary, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(option.label, color = ForegroundPrimary, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            Text(option.totalAssetsLabel, color = ForegroundMuted, fontSize = 12.sp)
+                        }
+                        if (option.isSelected) {
+                            Text("当前", color = ForegroundPrimary, fontSize = 12.sp)
+                        }
                     }
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(option.label, color = ForegroundPrimary, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    Text(
-                        text = if (option.platform == null) "查看全部平台汇总数据" else "只看 ${option.label} 的数据",
-                        color = ForegroundMuted,
-                        fontSize = 12.sp,
-                    )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    color = SurfaceSecondary,
+                    shape = RoundedCornerShape(22.dp),
+                ),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showVisibilitySettings = !showVisibilitySettings }
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("显示设置", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    Text("管理侧边栏展示的平台", color = ForegroundSecondary, fontSize = 12.sp)
                 }
-                if (option.isSelected) {
-                    Text("当前", color = ForegroundPrimary, fontSize = 12.sp)
+                Icon(
+                    imageVector = if (showVisibilitySettings) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = if (showVisibilitySettings) "收起显示设置" else "展开显示设置",
+                    tint = ForegroundMuted,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            if (showVisibilitySettings) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("这里只影响侧边栏展示和录入页的平台选项，不会删除任何交易数据。至少保留一个平台。", color = ForegroundSecondary, fontSize = 12.sp)
+
+                    visibilityOptions.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    color = BackgroundPrimary,
+                                    shape = RoundedCornerShape(16.dp),
+                                )
+                                .clickable {
+                                    onPlatformVisibilityChange(option.platform, !option.isEnabled)
+                                }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PlatformLogoBadge(
+                                platform = option.platform,
+                                modifier = Modifier.size(34.dp),
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(option.label, color = ForegroundPrimary, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                Text(option.totalAssetsLabel, color = ForegroundMuted, fontSize = 12.sp)
+                            }
+                            Switch(
+                                checked = option.isEnabled,
+                                onCheckedChange = { enabled ->
+                                    onPlatformVisibilityChange(option.platform, enabled)
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
