@@ -1,9 +1,13 @@
 *.iml
 .gradle/
+.gradle-user/
 local.properties
 /.idea/
 /build/
 /captures/
 /.kotlin/
 **/build/
+app/release/
+backups/phone-prod/
+tmp/
 
