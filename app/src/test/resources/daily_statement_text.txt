@@ -1,0 +1,386 @@
+⽇结单(Daily Statement)
+账⼾信息(Account Information)
+客⼾名称 
+Customer Name
+账⼾号码 
+Account Number
+账⼾性质 
+Account Nature
+国籍 
+Nationality
+地址 
+Address
+账号类别 
+Account Type
+客⼾经理号码 
+AE Code
+季福乐
+762092870766
+INDIVIDUAL
+中国内地
+Flat B,13/F,Harbour Pinnacle,8 Minden Avenue,Tsim Sha Tsui,Kowloon,HK
+MARGIN
+结单概要(Statement Summary)
+币种 
+Currency
+承上⽇结余 
+Opening Balance
+需补按⾦ 
+Margin Call
+USD equivalent
+-247.92
+0.00
+当⽇账⼾结余(Daily Account Balance)
+币种 
+Currency
+资⾦余额 
+Available Balance
+待交收⾦额 
+Unsettled Balance
+账⾯结余 
+Ledger Balance
+持股市值 
+Market Value
+资产总值 
+Total Assets
+参考汇率 
+FX Rate
+参考总等值(HKD) 
+Total Assets(HKD)
+USD
+0.06
+214.79
+214.85
+2,873.53
+3,088.38
+7.7796
+24,026.33
+HKD
+0.00
+0.00
+0.00
+100.02
+100.02
+1.0000
+100.02
+合计Total(HKD)
+0.44
+1,670.98
+1,671.42
+22,454.93
+24,126.35
+24,126.35
+证券组合(Securities Position/Portfolio Holding)
+股票代号及名称 
+Stock Code & Name
+承上⽇结余 
+Opening Qty
+变更股数 
+Movement
+结存股数 
+Closing Qty
+成本价 
+Cost Price
+收市价 
+Closing Price
+持股市值 
+Market Value
+HK-Mutual Fund-HKD
+10008001 ⾼腾微财货币基⾦
+8.6759
+0
+8.6759
+11.5261
+11.5289
+100.02
+合计Total(HKD)
+100.02
+HK-Mutual Fund-USD
+10018002 ⾼腾微⾦美元货币基⾦
+21.9133
+-22.1337
+0.7796
+11.7312
+11.7312
+9.15
+合计Total(USD)
+9.15
+US-NASDAQ-USD
+MU 美光科技
+0
+1
+1
+380.0000
+383.5000
+383.50
+合计Total(USD)
+383.50
+US-NYSE-USD
+EWJ iShares MSCI⽇本ETF
+3
+0
+3
+89.0250
+91.2900
+273.87
+IAU iShares⻩⾦信托ETF
+16
+-4
+12
+90.0600
+95.6300
+1,147.56
+RDW Redwire Corp
+105
+0
+105
+12.8952
+10.0900
+1,059.45
+SLV iShares⽩银信托ETF
+3
+-3
+0
+0.0000
+76.0400
+0.00
+合计Total(USD)
+2,480.88
+当⽇资⾦提存交易(Today Withdrawals/Deposit Of Fund)
+⽇期 
+Date
+编号 
+Ref.
+摘要 
+Particulars
+发⽣⾦额 
+Amount
+USD
+Account(762092870766) - Daily Statement
+2026-02-09
+Zircon Securities (HK) Limited
+Page 1/3
+
+2026-02-09
+48478464
+基⾦现⾦赎回 247.98 USD
+247.98
+合计Total(USD)
+247.98
+成交信息(Transaction Details)
+买卖⽅向 
+Trade Direction
+代码名称 
+Stock Code & Name
+市场/交易所 
+Market/Exchange
+币种 
+Currency
+交易时间 
+Trade Time
+交收⽇期 
+Sett Date
+股数 
+Quantity
+均价 
+Price
+清算⾦额 
+Clearing Balance
+买⼊
+MU 美光科技
+US/NASDAQ
+USD
+2026-02-09 19:04:52
+2026-02-10
+1
+380.0000
+-381.39
+合计Total(USD)
+1
+380.0000
+-381.39
+经纪佣⾦ 0.00， 交收费 0.40， 证监会费 0.00， 交易活动费 0.00， Finra交易活动费 0.00， 平台使⽤费 0.99， 综合会计追踪资⾦费 0.00， 应计利息 0.00
+⼩计 1.39
+沽出
+IAU iShares⻩⾦信托ETF
+US/NYSE
+USD
+2026-02-09 18:48:25
+2026-02-10
+4
+94.0200
+374.68
+合计Total(USD)
+4
+94.0200
+374.68
+经纪佣⾦ 0.00， 交收费 0.40， 证监会费 0.00， 交易活动费 0.00， Finra交易活动费 0.01， 平台使⽤费 0.99， 综合会计追踪资⾦费 0.00， 应计利息 0.00
+⼩计 1.40
+沽出
+SLV iShares⽩银信托ETF
+US/NYSE
+USD
+2026-02-09 17:07:20
+2026-02-10
+3
+74.3000
+221.50
+合计Total(USD)
+3
+74.3000
+221.50
+经纪佣⾦ 0.00， 交收费 0.40， 证监会费 0.00， 交易活动费 0.00， Finra交易活动费 0.01， 平台使⽤费 0.99， 综合会计追踪资⾦费 0.00， 应计利息 0.00
+⼩计 1.40
+基⾦成交信息(Fund Transaction Details)
+交易⽇ 
+Trade Date
+交收⽇ 
+Sett Date
+编号 
+Ref.
+申/赎 
+S/R
+内容 
+Description
+股数 
+Quantity
+委托单价 
+Price
+发⽣⾦额 
+Business Balance
+HK-Mutual Fund-USD
+2026-02-09
+2026-02-09
+48478464
+赎回
+10018002 ⾼腾微⾦美元货币基⾦
+21.1337
+11.7343
+247.98
+佣⾦ Commission
+0.00
+未交收证券交易(Unsettled Securities Transaction)
+交易⽇ 
+Trade Date
+交收⽇ 
+Sett Date
+编号 
+Ref.
+买/沽 
+B/S
+内容 
+Description
+股数 
+Quantity
+成交单价 
+Price
+清算⾦额 
+Clearing Balance
+US-NASDAQ-USD
+2026-02-09
+2026-02-10
+97817856
+买⼊
+MU 美光科技 Micron Technology, Inc.
+1
+380.0000
+-381.39
+US-NYSE-USD
+2026-02-09
+2026-02-10
+87600640
+沽出
+IAU iShares⻩⾦信托ETF iShares Gold Trust
+4
+94.0200
+374.68
+2026-02-09
+2026-02-10
+95428608
+沽出
+SLV iShares⽩银信托ETF iShares Silver Trust
+3
+74.3000
+221.50
+重要提⽰（Important Notes）
+(1)
+The stamp duty imprinted herein has been/will be paid through Hong Kong Exchanges and Clearing Limited. 
+在此单据印上的印花税款额，已经或将会透过⾹港联合交易所有限公司缴付。
+(2)
+In the event of a default committed by a broker, clients are entitled to claim against the Investor Compensation Fund established under the Securities and Futures. Ordinance for pecunia
+ry loss suffered to the extent or HK$500,000 per-investor. 
+假如经纪因为违责⽽引致其该等客⼾遭受⾦钱之损失时，该等客⼾均可根据证券及期货条例授权⽽成⽴之投资者赔偿基⾦索偿。每投资者最⾼索偿港币500,000元。
+Every transaction concluded through and recognized by the Exchange is subject to a transaction levy imposed by the Exchange. The broker is authorized to collect the appropriate trans
+action levy in accordance with the rule prescribed by the Exchange from time to time. A copy of the latest rule on this aspect is available from Exchange on payment of the prescribed c
+harges. 
+(3)
+Account(762092870766) - Daily Statement
+2026-02-09
+Zircon Securities (HK) Limited
+Page 2/3
+
+投资者必须清楚所有经由交易所成交及被承认之证券买卖均须按交易所之规定缴纳征费，交易所已授权其所有交易所参与者代其收取是项费⽤，有关之收费规则可向交易所购阅。
+(4)
+All transactions made for or on behalf of a client shall be subject to the relevant provisions of the constitution, Exchange Rules, regulations, by-laws, custom and usages of the Exchang
+e, the Central Clearing and Settlement System rules and of the Laws of Hong Kong as amended from time to time, and shall be binding on both Exchange Participant and the client. A co
+py of the latest Exchange Rules on these aspects is available from the Exchange or payment of the prescribed charges. 
+所有协助或代表客⼾之买卖均按不时修订之宪法、交易所规则、细则、交易所之习惯及⽤法、中央结算及交易系统规则以及⾹港法律之有关规定所管制，交易所参与者及客⼾同样受制于上述规定，有
+关之收费规则可向交易所购阅。
+(5)
+Late settlement is subject to force-selling securities in clientʼs account without prior notice plus penalty interest. 
+客⼾逾期交收，本公司有权沽出客⼾⼾⼝内⾜够之股票，以应付本⾦及利息。
+(6)
+The above mentioned securities are being held (will upon delivery to us be held) by us for safe custody purpose in accordance with the provisions of the Securities and Futures Ordinan
+ce. 
+根据证券及期货（客⼾证券）规则，上述股票将会存放于中央结算有限公司存管处，以作安全保管。
+(7)
+Short selling securities and then make up the short sale afterwards may violate the applicable law(s) as from time to time and is prohibited by the Company. 
+先⾏⾮法卖空证券，之后才买回不⾜的股数的交易安排有可能触犯法例。本公司⼀律禁⽌有关的交易。
+(8)
+Telephone conversations regarding client order would be taped in accordance with the requirement(s) of applicable law(s) as from time to time. 
+所有客⼾的电话落盘指⽰均按照证监会及其他适⽤的条⽂规定，进⾏录⾳保存。
+(9)
+This statement serve as an official receipt of client money / asset in accordance with Section 152 of the Securities and Futures Ordinance or any applicable law(s) as from time to time. 
+按照证券及期货条例及其他适⽤的条⽂规定，此⼾⼝结单将作为客⼾款项及资产收据⽤途。
+(10)
+According to the “The Law of the People's Republic of China on Enterprise Income Taxˮ and its implementation rules, when resident enterprises paying dividend to non-resident enterpri
+ses, tax payable shall be subject to withholding at source. You should seek independent opinion on how the relevant law(s) or rule(s) will affect your dividend income. 
+⾃公元2008年1⽉1⽇起施⾏的《中华⼈⺠共和国企业所得税法》及其实施条例，凡中国境内企业向⾮居⺠企业股东派发2008年1⽉1⽇起的会计期间之股息时，需代扣代缴企业所得税。阁下应寻求独
+⽴意⻅，以了解有关法例规对阁下的股息收⼊的影响。
+(11)
+Transactions recorded in this statement are concluded by this Company as broker, unless stated otherwise. 
+除⾮另有指⽰，本公司于所有经本公司成交的买卖均是以经纪的名义进⾏。
+(12)
+If no errors or omissions as to the record(s) in this statement is / are reported to the Company within 7 business days after the statement issuing date, this statement will be considered t
+o have been accepted jointly and severally by the account holder(s). 
+如此结单有任何错误，客⼾需于对账单发出⽇起七个⼯作天内通知本公司。如在七个⼯作天内没有收到客⼾的反对，即表⽰客⼾已确认对账单内的所有交易。
+(13)
+To protect your interest to ensure timely receive of client statement, if your address will / has been changed, please notify the Company at earliest possible. 
+为保障阁下的利益，即时收到⼾⼝的对账单，如阁下的住址 / 通讯地址有所更改，请尽早通知本公司更新阁下的联络资料。
+(14)
+The close price and market value are for reference only. 
+收市价及市值只供参考。
+(15)
+Any currency conversion is based on the currency's prevailing exchange rate as at the close of business on the statement date. This equivalent balance is for reference only. 
+结单上之货币兑换价乃根据该货币在结单⽇收市兑换价折算。此项等值结余，只供参考。
+(16)
+There may be additional fees or taxes imposed on transactions in certain securities, including: Italian Financial Transaction Tax (“IFTTˮ) for purchase of eligible Italian companies with m
+arket capitalization of more than Euro 500m and listed in Hong Kong, effective from 1 January 2014. The tax rate is 0.2% and is withheld by our Company for payment to Italian Governm
+ent. The tax rate of IFTT may be subject to changes. You should contact your legal or Tax professionals with any questions about the IFTT. 
+在某些证券的交易可能需缴付额外费⽤或税款，包括:由2014年1⽉1⽇起⽣效之意⼤利⾦融交易税就购买合资格之意⼤利公司的股权(适⽤于市值超过5亿欧罗)，并于⾹港上市的意⼤利公司。税率为0.
+2%, 此⾦融交易税由本公司扣取⽀付意⼤利政府。意⼤利⾦融交易税的税率可能有改变。阁下如对有关意⼤利⾦融交易税务条例有任何疑问，应寻求独⽴的专业意⻅。
+(17)
+We act as a principal in the above transaction and shall make trading profit in the sum of not more than 10 % of the investment amount. 
+本公司于上述交易中以主事⼈⾝份⾏事，并将获取不多于投资额 10% 的销售利润。
+(18)
+This is a computer generated letter and no signature is required. 
+此单据由电脑编印，⽆须签署。
+卓锐证券(⾹港)有限公司
+⾹港联合交易所参与者编号 2206｜经纪代号 0170, 2407｜⾹港证监会注册号码 BRE865
+地址：⾹港九⻰海滨道135号, 宏基资本⼤厦16楼全层
+联系⽅式：客服电话 (852) 2566 6500 ｜ 传真 (852) 2566 6360 ｜ 电邮 cs@zr.hk | ⽹站 zr.hk
+Account(762092870766) - Daily Statement
+2026-02-09
+Zircon Securities (HK) Limited
+Page 3/3
+

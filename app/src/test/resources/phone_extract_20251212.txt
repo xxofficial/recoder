@@ -1,0 +1,94 @@
+季福乐 JI FULE 賬戶性質 Account Nature: Retail
+Flat B,13/F,Harbour 賬戶類別 Account Type: Margin
+Pinnacle,8 Minden 賬戶號碼 A/C No: 762092870253-762092870766
+Avenue,Tsim Sha
+客戶經理編號 AE Code: 100(House Team)
+結單日期 Business Date: 2025/12/12
+日結單(Daily Statement)
+結單概要(Statement Summary)
+幣種 承上日結餘 需補按金 交易限額 交易限額到期日 信貸限額 信貸限額到期日
+Currency Opening Balance Margin Call Trade Limit Trade Limit Expiry Date Credit Limit Credit Limit Expiry Date
+HKD equivalent 0.00 0.00 0.00 2099/12/31 300,000.00 2099/12/31
+當日賬戶結餘(Daily Account Balance)
+幣種 資金餘額 待交收金額 賬面結餘 持股市值 可按貸值 資產總值 參考匯率 參考總港幣等值
+Currency Available Balance Unsettle Balance Ledger Balance Market Value Margin Value Total Assets FX Rate Total Assets(HKD)
+HKD 11,015.00 0.00 11,015.00 0.00 0.00 11,015.00 1.0000 11,015.00
+合計Total(HKD) 11,015.00 0.00 11,015.00 0.00 0.00 11,015.00
+投資組合(Portfolio Section)
+股票代號及名稱 承上日結餘 變更股數 結存股數 收市價 持股市值 按貸率 成本價 可按貸值
+Stock Code & Name Opening Qty Movement Closing Qty Closing Price Market Value Margin% Cost Price Margin Value
+無證券持倉(No Securities Position/Portfolio Holding)
+當日資金提存交易(Today Withdrawals/Deposit Of Fund)
+日期 編號 摘要 發生金額
+Date Ref. Particulars Occur Balance
+HKD:
+2025/12/12 6821 資金存入FUND DEPOSIT - CCBA 11,015.00
+合計Total 11,015.00
+當日證券提存交易(Today Withdrawals/Deposit Of Stock)
+日期 編號 摘要 股數/份額
+Date Ref. Particulars Quantity/Unit
+無證券提存交易(No Withdrawal / Deposit Of Stock)
+成交信息(Transaction Details)
+交易日 交收日 編號 買/沽 內容 股數 成交單價 清算金額
+Trade Date Sett Date Ref. B/S Description Quantity Price Clear Balance
+1/4
+無證券交易(No Securities Transactions)
+未交收證券交易(Unsettled Securities Transaction)
+交易日 交收日 編號 買/沽 內容 股數 成交單價 清算金額
+Trade Date Sett Date Ref. B/S Description Quantity Price Clear Balance
+無未交收證券交易(No Unsettled Securities Transaction)
+利息總結(Interest Summary)
+日期 貨幣 存款利率 融資利率(於抵押值內) 融資利率(於市值內) 融資利率(於市值外) 利息支出 利息收入 月累計利息
+Date Currency Saving Rate (Covered By Mrg Val) (Covered By Mkt Val) (Uncovered By Mkt Val) Int.Payable Int.Rece. MTD Int.
+2025/12/12 HKD 0.0000% 6.2500% 10.2500% 13.2500% 0.00 0.00 0.00
+2/4
+重要提示 Important Notes
+(1)    The stamp duty imprinted herein has been/will be paid through the Stock Exchange of Hong Kong Ltd.
+         在此單據印上的印花稅款額，己經或將會透過香港聯合交易所有限公司繳付。
+(2)    In the event of a default committed by a broker, clients are entitled to claim against the Investor Compensation Fund established under the Securities and Futures.  Ordinance for
+         pecuniary loss suffered to the extent or HK$500,000 per-investor.
+         假如經紀因為違責而引致其該等客戶遭受金錢之損失時，該等客戶均可根據證券及期貨條例授權而成立之投資者賠償基金索償。每投資者最高索償港幣500,000元。
+(3)    Every transaction concluded through and recognized by the Exchange is subject to a transaction levy imposed by the Exchange. The broker is authorized to collect the
+         appropriate transaction levy in accordance with the rule prescribed by the Exchange from time to time. A copy of the latest rule on this aspect is available from Exchange
+         on payment of the prescribed charges.
+         投資者必須清楚所有經由交易所成交及被承認之證券買賣均須按交易所之規定繳納徵費，交易所已授權其所有交易所參與者代其收取是項費用，有關之收費規則可向交易所購閱。
+(4)    All transactions made for or on behalf of a client shall be subject to the relevant provisions of the constitution, Exchange Rules, regulations, by-laws, custom and
+         usages of the Exchange, the Central Clearing and Settlement System rules and of the Laws of Hong Kong as amended from time to time, and shall be binding on both Exchange
+         Participant and the client. A copy of the latest Exchange Rules    on these aspects is available from the Exchange or payment of the prescribed charges.
+         所有協助或代表客戶之買賣均按不時修訂之憲法、交易所規則、細則、交易所之習慣及用法、中央結算及交易系統規則以及香港法律之有關規定所管制，交易所參與者及客戶同樣受制於上
+         述規定，有關之收費規則可向交易所購閱。
+(5)    Late settlement is subject to force-selling securities in client’s account without prior notice plus penalty interest.
+         客戶逾期交收，本公司有權沽出客戶戶口內足夠之股票，以應付本金及利息。
+(6)    The above mentioned securities are being held (will upon delivery to us be held) by us for safe custody purpose in accordance with the provisions of the Securities and Futures Ordinance.
+         根據證券及期貨（客戶證券）規則，上述股票將會存放於中央結算有限公司存管處，以作安全保管。
+(7)    Short selling securities and then make up the short sale afterwards may violate the applicable law(s) as from time to time and is prohibited by the Company.
+         先行非法賣空證券，之後才買回不足的股數的交易安排有可能觸犯法例。本公司一律禁止有關的交易。
+(8)    Telephone conversations regarding client order would be taped in accordance with the requirement(s) of applicable law(s) as from time to time.
+         所有客戶的電話落盤指示均按照證監會及其他適用的條文規定，進行錄音保存。
+(9)    This statement serve as an official receipt of client money / asset in accordance with Section 152 of the Securities and Futures Ordinance or any applicable law(s) as from time to time.
+         按照證券及期貨條例及其他適用的條文規定，此戶口結單將作為客戶款項及資產收據用途。
+(10)   According to the “The Law of the People's Republic of China on Enterprise Income Tax” and its implementation rules, when resident enterprises paying dividend to non-resident
+         enterprises, tax payable shall be subject to withholding at source. You should seek independent opinion on how the relevant law(s) or rule(s) with affect your dividend income.
+         自公元2008年1月1日起施行的《中華人民共和國企業所得稅法》及其實施條例，凡中國境內企業向非居民企業股東派發2008年1月1日起的會計期間之股息時，需代扣代繳企業所得稅。閣下
+         應尋求獨立意見，以了解有關法例規對閣下的股息收入的影響。
+(11)   Transactions recorded in this statement are concluded by this Company as broker, unless stated otherwise.
+         除非另有指示，本公司於所有經本公司成交的買賣均是以經紀的名義進行。
+(12)   If no errors or omissions as to the record(s) in this statement is / are reported to the Company within 7 business days after the statement issuing date, this statement will
+         be considered to have been accepted jointly and severally by the account holder(s).
+         如此結單有任何錯誤，客戶需於對帳單發出日起七個工作天內通知本公司。如在七個工作天內沒有收到客戶的反對，即表示客戶已確認對帳單內的所有交易。
+(13)   To protect your interest to ensure timely receive of client statement, if your address will / has been changed, please notify the Company at earliest possible.
+         為保障閣下的利益，即時收到戶口的對帳單，如閣下的住址 / 通訊地址有所更改，請盡早通知本公司更新閣下的聯絡資料。
+(14)   The close price and market value are for reference only.
+         收市價及市值只供參考。
+(15)   Any currency conversion is based on the currency's prevailing exchange rate as at the close of business on the statement date. This equivalent balance is for reference only.
+         結單上之貨幣兌換價乃根據該貨幣在結單日收市兌換價折算。此項等值結餘，只供參考。
+(16)   There may be additional fees or taxes imposed on transactions  in certain securities, including: Italian Financial Transaction Tax (“IFTT”) for purchase of eligible Italian
+         companies with market capitalization    of more than Euro 500m and listed in Hong  Kong, effective from 1 January  2014. The tax rate is 0.2% and is withheld by our Company for
+         payment to Italian Government. The tax rate of IFTT may be    subject to changes. You should contact your legal or Tax professionals with any questions about the IFTT.
+         在某些證券的交易可能需繳付額外費用或稅款，包括:由2014年1月1日起生效之意大利金融交易稅就購買合資格之意大利公司的股權(適用於市值超過5億歐羅)，並於香港上市的意大利公
+         司。稅率為0.2%, 此金融交易稅由本公司扣取支付意大利政府。意大利金融交易稅的稅率可能有改變。閣下如對有關意大利金融交易稅務條例有任何疑問，應尋求獨立的專業意見。
+(17)   We act as a principal in the above transaction and shall make trading profit in the sum of not more than 10 % of the investment amount.
+         本公司於上述交易中以主事人身份行事，並將獲取不多於投資額 10% 的銷售利潤。
+(18)   This is a computer generated letter and no signature is required.
+         此單據由電腦編印，無須簽署。
+/4

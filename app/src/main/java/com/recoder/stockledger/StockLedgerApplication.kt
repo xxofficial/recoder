@@ -31,6 +31,7 @@ class StockLedgerApplication : Application() {
 
     val repository: DefaultLedgerRepository by lazy {
         DefaultLedgerRepository(
+            context = applicationContext,
             dao = database.ledgerDao(),
             quoteDataSource = TencentSinaQuoteDataSource(),
             exchangeRateDataSource = FrankfurterExchangeRateDataSource(applicationContext),

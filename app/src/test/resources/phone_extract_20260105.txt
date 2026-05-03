@@ -1,0 +1,94 @@
+⾹港联合交易所参与者编号：2206 账⼾(762092870766) - ⽇结单
+经纪代号：0170，2407 2026-01-05
+⾹港证监会注册号码：BRE865
+季福乐 账户性质 Account Nature: INDIVIDUAL
+中国内地
+Flat B,13/F,Harbour Pinnacle,8 Minden Avenue,Tsim Sha Tsui,Kowloon,HK 账户类别 Account Type: MARGIN
+账户号码 A/C No: 762092870766
+客户经理号码 AE Code:
+⽇结单(Daily Statement)
+结单概要(Statement Summary)
+币种 承上⽇结余 需补按⾦ 
+Currency Opening Balance Margin Call
+USD equivalent -312.28 0.00
+当⽇账户结余(Daily Account Balance)
+币种 资⾦余额 待交收⾦额 账⾯结余 持股市值 资产总值 参考汇率 参考总等值(HKD) 
+Currency Available Balance Unsettle Balance Ledger Balance Market Value Total Assets FX Rate Total Assets(HKD)
+USD (312.28) 0.00 (312.28) 2,552.92 2,240.64 7.7537 17,373.25
+HKD 50.00 0.00 50.00 0.00 50.00 1.0000 50.00
+合计Total(HKD) (2,371.33) 0.00 (2,371.33) 19,794.58 17,423.25 17,423.25
+证券组合(Securities Position/Portfolio Holding)
+股票代号及名称 承上⽇结余 变更股数 结存股数 成本价 收市价 持股市值 
+Stock Code & Name Opening Qty Movement Closing Qty Cost Price Closing Price Market Value
+HK-Mutual Fund-USD
+10018002 ⾼腾微⾦美元货币基⾦ 35.1948 0 35.1948 11.6900 11.6979 411.70
+合计Total 411.70
+US-NASDAQ-USD
+AMD 美国超威 1 0 1 216.3000 221.0800 221.08
+GOOG ⾕歌 5 0 5 311.1360 317.3200 1,586.60
+PXLW 美国像素 51 0 51 6.6652 6.5400 333.54
+合计Total 2,141.22
+当⽇资⾦提存交易(Today Withdrawals/Deposit Of Fund)
+⽇期 编号 摘要 发⽣⾦额 
+Date Ref. Particulars Occur Balance
+HKD
+2026-01-05 05002956 存账/结存 50.00 HKD 50.00
+合计Total 50.00
+重要提⽰（Important Notes）
+(1) The stamp duty imprinted herein has been/will be paid through the Stock Exchange of Hong Kong Ltd. 
+在此单据印上的印花税款额，已经或将会透过⾹港联合交易所有限公司缴付。
+1/2
+⾹港联合交易所参与者编号：2206 账⼾(762092870766) - ⽇结单
+经纪代号：0170，2407 2026-01-05
+⾹港证监会注册号码：BRE865
+(2) In the event of a default committed by a broker, clients are entitled to claim against the Investor Compensation Fund established under the Securities and Futures. Ordinance f
+or pecuniary loss suffered to the extent or HK$500,000 per-investor. 
+假如经纪因为违责⽽引致其该等客户遭受⾦钱之损失时，该等客户均可根据证券及期货条例授权⽽成⽴之投资者赔偿基⾦索偿。每投资者最⾼索偿港币500,000元。
+(3) Every transaction concluded through and recognized by the Exchange is subject to a transaction levy imposed by the Exchange. The broker is authorized to collect the appropri
+ate transaction levy in accordance with the rule prescribed by the Exchange from time to time. A copy of the latest rule on this aspect is available from Exchange on payment o
+f the prescribed charges. 
+投资者必须清楚所有经由交易所成交及被承认之证券买卖均须按交易所之规定缴纳征费，交易所已授权其所有交易所参与者代其收取是项费⽤，有关之收费规则可向交易所购
+阅。
+(4) All transactions made for or on behalf of a client shall be subject to the relevant provisions of the constitution, Exchange Rules, regulations, by-laws, custom and usages of the 
+Exchange, the Central Clearing and Settlement System rules and of the Laws of Hong Kong as amended from time to time, and shall be binding on both Exchange Participant a
+nd the client. A copy of the latest Exchange Rules on these aspects is available from the Exchange or payment of the prescribed charges. 
+所有协助或代表客户之买卖均按不时修订之宪法、交易所规则、细则、交易所之习惯及⽤法、中央结算及交易系统规则以及⾹港法律之有关规定所管制，交易所参与者及客户同
+样受制于上述规定，有关之收费规则可向交易所购阅。
+(5) Late settlement is subject to force-selling securities in client’s account without prior notice plus penalty interest. 
+客户逾期交收，本公司有权沽出客户户⼝内⾜够之股票，以应付本⾦及利息。
+(6) The above mentioned securities are being held (will upon delivery to us be held) by us for safe custody purpose in accordance with the provisions of the Securities and Futures 
+Ordinance. 
+根据证券及期货（客户证券）规则，上述股票将会存放于中央结算有限公司存管处，以作安全保管。
+(7) Short selling securities and then make up the short sale afterwards may violate the applicable law(s) as from time to time and is prohibited by the Company. 
+先⾏⾮法卖空证券，之后才买回不⾜的股数的交易安排有可能触犯法例。本公司⼀律禁⽌有关的交易。
+(8) Telephone conversations regarding client order would be taped in accordance with the requirement(s) of applicable law(s) as from time to time. 
+所有客户的电话落盘指⽰均按照证监会及其他适⽤的条⽂规定，进⾏录⾳保存。
+(9) This statement serve as an official receipt of client money / asset in accordance with Section 152 of the Securities and Futures Ordinance or any applicable law(s) as from tim
+e to time. 
+按照证券及期货条例及其他适⽤的条⽂规定，此户⼝结单将作为客户款项及资产收据⽤途。
+(10) According to the “The Law of the People's Republic of China on Enterprise Income Tax” and its implementation rules, when resident enterprises paying dividend to non-resident 
+enterprises, tax payable shall be subject to withholding at source. You should seek independent opinion on how the relevant law(s) or rule(s) with affect your dividend income. 
+⾃公元2008年1⽉1⽇起施⾏的《中华⼈⺠共和国企业所得税法》及其实施条例，凡中国境内企业向⾮居⺠企业股东派发2008年1⽉1⽇起的会计期间之股息时，需代扣代缴企业
+所得税。阁下应寻求独⽴意⻅，以了解有关法例规对阁下的股息收⼊的影响。
+(11) Transactions recorded in this statement are concluded by this Company as broker, unless stated otherwise. 
+除⾮另有指⽰，本公司于所有经本公司成交的买卖均是以经纪的名义进⾏。
+(12) If no errors or omissions as to the record(s) in this statement is / are reported to the Company within 7 business days after the statement issuing date, this statement will be c
+onsidered to have been accepted jointly and severally by the account holder(s). 
+如此结单有任何错误，客户需于对账单发出⽇起七个⼯作天内通知本公司。如在七个⼯作天内没有收到客户的反对，即表⽰客户已确认对账单内的所有交易。
+(13) To protect your interest to ensure timely receive of client statement, if your address will / has been changed, please notify the Company at earliest possible. 
+为保障阁下的利益，即时收到户⼝的对账单，如阁下的住址 / 通讯地址有所更改，请尽早通知本公司更新阁下的联络资料。
+(14) The close price and market value are for reference only. 
+收市价及市值只供参考。
+(15) Any currency conversion is based on the currency's prevailing exchange rate as at the close of business on the statement date. This equivalent balance is for reference only. 
+结单上之货币兑换价乃根据该货币在结单⽇收市兑换价折算。此项等值结余，只供参考。
+(16) There may be additional fees or taxes imposed on transactions in certain securities, including: Italian Financial Transaction Tax (“IFTT”) for purchase of eligible Italian compani
+es with market capitalization of more than Euro 500m and listed in Hong Kong, effective from 1 January 2014. The tax rate is 0.2% and is withheld by our Company for paymen
+t to Italian Government. The tax rate of IFTT may be subject to changes. You should contact your legal or Tax professionals with any questions about the IFTT. 
+在某些证券的交易可能需缴付额外费⽤或税款，包括:由2014年1⽉1⽇起⽣效之意⼤利⾦融交易税就购买合资格之意⼤利公司的股权(适⽤于市值超过5亿欧罗)，并于⾹港上市的
+意⼤利公司。税率为0.2%, 此⾦融交易税由本公司扣取⽀付意⼤利政府。意⼤利⾦融交易税的税率可能有改变。阁下如对有关意⼤利⾦融交易税务条例有任何疑问，应寻求独⽴
+的专业意⻅。
+(17) We act as a principal in the above transaction and shall make trading profit in the sum of not more than 10 % of the investment amount. 
+本公司于上述交易中以主事⼈⾝份⾏事，并将获取不多于投资额 10% 的销售利润。
+(18) This is a computer generated letter and no signature is required. 
+此单据由电脑编印，⽆须签署。
+2/2

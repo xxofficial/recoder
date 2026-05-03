@@ -8,138 +8,222 @@ import java.time.LocalDate
 
 class ZhuoruiStatementPdfParserTest {
 
-    // Sample text mimicking actual PDF structure from PyMuPDF extraction
-    private val sampleStockSection = """
+    // ===== 格式A（新版日结单）测试数据 =====
+
+    private val sampleFormatA = """
         成交信息(Transaction Details)
         买卖⽅向
-        Trade Direction代码名称
-        Stock Code & Name市场/交易所
-        Market/Exchange币种
-        Currency交易⽇期
-        Trade Date交收⽇期
-        Sett Date股数
-        Quantity均价
-        Price清算⾦额
+        Trade Direction
+        代码名称
+        Stock Code & Name
+        市场/交易所
+        Market/Exchange
+        币种
+        Currency
+        交易时间
+        Trade Time
+        交收⽇期
+        Sett Date
+        股数
+        Quantity
+        均价
+        Price
+        清算⾦额
         Clearing Balance
         买⼊
-        MUU Direxion每⽇2倍做多MU ETF US/NASDAQ USD 2026-02-02 2026-02-03 1 228.0000 -229.39
-        合计Total(USD) 1 228.0000 -229.39
+        MU 美光科技 US/NASDAQ USD 2026-02-09 19:04:52 2026-02-10 1 380.0000 -381.39
+        合计Total(USD) 1 380.0000 -381.39
+        经纪佣⾦ 0.00， 交收费 0.40， 证监会费 0.00， 
+        交易活动费 0.00， Finra交易活动费 0.00， 平台使⽤费 0.99， 综合会计追踪资⾦费 0.00， 应计利息 0.00
+        ⼩计 1.39
         沽出
-        PXLW 美国像素 US/NASDAQ USD 2026-02-02 2026-02-03 36 6.3500 227.19
-        合计Total(USD) 36 6.3500 227.19
-        沽出
-        MU 美光科技 US/NASDAQ USD 2026-02-03 2026-02-04 4 445.5825 1,780.91
-        MU 美光科技 US/NASDAQ USD 2026-02-03 2026-02-04 2 408.5000 815.60
-        合计Total(USD) 6 433.2217 2,596.51
-        买⼊
-        GOOG ⾕歌 US/NASDAQ USD 2026-02-10 2026-02-11 1 318.4990 -319.89
-        合计Total(USD) 1 318.4990 -319.89
+        IAU iShares⻩⾦信托ETF US/NYSE USD 2026-02-09 18:48:25 2026-02-10 4 94.0200 374.68
+        合计Total(USD) 4 94.0200 374.68
     """.trimIndent()
 
-    private val sampleFundSection = """
-        基⾦成交信息(Fund Transaction Details)
-        申/赎
-        S/R代码名称
-        Fund Code & Name市场/交易所
-        Market/Exchange币种
-        Currency交易⽇期
-        Trade Date交收⽇期
-        Sett Date股数
-        Quantity均价
-        Price清算⾦额
-        Clearing Balance
-        申购
-        10008001 ⾼腾微财货币基⾦ HK/Mutual Fund HKD 2026-02-02 2026-02-02 8.6759 11.5261 -100.00
-        合计Total(HKD) 8.6759 11.5261 -100.00
-        赎回
-        10018002 ⾼腾微⾦美元货币基⾦ HK/Mutual Fund USD 2026-02-04 2026-02-04 0.0209 11.7291 0.24
-        合计Total(USD) 0.0209 11.7291 0.24
+    private val sampleFormatAMultiLine = """
+        成交信息(Transaction Details)
+        买⼊
+        MU 美光科技
+        US/NASDAQ
+        USD
+        2026-02-09 19:04:52
+        2026-02-10
+        1
+        380.0000
+        -381.39
+        合计Total(USD)
+        1
+        380.0000
+        -381.39
     """.trimIndent()
+
+    private val sampleFormatAMultipleSameDirection = """
+        成交信息(Transaction Details)
+        买⼊
+        RDW Redwire Corp US/NYSE USD 2026-02-06 22:38:44 2026-02-09 3 89.0250 -268.46
+        RDW Redwire Corp US/NYSE USD 2026-02-07 03:55:26 2026-02-09 27 10.0000 -271.39
+        合计Total(USD) 55 9.4196 -520.86
+        经纪佣⾦ 0.00， 交收费 0.40， 证监会费 0.00， 
+        交易活动费 0.00， Finra交易活动费 0.00， 平台使⽤费 0.99， 综合会计追踪资⾦费 0.00， 应计利息 0.00
+        ⼩计 2.78
+    """.trimIndent()
+
+    // ===== 格式B（旧版日结单）测试数据 =====
+
+    private val sampleFormatB = """
+        成交信息(Transaction Details)
+        交易⽇
+        Trade Date
+        交收⽇
+        Sett Date
+        编号
+        Ref.
+        买/沽
+        B/S
+        内容
+        Description
+        股数
+        Quantity
+        成交单价
+        Price
+        清算⾦额
+        Clear Balance
+        US-NASDAQ-USD
+        2026-01-16 2026-01-20 42548480 买⼊ FUTU 富途控股 1 176.0000 -177.39
+        经纪佣⾦ Commission 0.00
+        交收费 Settlement Fee 0.40
+    """.trimIndent()
+
+    private val sampleFormatBMultiLine = """
+        成交信息(Transaction Details)
+        US-NASDAQ-USD
+        2026-01-16
+        2026-01-20
+        42548480
+        买⼊
+        FUTU 富途控股
+        1
+        176.0000
+        -177.39
+        经纪佣⾦ Commission
+        0.00
+    """.trimIndent()
+
+    // ===== 测试用例 =====
 
     @Test
-    fun `parseText extracts buy trade from stock section`() {
-        val trades = ZhuoruiStatementPdfParser.parseText(sampleStockSection)
+    fun `parseText extracts stock trades from format A`() {
+        val trades = ZhuoruiStatementPdfParser.parseText(sampleFormatA)
 
-        assertEquals(5, trades.size)
+        assertEquals(2, trades.size)
 
         trades[0].let { trade ->
             assertEquals(TradeType.BUY, trade.tradeType)
-            assertEquals("MUU", trade.symbol)
-            assertEquals("Direxion每⽇2倍做多MU ETF", trade.name)
+            assertEquals("MU", trade.symbol)
+            assertEquals("美光科技", trade.name)
             assertEquals(Market.US, trade.market)
             assertEquals("USD", trade.currencyCode)
             assertEquals(1, trade.quantity)
-            assertEquals(228.0, trade.price, 0.01)
-            assertEquals(229.39, trade.amount, 0.01)
-            assertEquals(LocalDate.of(2026, 2, 2), trade.tradeDate)
+            assertEquals(380.0, trade.price, 0.01)
+            assertEquals(381.39, trade.amount, 0.01)
+            assertEquals(LocalDate.of(2026, 2, 9), trade.tradeDate)
+            assertEquals("20260209-MU-BUY-1", trade.tradeRef)
         }
-    }
-
-    @Test
-    fun `parseText extracts sell trade`() {
-        val trades = ZhuoruiStatementPdfParser.parseText(sampleStockSection)
 
         trades[1].let { trade ->
             assertEquals(TradeType.SELL, trade.tradeType)
-            assertEquals("PXLW", trade.symbol)
-            assertEquals("美国像素", trade.name)
-            assertEquals(36, trade.quantity)
-            assertEquals(6.35, trade.price, 0.01)
-            assertEquals(227.19, trade.amount, 0.01)
-        }
-    }
-
-    @Test
-    fun `parseText handles multi-line sell trade group`() {
-        val trades = ZhuoruiStatementPdfParser.parseText(sampleStockSection)
-
-        // Second sell group (MU) has 2 detail lines, should produce 2 trades
-        val muTrades = trades.filter { it.symbol == "MU" }
-        assertEquals(2, muTrades.size)
-        muTrades[0].let { trade ->
-            assertEquals(TradeType.SELL, trade.tradeType)
-            assertEquals(4, trade.quantity)
-            assertEquals(445.5825, trade.price, 0.01)
-        }
-        muTrades[1].let { trade ->
-            assertEquals(2, trade.quantity)
-            assertEquals(408.5, trade.price, 0.01)
-        }
-    }
-
-    @Test
-    fun `parseText extracts CJK stock name`() {
-        val trades = ZhuoruiStatementPdfParser.parseText(sampleStockSection)
-
-        val googs = trades.filter { it.symbol == "GOOG" }
-        assertEquals(1, googs.size)
-        googs[0].let { trade ->
-            assertEquals("⾕歌", trade.name)
+            assertEquals("IAU", trade.symbol)
+            assertEquals("iShares黄金信托ETF", trade.name)
             assertEquals(Market.US, trade.market)
+            assertEquals("USD", trade.currencyCode)
+            assertEquals(4, trade.quantity)
+            assertEquals(94.02, trade.price, 0.01)
+            assertEquals(374.68, trade.amount, 0.01)
+            assertEquals(LocalDate.of(2026, 2, 9), trade.tradeDate)
+            assertEquals("20260209-IAU-SELL-4", trade.tradeRef)
         }
     }
 
     @Test
-    fun `parseText extracts fund trades`() {
-        val trades = ZhuoruiStatementPdfParser.parseText(sampleFundSection)
+    fun `parseText extracts stock trades from format B`() {
+        val trades = ZhuoruiStatementPdfParser.parseText(sampleFormatB)
+
+        assertEquals(1, trades.size)
+
+        trades[0].let { trade ->
+            assertEquals(TradeType.BUY, trade.tradeType)
+            assertEquals("FUTU", trade.symbol)
+            assertEquals("富途控股", trade.name)
+            assertEquals(Market.US, trade.market)
+            assertEquals("USD", trade.currencyCode)
+            assertEquals(1, trade.quantity)
+            assertEquals(176.0, trade.price, 0.01)
+            assertEquals(177.39, trade.amount, 0.01)
+            assertEquals(LocalDate.of(2026, 1, 16), trade.tradeDate)
+            assertEquals("20260116-FUTU-BUY-1-42548480", trade.tradeRef)
+        }
+    }
+
+    @Test
+    fun `parseText skips fee detail lines in format A`() {
+        val trades = ZhuoruiStatementPdfParser.parseText(sampleFormatA)
+
+        // 费用明细行不应产生额外的交易记录
+        assertEquals(2, trades.size)
+    }
+
+    @Test
+    fun `parseText handles multi-line PDFBox output for format A`() {
+        val trades = ZhuoruiStatementPdfParser.parseText(sampleFormatAMultiLine)
+
+        assertEquals(1, trades.size)
+        trades[0].let { trade ->
+            assertEquals(TradeType.BUY, trade.tradeType)
+            assertEquals("MU", trade.symbol)
+            assertEquals(1, trade.quantity)
+            assertEquals(380.0, trade.price, 0.01)
+            assertEquals(381.39, trade.amount, 0.01)
+        }
+    }
+
+    @Test
+    fun `parseText handles multi-line PDFBox output for format B`() {
+        val trades = ZhuoruiStatementPdfParser.parseText(sampleFormatBMultiLine)
+
+        assertEquals(1, trades.size)
+        trades[0].let { trade ->
+            assertEquals(TradeType.BUY, trade.tradeType)
+            assertEquals("FUTU", trade.symbol)
+            assertEquals(1, trade.quantity)
+            assertEquals(176.0, trade.price, 0.01)
+            assertEquals(177.39, trade.amount, 0.01)
+        }
+    }
+
+    @Test
+    fun `parseText handles multiple same-direction trades in format A`() {
+        val trades = ZhuoruiStatementPdfParser.parseText(sampleFormatAMultipleSameDirection)
 
         assertEquals(2, trades.size)
-        trades[0].let { trade ->
-            assertEquals(TradeType.BUY, trade.tradeType) // 申购 = BUY
-            assertEquals("10008001.HK", trade.symbol)
-            assertEquals("⾼腾微财货币基⾦", trade.name)
-            assertEquals(Market.HONG_KONG, trade.market)
-            assertEquals("HKD", trade.currencyCode)
-            assertEquals(LocalDate.of(2026, 2, 2), trade.tradeDate)
-        }
-        trades[1].let { trade ->
-            assertEquals(TradeType.SELL, trade.tradeType) // 赎回 = SELL
-            assertEquals("10018002.HK", trade.symbol)
-        }
+
+        val trade3 = trades.find { it.quantity == 3 }
+        assertEquals(TradeType.BUY, trade3?.tradeType)
+        assertEquals("RDW", trade3?.symbol)
+        assertEquals(89.025, trade3?.price ?: 0.0, 0.001)
+
+        val trade27 = trades.find { it.quantity == 27 }
+        assertEquals(TradeType.BUY, trade27?.tradeType)
+        assertEquals("RDW", trade27?.symbol)
+        assertEquals(10.0, trade27?.price ?: 0.0, 0.01)
+
+        // 验证 tradeRef 因数量不同而区分
+        assertEquals("20260206-RDW-BUY-3", trade3?.tradeRef)
+        assertEquals("20260207-RDW-BUY-27", trade27?.tradeRef)
     }
 
     @Test
-    fun `parseText returns empty list when no sections found`() {
+    fun `parseText returns empty list when no transaction sections`() {
         val text = """
             Portfolio Holdings
             Stock Code  Stock Name
@@ -151,53 +235,95 @@ class ZhuoruiStatementPdfParserTest {
     }
 
     @Test
-    fun `parseText handles full statement with both sections`() {
-        val fullText = sampleStockSection + "\n\n" + sampleFundSection
+    fun `parseText handles full daily statement with fund and unsettled sections`() {
+        val fullText = """
+            ⽇结单(Daily Statement)
+            账⼾信息(Account Information)
+            季福乐
+            762092870766
+            
+            成交信息(Transaction Details)
+            买卖⽅向
+            Trade Direction
+            代码名称
+            Stock Code & Name
+            市场/交易所
+            Market/Exchange
+            币种
+            Currency
+            交易时间
+            Trade Time
+            交收⽇期
+            Sett Date
+            股数
+            Quantity
+            均价
+            Price
+            清算⾦额
+            Clearing Balance
+            买⼊
+            GOOG ⾕歌 US/NASDAQ USD 2026-02-10 23:45:47 2026-02-11 1 318.4990 -319.89
+            合计Total(USD) 1 318.4990 -319.89
+            经纪佣⾦ 0.00， 交收费 0.40， 证监会费 0.00， 
+            交易活动费 0.00， Finra交易活动费 0.00， 平台使⽤费 0.99， 综合会计追踪资⾦费 0.00， 应计利息 0.00
+            ⼩计 1.39
+            
+            基⾦成交信息(Fund Transaction Details)
+            交易⽇
+            Trade Date
+            交收⽇
+            Sett Date
+            编号
+            Ref.
+            申/赎
+            S/R
+            内容
+            Description
+            股数
+            Quantity
+            委托单价
+            Price
+            发⽣⾦额
+            Business Balance
+            HK-Mutual Fund-USD
+            2026-02-10 2026-02-10 61517824 申购 10018002 ⾼腾微⾦美元货币基⾦ 18.3068 11.7355 -214.84
+            佣⾦ Commission 0.00
+            
+            未交收证券交易(Unsettled Securities Transaction)
+            交易⽇
+            Trade Date
+            交收⽇
+            Sett Date
+            编号
+            Ref.
+            买/沽
+            B/S
+            内容
+            Description
+            股数
+            Quantity
+            成交单价
+            Price
+            清算⾦额
+            Clearing Balance
+            US-NASDAQ-USD
+            2026-02-10 2026-02-11 66237952 买⼊ GOOG ⾕歌 Alphabet Inc. Class C 1 318.4990 -319.89
+            
+            重要提⽰（Important Notes）
+            (1)...
+        """.trimIndent()
+
         val trades = ZhuoruiStatementPdfParser.parseText(fullText)
 
-        // 5 stock trades + 2 fund trades = 7
-        assertEquals(7, trades.size)
-    }
-
-    @Test
-    fun `parseText handles multi-line trade from PDFBox`() {
-        // PDFBox outputs each field on a separate line within a block
-        val text = """
-            成交信息(Transaction Details)
-            买⼊
-            MUU Direxion每⽇2倍做多MU ETF
-            US/NASDAQ
-            USD
-            2026-02-02
-            2026-02-03
-            1
-            228.0000
-            -229.39
-            合计Total(USD) 1 228.0000 -229.39
-        """.trimIndent()
-
-        val trades = ZhuoruiStatementPdfParser.parseText(text)
+        // 只应解析股票成交信息中的交易，跳过基金和未交收证券交易区域
         assertEquals(1, trades.size)
         trades[0].let { trade ->
+            assertEquals(TradeType.BUY, trade.tradeType)
+            assertEquals("GOOG", trade.symbol)
+            assertEquals("谷歌", trade.name)
             assertEquals(1, trade.quantity)
-            assertEquals(228.0, trade.price, 0.01)
-            assertEquals(229.39, trade.amount, 0.01)
-            assertEquals("MUU", trade.symbol)
+            assertEquals(318.499, trade.price, 0.001)
+            assertEquals(319.89, trade.amount, 0.01)
         }
-    }
-
-    @Test
-    fun `resolveSymbol normalizes Hong Kong stock codes`() {
-        val text = """
-            成交信息(Transaction Details)
-            买⼊
-            09961 TRIP.COM-S HK/SEHK HKD 2026-02-17 2026-02-18 20 537.0000 10,740.00
-            合计Total(HKD) 20 537.0000 10,740.00
-        """.trimIndent()
-
-        val trades = ZhuoruiStatementPdfParser.parseText(text)
-        assertEquals(1, trades.size)
-        assertEquals("09961.HK", trades[0].symbol)
-        assertEquals(Market.HONG_KONG, trades[0].market)
     }
 }

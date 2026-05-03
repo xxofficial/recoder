@@ -1,5 +1,6 @@
 package com.recoder.stockledger.data.repository
 
+import android.content.Context
 import android.util.Log
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.ExchangeRateRefreshResult
@@ -132,6 +133,7 @@ interface QuoteDataSource {
 }
 
 class DefaultLedgerRepository(
+    private val context: Context,
     private val dao: LedgerDao,
     private val quoteDataSource: QuoteDataSource,
     private val exchangeRateDataSource: FrankfurterExchangeRateDataSource,
@@ -494,7 +496,7 @@ class DefaultLedgerRepository(
         password: String,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
         Log.d(TAG, "开始导入PDF结单, password长度=${password.length}")
-        val parsedTrades = ZhuoruiStatementPdfParser.parsePdf(inputStream, password)
+        val parsedTrades = ZhuoruiStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
         Log.d(TAG, "PDF解析完成, 找到${parsedTrades.size}条交易记录")
         if (parsedTrades.isEmpty()) {
             Log.w(TAG, "PDF结单中未找到可导入的交易记录")
