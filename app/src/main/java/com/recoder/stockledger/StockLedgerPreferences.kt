@@ -17,4 +17,5 @@ object StockLedgerPreferences {
     const val KEY_ZHUORUI_PROMO_START_DATE = "zhuorui_promo_start_date"
     const val KEY_ZHUORUI_PROMO_DURATION_DAYS = "zhuorui_promo_duration_days"
     const val KEY_ZHUORUI_STATEMENT_PDF_PASSWORD = "zhuorui_statement_pdf_password"
+    const val KEY_OPENAI_API_KEY = "openai_api_key"
 }
