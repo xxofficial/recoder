@@ -8,8 +8,14 @@ import com.recoder.stockledger.data.repository.DefaultLedgerRepository
 import com.recoder.stockledger.data.repository.FrankfurterExchangeRateDataSource
 import com.recoder.stockledger.data.repository.TencentSinaQuoteDataSource
 import com.recoder.stockledger.data.local.StockLedgerDatabase
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
 class StockLedgerApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        PDFBoxResourceLoader.init(applicationContext)
+    }
+
     val database: StockLedgerDatabase by lazy {
         Room.databaseBuilder(
             applicationContext,

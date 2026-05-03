@@ -38,6 +38,7 @@ import com.recoder.stockledger.data.TradeFeePlanOptionUiModel
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.data.TransactionFilter
 import com.recoder.stockledger.data.TransactionSection
+import com.recoder.stockledger.data.ZhuoruiPromoConfig
 import com.recoder.stockledger.data.TransactionUiModel
 import com.recoder.stockledger.data.ZhuoruiEmailManualSyncOptions
 import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
@@ -71,6 +72,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.absoluteValue
 
 private const val DEFAULT_REFRESH_MESSAGE = "打开应用会自动刷新一次行情，手动下拉 1 分钟内仅可触发一次"
+private const val US_TIMEZONE_CUTOFF = "06:00"
 
 data class LedgerUiState(
     val summary: PortfolioSummary = PortfolioSummary(
@@ -82,6 +84,10 @@ data class LedgerUiState(
         totalProfit = "+¥0.00",
         totalProfitHint = "折算收益率 +0.00%",
         dayProfit = "+¥0.00 (+0.00%)",
+        holdingsValue = "¥0.00",
+        commissionTotal = "¥0.00",
+        taxTotal = "¥0.00",
+        tradeCount = "0 笔",
         refreshState = RefreshState.IDLE,
         refreshMessage = DEFAULT_REFRESH_MESSAGE,
         refreshTimeLabel = null,
@@ -116,6 +122,11 @@ data class LedgerUiState(
     val zhuoruiEmailManualSyncOptions: ZhuoruiEmailManualSyncOptions = ZhuoruiEmailManualSyncOptions(),
     val zhuoruiEmailAutoImportEnabled: Boolean = false,
     val zhuoruiEmailSyncStatusMessage: String? = null,
+    val zhuoruiPromoConfig: ZhuoruiPromoConfig = ZhuoruiPromoConfig(),
+    val zhuoruiStatementPdfPassword: String = "",
+    val zhuoruiStatementPdfImportStatusMessage: String? = null,
+    val batchSelectionMode: Boolean = false,
+    val selectedTransactionIds: Set<Long> = emptySet(),
 )
 
 class LedgerViewModel(application: Application) : AndroidViewModel(application) {
@@ -134,6 +145,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val selectedPlatform = MutableStateFlow(loadSavedSelectedPlatform())
     private val enabledPlatforms = MutableStateFlow(loadEnabledPlatforms())
     private val platformFeePlanSelections = MutableStateFlow(loadPlatformFeePlanSelections())
+    private val zhuoruiPromoConfig = MutableStateFlow(loadZhuoruiPromoConfig())
     private val transactionSnapshot = MutableStateFlow<List<TransactionEntity>>(emptyList())
     private val draft = MutableStateFlow(SampleData.tradeForm(TradeType.BUY))
     private val symbolLookup = MutableStateFlow(SymbolLookupUiModel())
@@ -151,6 +163,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val zhuoruiEmailManualSyncOptions = MutableStateFlow(ZhuoruiEmailManualSyncOptions())
     private val zhuoruiEmailAutoImportEnabled = MutableStateFlow(loadZhuoruiEmailAutoImportEnabled())
     private val zhuoruiEmailSyncStatusMessage = MutableStateFlow(loadZhuoruiEmailSyncStatusMessage())
+    private val zhuoruiStatementPdfPassword = MutableStateFlow(loadZhuoruiStatementPdfPassword())
+    private val zhuoruiStatementPdfImportStatusMessage = MutableStateFlow<String?>(null)
+    private val batchSelectionMode = MutableStateFlow(false)
+    private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
     private var lastManualRefreshTriggeredAt: Long = 0L
     private var symbolLookupJob: Job? = null
@@ -401,6 +417,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         state.copy(zhuoruiEmailAutoImportEnabled = enabled)
     }.combine(zhuoruiEmailSyncStatusMessage) { state, message ->
         state.copy(zhuoruiEmailSyncStatusMessage = message)
+    }.combine(zhuoruiPromoConfig) { state, promo ->
+        state.copy(zhuoruiPromoConfig = promo)
+    }.combine(zhuoruiStatementPdfPassword) { state, password ->
+        state.copy(zhuoruiStatementPdfPassword = password)
+    }.combine(zhuoruiStatementPdfImportStatusMessage) { state, message ->
+        state.copy(zhuoruiStatementPdfImportStatusMessage = message)
+    }.combine(batchSelectionMode) { state, batchMode ->
+        state.copy(batchSelectionMode = batchMode)
+    }.combine(selectedTransactionIds) { state, selectedIds ->
+        state.copy(selectedTransactionIds = selectedIds)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -756,6 +782,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         refreshSymbolLookupForCurrentDraft()
     }
 
+    fun selectCashCurrency(currency: DisplayCurrency) {
+        draft.update { current ->
+            applyDraftRules(current.copy(market = cashMarketFor(currency)))
+        }
+    }
+
     fun selectTradePlatform(platform: BrokerPlatform) {
         if (platform !in enabledPlatforms.value) return
         draft.update { current ->
@@ -775,6 +807,21 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         savePlatformFeePlanSelections(platformFeePlanSelections.value)
         draft.update { current ->
             if (current.platform == platform) {
+                applyDraftRules(current)
+            } else {
+                current
+            }
+        }
+    }
+
+    fun updateZhuoruiPromoConfig(config: ZhuoruiPromoConfig) {
+        zhuoruiPromoConfig.value = config
+    }
+
+    fun saveZhuoruiPromoConfig() {
+        saveZhuoruiPromoConfigToPrefs(zhuoruiPromoConfig.value)
+        draft.update { current ->
+            if (current.platform == BrokerPlatform.ZHUORUI) {
                 applyDraftRules(current)
             } else {
                 current
@@ -898,6 +945,44 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
 
+            val latestTransactions = repository.transactions.first()
+            if (latestTransactions.isEmpty()) {
+                refreshState.value = RefreshState.IDLE
+                refreshNote.value = "暂无交易记录，录入后会开始跟踪行情"
+                lastRefreshTimestamp.value = 0L
+            } else {
+                refreshQuotes(trigger = RefreshTrigger.TRADE_DELETE)
+            }
+        }
+    }
+
+    fun enterBatchSelectionMode() {
+        batchSelectionMode.value = true
+        selectedTransactionIds.value = emptySet()
+    }
+
+    fun exitBatchSelectionMode() {
+        batchSelectionMode.value = false
+        selectedTransactionIds.value = emptySet()
+    }
+
+    fun toggleTransactionSelection(transactionId: Long) {
+        selectedTransactionIds.update { current ->
+            if (transactionId in current) current - transactionId else current + transactionId
+        }
+    }
+
+    fun selectAllTransactions(transactionIds: List<Long>) {
+        selectedTransactionIds.value = transactionIds.toSet()
+    }
+
+    fun deleteSelectedTransactions() {
+        val ids = selectedTransactionIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.deleteTransactionsByIds(ids)
+            batchSelectionMode.value = false
+            selectedTransactionIds.value = emptySet()
             val latestTransactions = repository.transactions.first()
             if (latestTransactions.isEmpty()) {
                 refreshState.value = RefreshState.IDLE
@@ -1252,15 +1337,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (quantity <= 0) return "成交数量必须大于 0"
 
         when (draft.selectedType) {
-            TradeType.BUY -> Unit
-
-            TradeType.SELL -> {
-                val position = portfolio.positions[positionKey(resolved.symbol, resolved.market)]
-                if (position == null || position.quantity < quantity) {
-                    return "当前持仓不足，无法完成卖出"
-                }
-            }
-
+            TradeType.BUY, TradeType.SELL -> Unit
             else -> Unit
         }
 
@@ -1290,26 +1367,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
 
-        val normalized = if (normalizedBase.selectedType == TradeType.SELL) {
-            val requestedQuantity = parseQuantity(normalizedBase.quantityLabel)
-            if (requestedQuantity <= 0) {
-                normalizedBase
-            } else {
-                val resolved = resolveSecurity(normalizedBase, positions, lookup)
-                val availableQuantity = resolved
-                    ?.let { positions[positionKey(it.symbol, it.market)]?.quantity }
-                    ?: 0
-                if (resolved == null || requestedQuantity <= availableQuantity || availableQuantity <= 0) {
-                    normalizedBase
-                } else {
-                    normalizedBase.copy(quantityLabel = availableQuantity.toString())
-                }
-            }
-        } else {
-            normalizedBase
-        }
-
-        return applyFeeEstimateRules(normalized)
+        return applyFeeEstimateRules(normalizedBase)
     }
 
     private fun applyFeeEstimateRules(draft: TradeFormState): TradeFormState {
@@ -1583,9 +1641,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         displayCurrency: DisplayCurrency,
         exchangeRates: ExchangeRates,
     ): PortfolioSummary {
-        val aCount = portfolio.positions.values.count { it.market == Market.A_SHARE && it.quantity > 0 }
-        val hkCount = portfolio.positions.values.count { it.market == Market.HONG_KONG && it.quantity > 0 }
-        val usCount = portfolio.positions.values.count { it.market == Market.US && it.quantity > 0 }
+        val aCount = portfolio.positions.values.count { it.market == Market.A_SHARE && it.quantity != 0 }
+        val hkCount = portfolio.positions.values.count { it.market == Market.HONG_KONG && it.quantity != 0 }
+        val usCount = portfolio.positions.values.count { it.market == Market.US && it.quantity != 0 }
         return PortfolioSummary(
             totalAssets = formatDisplayAmount(portfolio.totalAssetsCny, displayCurrency, exchangeRates),
             totalCost = formatDisplayAmount(portfolio.netInflowCny, displayCurrency, exchangeRates),
@@ -1595,6 +1653,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             totalProfit = formatSignedDisplayAmount(portfolio.unrealizedProfitCny, displayCurrency, exchangeRates),
             totalProfitHint = "按现价估算收益率 ${formatSignedPercent(portfolio.unrealizedProfitPercent)}",
             dayProfit = "${formatSignedDisplayAmount(portfolio.dayProfitCny, displayCurrency, exchangeRates)} (${formatSignedPercent(portfolio.dayProfitPercent)})",
+            holdingsValue = formatDisplayAmount(portfolio.holdingsValueCny, displayCurrency, exchangeRates),
+            commissionTotal = formatDisplayAmount(portfolio.totalCommissionCny, displayCurrency, exchangeRates),
+            taxTotal = formatDisplayAmount(portfolio.totalTaxCny, displayCurrency, exchangeRates),
+            tradeCount = "${portfolio.securityTradeCount} 笔",
             refreshState = refresh,
             refreshMessage = when (refresh) {
                 RefreshState.IDLE -> refreshNote.ifBlank { DEFAULT_REFRESH_MESSAGE }
@@ -1633,14 +1695,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private fun buildSellCandidates(
         positions: Map<String, PositionComputation>,
     ): List<SellCandidateUiModel> = positions.values
-        .filter { it.quantity > 0 }
+        .filter { it.quantity != 0 }
         .sortedByDescending { it.quantity }
         .map { position ->
             SellCandidateUiModel(
                 symbol = position.symbol,
                 name = position.name,
                 market = position.market,
-                quantityLabel = "可卖 ${position.quantity} 股",
+                quantityLabel = if (position.quantity > 0) {
+                    "可卖 ${position.quantity} 股"
+                } else {
+                    "空仓 ${-position.quantity} 股"
+                },
                 costLabel = "成本 ${formatMarketAmount(position.averageCost, position.market)}",
             )
         }
@@ -1753,7 +1819,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }),
         )
         val datedTransactions = ordered.mapNotNull { transaction ->
-            parseTradeDateOrNull(transaction.tradeDate)?.let { date -> date to transaction }
+            val market = runCatching { Market.valueOf(transaction.market) }.getOrNull() ?: Market.CASH
+            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
+            date to transaction
         }
         val transactionMap = datedTransactions.groupBy({ it.first }, { it.second })
         val historyByDate = historicalCloses
@@ -1814,28 +1882,86 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                                 realizedProfit = 0.0,
                             )
                         if (tradeType == TradeType.BUY) {
-                            val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
-                            val nextQuantity = current.quantity + transaction.quantity
-                            val nextRemaining = current.remainingCost + buyCost
-                            cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                            )
+                            if (current.quantity < 0) {
+                                // Covering short position
+                                val coverQuantity = minOf(-current.quantity, transaction.quantity)
+                                val coverProfit = (current.averageCost - transaction.price) * coverQuantity
+                                val coverFees = transaction.commission + transaction.tax
+                                val remainingBuyQty = transaction.quantity - coverQuantity
+                                val totalCost = transaction.price * transaction.quantity + coverFees
+                                cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
+                                if (remainingBuyQty > 0) {
+                                    positions[key] = PositionComputation(
+                                        symbol = transaction.symbol,
+                                        name = transaction.name,
+                                        market = market,
+                                        quantity = remainingBuyQty,
+                                        remainingCost = transaction.price * remainingBuyQty,
+                                        averageCost = transaction.price,
+                                        realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                    )
+                                } else {
+                                    val nextQuantity = current.quantity + transaction.quantity
+                                    val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                                    positions[key] = current.copy(
+                                        quantity = nextQuantity,
+                                        remainingCost = nextRemaining,
+                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                        realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                    )
+                                }
+                            } else {
+                                val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
+                                val nextQuantity = current.quantity + transaction.quantity
+                                val nextRemaining = current.remainingCost + buyCost
+                                cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
+                                positions[key] = current.copy(
+                                    quantity = nextQuantity,
+                                    remainingCost = nextRemaining,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                )
+                            }
                         } else {
-                            val sellQuantity = minOf(current.quantity, transaction.quantity)
-                            val removedCost = current.averageCost * sellQuantity
-                            val proceeds = transaction.price * sellQuantity - transaction.commission - transaction.tax
-                            val nextQuantity = (current.quantity - sellQuantity).coerceAtLeast(0)
-                            val nextRemaining = (current.remainingCost - removedCost).coerceAtLeast(0.0)
-                            cashBalanceCny += convertToCny(proceeds, market, exchangeRates)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                                realizedProfit = current.realizedProfit + (proceeds - removedCost),
-                            )
+                            // SELL
+                            if (current.quantity > 0) {
+                                val closeQuantity = minOf(current.quantity, transaction.quantity)
+                                val removedCost = current.averageCost * closeQuantity
+                                val closeProceeds = transaction.price * closeQuantity
+                                val closeProfit = closeProceeds - removedCost
+                                val remainingSellQty = transaction.quantity - closeQuantity
+                                val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                                cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
+                                if (remainingSellQty > 0) {
+                                    positions[key] = PositionComputation(
+                                        symbol = transaction.symbol,
+                                        name = transaction.name,
+                                        market = market,
+                                        quantity = -remainingSellQty,
+                                        remainingCost = -(transaction.price * remainingSellQty),
+                                        averageCost = transaction.price,
+                                        realizedProfit = current.realizedProfit + closeProfit,
+                                    )
+                                } else {
+                                    val nextQuantity = current.quantity - closeQuantity
+                                    val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                                    positions[key] = current.copy(
+                                        quantity = nextQuantity,
+                                        remainingCost = nextRemaining,
+                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                        realizedProfit = current.realizedProfit + closeProfit,
+                                    )
+                                }
+                            } else {
+                                val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                                cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
+                                val nextQuantity = current.quantity - transaction.quantity
+                                val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                                positions[key] = current.copy(
+                                    quantity = nextQuantity,
+                                    remainingCost = nextRemaining,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                )
+                            }
                         }
                     }
                 }
@@ -1846,7 +1972,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val holdingsValueCny = positions.values.sumOf { position ->
-                if (position.quantity <= 0) return@sumOf 0.0
+                if (position.quantity == 0) return@sumOf 0.0
                 val key = positionKey(position.symbol, position.market)
                 val closePrice = latestCloseByPosition[key] ?: position.averageCost
                 convertToCny(closePrice * position.quantity, position.market, exchangeRates)
@@ -1881,7 +2007,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             securityMeta.forEach { (key, security) ->
                 val position = positions[key]
                 val realizedCny = position?.let { convertToCny(it.realizedProfit, it.market, exchangeRates) } ?: 0.0
-                val unrealizedCny = position?.takeIf { it.quantity > 0 }?.let {
+                val unrealizedCny = position?.takeIf { it.quantity != 0 }?.let {
                     val closePrice = latestCloseByPosition[key] ?: it.averageCost
                     convertToCny((closePrice - it.averageCost) * it.quantity, it.market, exchangeRates)
                 } ?: 0.0
@@ -1895,6 +2021,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         cumulativeSecurityProfit
                     },
                     cumulativeProfitCny = cumulativeSecurityProfit,
+                    closePrice = latestCloseByPosition[key],
                 )
                 previousSecurityProfit[key] = cumulativeSecurityProfit
             }
@@ -1902,6 +2029,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             previousTotalAssets = totalAssetsCny
             hasPreviousPoint = true
             cursor = cursor.plusDays(1)
+        }
+
+        // Unify today's P&L with Holdings screen (live mark-to-market)
+        val today = LocalDate.now()
+        if (dailyPoints.isNotEmpty() && dailyPoints.last().date == today) {
+            val lastIdx = dailyPoints.lastIndex
+            val previousCumulative = if (lastIdx > 0) dailyPoints[lastIdx - 1].cumulativeProfitCny else 0.0
+            val liveDailyProfit = portfolio.dayProfitCny
+            dailyPoints[lastIdx] = dailyPoints[lastIdx].copy(
+                dailyProfitCny = liveDailyProfit,
+                cumulativeProfitCny = previousCumulative + liveDailyProfit,
+            )
         }
 
         return ProfitAnalysisUiModel(
@@ -1916,6 +2055,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             },
             netInflowCny = totalDepositCny - totalWithdrawCny,
             latestDate = latestDate,
+            totalCommissionCny = portfolio.totalCommissionCny,
+            totalTaxCny = portfolio.totalTaxCny,
+            securityTradeCount = portfolio.securityTradeCount,
+            transactions = transactions,
         )
     }
 
@@ -1936,8 +2079,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.valueOf(it.market)) }
 
         ordered.forEach { transaction ->
-            val market = Market.valueOf(transaction.market)
-            val date = parseTradeDateOrNull(transaction.tradeDate) ?: return@forEach
+            val market = runCatching { Market.valueOf(transaction.market) }.getOrNull() ?: return@forEach
+            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
                 TradeType.BUY -> {
                     val key = positionKey(transaction.symbol, market)
@@ -1951,14 +2094,46 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
                         )
-                    val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
-                    val nextQuantity = current.quantity + transaction.quantity
-                    val nextRemaining = current.remainingCost + buyCost
-                    positions[key] = current.copy(
-                        quantity = nextQuantity,
-                        remainingCost = nextRemaining,
-                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                    )
+                    if (current.quantity < 0) {
+                        // Covering short position
+                        val coverQuantity = minOf(-current.quantity, transaction.quantity)
+                        val coverProfit = (current.averageCost - transaction.price) * coverQuantity
+                        val coverFees = transaction.commission + transaction.tax
+                        val coverProfitCny = convertToCny(coverProfit - coverFees, market, exchangeRates)
+                        dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
+                        val securityDailyProfit = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                        securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + coverProfitCny
+                        val remainingBuyQty = transaction.quantity - coverQuantity
+                        if (remainingBuyQty > 0) {
+                            positions[key] = PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = remainingBuyQty,
+                                remainingCost = transaction.price * remainingBuyQty,
+                                averageCost = transaction.price,
+                                realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                            )
+                        } else {
+                            val nextQuantity = current.quantity + transaction.quantity
+                            val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                            )
+                        }
+                    } else {
+                        val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
+                        val nextQuantity = current.quantity + transaction.quantity
+                        val nextRemaining = current.remainingCost + buyCost
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = nextRemaining,
+                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                        )
+                    }
                 }
 
                 TradeType.SELL -> {
@@ -1973,22 +2148,48 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
                         )
-                    val sellQuantity = minOf(current.quantity, transaction.quantity)
-                    val removedCost = current.averageCost * sellQuantity
-                    val proceeds = transaction.price * sellQuantity - transaction.commission - transaction.tax
-                    val realizedProfitCny = convertToCny(proceeds - removedCost, market, exchangeRates)
-                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + realizedProfitCny
-                    val securityDailyProfit = securityProfitByDate.getOrPut(key) { linkedMapOf() }
-                    securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + realizedProfitCny
-
-                    val nextQuantity = (current.quantity - sellQuantity).coerceAtLeast(0)
-                    val nextRemaining = (current.remainingCost - removedCost).coerceAtLeast(0.0)
-                    positions[key] = current.copy(
-                        quantity = nextQuantity,
-                        remainingCost = nextRemaining,
-                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                        realizedProfit = current.realizedProfit + (proceeds - removedCost),
-                    )
+                    if (current.quantity > 0) {
+                        // Has long position: sell to close, may open short
+                        val closeQuantity = minOf(current.quantity, transaction.quantity)
+                        val removedCost = current.averageCost * closeQuantity
+                        val closeProceeds = transaction.price * closeQuantity
+                        val closeProfit = closeProceeds - removedCost
+                        val closeProfitCny = convertToCny(closeProfit, market, exchangeRates)
+                        dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + closeProfitCny
+                        val securityDailyProfit = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                        securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + closeProfitCny
+                        val remainingSellQty = transaction.quantity - closeQuantity
+                        if (remainingSellQty > 0) {
+                            positions[key] = PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = -remainingSellQty,
+                                remainingCost = -(transaction.price * remainingSellQty),
+                                averageCost = transaction.price,
+                                realizedProfit = current.realizedProfit + closeProfit,
+                            )
+                        } else {
+                            val nextQuantity = current.quantity - closeQuantity
+                            val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                realizedProfit = current.realizedProfit + closeProfit,
+                            )
+                        }
+                    } else {
+                        // No long position: open/extend short, no realized profit yet
+                        val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                        val nextQuantity = current.quantity - transaction.quantity
+                        val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = nextRemaining,
+                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                        )
+                    }
                 }
 
                 TradeType.DEPOSIT -> {
@@ -2009,7 +2210,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val openProfitAdjustmentCny = portfolio.totalProfitCny - realizedTotalCny
         dailyProfitByDate[latestDate] = dailyProfitByDate.getOrDefault(latestDate, 0.0) + openProfitAdjustmentCny
         positions.values.forEach { position ->
-            if (position.quantity <= 0) return@forEach
+            if (position.quantity == 0) return@forEach
             val key = positionKey(position.symbol, position.market)
             val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
             val unrealizedCny = convertToCny(
@@ -2066,11 +2267,24 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     date = cursor,
                     dailyProfitCny = securityDailyProfit,
                     cumulativeProfitCny = priorCumulative + securityDailyProfit,
+                    closePrice = null,
                 )
             }
             previousTotalAssets = totalAssetsCny
             hasPreviousPoint = true
             cursor = cursor.plusDays(1)
+        }
+
+        // Unify today's P&L with Holdings screen (live mark-to-market)
+        val today = LocalDate.now()
+        if (dailyPoints.isNotEmpty() && dailyPoints.last().date == today) {
+            val lastIdx = dailyPoints.lastIndex
+            val previousCumulative = if (lastIdx > 0) dailyPoints[lastIdx - 1].cumulativeProfitCny else 0.0
+            val liveDailyProfit = portfolio.dayProfitCny
+            dailyPoints[lastIdx] = dailyPoints[lastIdx].copy(
+                dailyProfitCny = liveDailyProfit,
+                cumulativeProfitCny = previousCumulative + liveDailyProfit,
+            )
         }
 
         return ProfitAnalysisUiModel(
@@ -2085,6 +2299,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             },
             netInflowCny = portfolio.netInflowCny,
             latestDate = latestDate,
+            totalCommissionCny = portfolio.totalCommissionCny,
+            totalTaxCny = portfolio.totalTaxCny,
+            securityTradeCount = portfolio.securityTradeCount,
+            transactions = transactions,
         )
     }
 
@@ -2097,8 +2315,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         var cashBalanceCny = 0.0
         var totalDepositCny = 0.0
         var totalWithdrawCny = 0.0
+        var totalCommissionCny = 0.0
+        var totalTaxCny = 0.0
+        var securityTradeCount = 0
         val ordered = transactions.sortedWith(
-            compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }),
+            compareBy<TransactionEntity>({
+                val m = runCatching { Market.valueOf(it.market) }.getOrNull() ?: Market.CASH
+                effectiveTradeDate(it.tradeDate, it.tradeTime, m).toString()
+            }, { it.tradeTime }, { it.createdAt }),
         )
 
         ordered.forEach { transaction ->
@@ -2117,6 +2341,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 }
 
                 TradeType.BUY, TradeType.SELL -> {
+                    totalCommissionCny += convertToCny(transaction.commission, market, exchangeRates)
+                    totalTaxCny += convertToCny(transaction.tax, market, exchangeRates)
+                    securityTradeCount += 1
                     val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
                         ?: PositionComputation(
@@ -2130,28 +2357,93 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         )
 
                     positions[key] = if (tradeType == TradeType.BUY) {
-                        val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
-                        val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + buyCost
-                        cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
-                        current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                        )
+                        if (current.quantity < 0) {
+                            // Covering short position
+                            val coverQuantity = minOf(-current.quantity, transaction.quantity)
+                            val coverProfit = (current.averageCost - transaction.price) * coverQuantity
+                            val coverFees = transaction.commission + transaction.tax
+                            val remainingBuyQty = transaction.quantity - coverQuantity
+                            val totalCost = transaction.price * transaction.quantity + coverFees
+                            cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
+                            if (remainingBuyQty > 0) {
+                                // Covered fully, opened long with remainder
+                                PositionComputation(
+                                    symbol = transaction.symbol,
+                                    name = transaction.name,
+                                    market = market,
+                                    quantity = remainingBuyQty,
+                                    remainingCost = transaction.price * remainingBuyQty,
+                                    averageCost = transaction.price,
+                                    realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                )
+                            } else {
+                                // Partial or full cover, no new position
+                                val nextQuantity = current.quantity + transaction.quantity
+                                val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                                current.copy(
+                                    quantity = nextQuantity,
+                                    remainingCost = nextRemaining,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                    realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                )
+                            }
+                        } else {
+                            // Normal buy
+                            val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
+                            val nextQuantity = current.quantity + transaction.quantity
+                            val nextRemaining = current.remainingCost + buyCost
+                            cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
+                            current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
                     } else {
-                        val sellQuantity = minOf(current.quantity, transaction.quantity)
-                        val removedCost = current.averageCost * sellQuantity
-                        val proceeds = transaction.price * sellQuantity - transaction.commission - transaction.tax
-                        val nextQuantity = (current.quantity - sellQuantity).coerceAtLeast(0)
-                        val nextRemaining = (current.remainingCost - removedCost).coerceAtLeast(0.0)
-                        cashBalanceCny += convertToCny(proceeds, market, exchangeRates)
-                        current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                            realizedProfit = current.realizedProfit + (proceeds - removedCost),
-                        )
+                        // SELL
+                        if (current.quantity > 0) {
+                            // Has long position: sell to close, may open short if oversold
+                            val closeQuantity = minOf(current.quantity, transaction.quantity)
+                            val removedCost = current.averageCost * closeQuantity
+                            val closeProceeds = transaction.price * closeQuantity
+                            val closeProfit = closeProceeds - removedCost
+                            val remainingSellQty = transaction.quantity - closeQuantity
+                            val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                            cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
+                            if (remainingSellQty > 0) {
+                                // Closed long, opened short with remainder
+                                PositionComputation(
+                                    symbol = transaction.symbol,
+                                    name = transaction.name,
+                                    market = market,
+                                    quantity = -remainingSellQty,
+                                    remainingCost = -(transaction.price * remainingSellQty),
+                                    averageCost = transaction.price,
+                                    realizedProfit = current.realizedProfit + closeProfit,
+                                )
+                            } else {
+                                // Partial or full close of long
+                                val nextQuantity = current.quantity - closeQuantity
+                                val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                                current.copy(
+                                    quantity = nextQuantity,
+                                    remainingCost = nextRemaining,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                    realizedProfit = current.realizedProfit + closeProfit,
+                                )
+                            }
+                        } else {
+                            // No long position (quantity <= 0): open/extend short
+                            val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                            cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
+                            val nextQuantity = current.quantity - transaction.quantity
+                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                            current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
                     }
                 }
             }
@@ -2159,7 +2451,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.valueOf(it.market)) }
         val holdings = positions.values
-            .filter { it.quantity > 0 }
+            .filter { it.quantity != 0 }
             .map { position ->
                 val quote = quoteMap[positionKey(position.symbol, position.market)]
                 val currentPrice = quote?.currentPrice
@@ -2175,8 +2467,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     null
                 }
-                val totalProfitPercent = if (unrealized != null && position.remainingCost > 0.0) {
-                    (unrealized / position.remainingCost) * 100.0
+                val totalProfitPercent = if (unrealized != null && position.remainingCost != 0.0) {
+                    (unrealized / position.remainingCost.absoluteValue) * 100.0
                 } else {
                     null
                 }
@@ -2186,7 +2478,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     name = position.name,
                     code = position.symbol,
                     market = position.market,
-                    quantityLabel = "${position.quantity} 股",
+                    quantityLabel = if (position.quantity < 0) "空仓 ${-position.quantity} 股" else "${position.quantity} 股",
                     costLabel = "成本 ${formatMarketAmount(position.averageCost, position.market)}",
                     priceLabel = currentPrice?.let { formatMarketAmount(it, position.market) } ?: "--",
                     changeLabel = dayPercent?.let(::formatSignedPercent) ?: "价格暂不可用",
@@ -2245,6 +2537,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             holdings = holdings,
             positions = positions,
             totalAssetsCny = totalAssetsCny,
+            holdingsValueCny = holdingsValueCny,
             cashBalanceCny = cashBalanceCny,
             totalDepositCny = totalDepositCny,
             totalWithdrawCny = totalWithdrawCny,
@@ -2258,6 +2551,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             dayProfitPercent = if (previousAssetValueCny == 0.0) 0.0 else {
                 (dayProfitCny / previousAssetValueCny) * 100.0
             },
+            totalCommissionCny = totalCommissionCny,
+            totalTaxCny = totalTaxCny,
+            securityTradeCount = securityTradeCount,
         )
     }
 
@@ -2322,6 +2618,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         LocalDate.parse(value)
     }.getOrNull()
 
+    private fun effectiveTradeDate(tradeDate: String, tradeTime: String, market: Market): LocalDate {
+        val date = parseTradeDateOrNull(tradeDate) ?: LocalDate.parse(tradeDate)
+        return if (market == Market.US && tradeTime < US_TIMEZONE_CUTOFF) {
+            date.minusDays(1)
+        } else {
+            date
+        }
+    }
+
     private fun parseTradeTimeOrNull(value: String): LocalTime? = runCatching {
         LocalTime.parse(value)
     }.getOrNull()
@@ -2355,13 +2660,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun buildTradeFeeEstimateContext(draft: TradeFormState): TradeFeeEstimateContext {
-        return if (draft.platform == BrokerPlatform.HSBC) {
-            TradeFeeEstimateContext(
-                monthlyTurnoverHkdBeforeTrade = calculateHsbcMonthlyTurnoverHkdBeforeTrade(draft),
-            )
-        } else {
-            TradeFeeEstimateContext()
-        }
+        val promo = zhuoruiPromoConfig.value
+        val tradeDate = parseTradeDateOrNull(draft.tradeDate)
+        return TradeFeeEstimateContext(
+            monthlyTurnoverHkdBeforeTrade = if (draft.platform == BrokerPlatform.HSBC) {
+                calculateHsbcMonthlyTurnoverHkdBeforeTrade(draft)
+            } else {
+                null
+            },
+            zhuoruiCommissionFreeEndDate = promo.endDate,
+            tradeDate = tradeDate,
+        )
     }
 
     private fun calculateHsbcMonthlyTurnoverHkdBeforeTrade(draft: TradeFormState): Double {
@@ -2574,6 +2883,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val holdings: List<HoldingUiModel>,
         val positions: Map<String, PositionComputation>,
         val totalAssetsCny: Double,
+        val holdingsValueCny: Double,
         val cashBalanceCny: Double,
         val totalDepositCny: Double,
         val totalWithdrawCny: Double,
@@ -2583,6 +2893,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val unrealizedProfitPercent: Double,
         val dayProfitCny: Double,
         val dayProfitPercent: Double,
+        val totalCommissionCny: Double,
+        val totalTaxCny: Double,
+        val securityTradeCount: Int,
     )
 
     private data class PortfolioContext(
@@ -2633,6 +2946,7 @@ private data class RefreshMeta(
         holdings = emptyList(),
         positions = emptyMap(),
         totalAssetsCny = 0.0,
+        holdingsValueCny = 0.0,
         cashBalanceCny = 0.0,
         totalDepositCny = 0.0,
         totalWithdrawCny = 0.0,
@@ -2642,6 +2956,9 @@ private data class RefreshMeta(
         unrealizedProfitPercent = 0.0,
         dayProfitCny = 0.0,
         dayProfitPercent = 0.0,
+        totalCommissionCny = 0.0,
+        totalTaxCny = 0.0,
+        securityTradeCount = 0,
     )
 
     private fun loadSavedDisplayCurrency(): DisplayCurrency {
@@ -2699,6 +3016,19 @@ private data class RefreshMeta(
             .toMap()
     }
 
+    private fun loadZhuoruiPromoConfig(): ZhuoruiPromoConfig {
+        val startDate = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PROMO_START_DATE, null).orEmpty()
+        val durationDays = preferences.getInt(StockLedgerPreferences.KEY_ZHUORUI_PROMO_DURATION_DAYS, 100)
+        return ZhuoruiPromoConfig(startDate = startDate, durationDays = durationDays)
+    }
+
+    private fun saveZhuoruiPromoConfigToPrefs(config: ZhuoruiPromoConfig) {
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_PROMO_START_DATE, config.startDate)
+            .putInt(StockLedgerPreferences.KEY_ZHUORUI_PROMO_DURATION_DAYS, config.durationDays)
+            .apply()
+    }
+
     private fun saveEnabledPlatforms(platforms: List<BrokerPlatform>) {
         preferences.edit()
             .putStringSet(
@@ -2741,6 +3071,66 @@ private data class RefreshMeta(
 
     private fun loadZhuoruiEmailLastSyncAt(): Long {
         return preferences.getLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, 0L)
+    }
+
+    private fun loadZhuoruiStatementPdfPassword(): String {
+        return preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, "").orEmpty()
+    }
+
+    fun updateZhuoruiStatementPdfPassword(password: String) {
+        zhuoruiStatementPdfPassword.value = password
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, password)
+            .apply()
+    }
+
+    fun importZhuoruiStatementPdfs(uris: List<Uri>) {
+        val password = zhuoruiStatementPdfPassword.value
+        if (password.isBlank()) {
+            zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
+            return
+        }
+        if (uris.isEmpty()) {
+            zhuoruiStatementPdfImportStatusMessage.value = "请选择要导入的PDF文件"
+            return
+        }
+
+        viewModelScope.launch {
+            zhuoruiStatementPdfImportStatusMessage.value = "正在导入${uris.size}个PDF文件..."
+            var totalImported = 0
+            var totalDuplicate = 0
+            var totalFailed = 0
+
+            for (uri in uris) {
+                runCatching {
+                    val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                    inputStream?.use { stream ->
+                        val results = repository.importZhuoruiStatementPdf(stream, password)
+                        for (result in results) {
+                            when (result.outcome) {
+                                com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
+                                com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                else -> totalFailed++
+                            }
+                        }
+                    }
+                }.onFailure { error ->
+                    totalFailed++
+                    android.util.Log.e("LedgerViewModel", "PDF导入失败: ${error.message}", error)
+                }
+            }
+
+            val message = buildString {
+                append("导入完成：")
+                if (totalImported > 0) append("新增 $totalImported 条 ")
+                if (totalDuplicate > 0) append("重复 $totalDuplicate 条 ")
+                if (totalFailed > 0) append("失败 $totalFailed 个文件")
+                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0) {
+                    append("未找到可导入的交易记录")
+                }
+            }
+            zhuoruiStatementPdfImportStatusMessage.value = message
+        }
     }
 
     private fun reconcileZhuoruiEmailAutoSync() {

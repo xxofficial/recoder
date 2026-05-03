@@ -60,6 +60,9 @@ interface LedgerDao {
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: Long): Int
 
+    @Query("DELETE FROM transactions WHERE id IN (:ids)")
+    suspend fun deleteTransactionsByIds(ids: List<Long>): Int
+
     @Query("DELETE FROM quote_snapshots WHERE symbol = :symbol AND market = :market")
     suspend fun deleteQuoteByHolding(symbol: String, market: String)
 
@@ -79,4 +82,13 @@ interface LedgerDao {
 
     @Query("SELECT MAX(lastUpdatedAt) FROM quote_snapshots")
     suspend fun latestQuoteRefreshTimestamp(): Long?
+
+    @Query(
+        """
+        SELECT name FROM quote_snapshots
+        WHERE symbol = :symbol AND market = :market AND name != ''
+        LIMIT 1
+        """,
+    )
+    suspend fun findStockNameFromQuotes(symbol: String, market: String): String?
 }

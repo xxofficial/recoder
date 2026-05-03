@@ -10,4 +10,6 @@ local.properties
 app/release/
 backups/phone-prod/
 tmp/
-
+Statements/
+.claude/
+.vscode/

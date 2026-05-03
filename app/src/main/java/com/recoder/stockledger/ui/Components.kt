@@ -33,7 +33,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
@@ -350,56 +353,74 @@ fun OutlineActionButton(
 fun PlatformTopBar(
     selectedPlatform: BrokerPlatform?,
     onClick: () -> Unit,
+    onSettingsClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (selectedPlatform != null) {
-            PlatformLogoBadge(
-                platform = selectedPlatform,
-                modifier = Modifier.size(42.dp),
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SurfaceSecondary),
-                contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clickable(onClick = onClick),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selectedPlatform != null) {
+                PlatformLogoBadge(
+                    platform = selectedPlatform,
+                    modifier = Modifier.size(42.dp),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(SurfaceSecondary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "汇",
+                        color = ForegroundPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "汇",
+                    text = selectedPlatform?.label ?: "汇总",
                     color = ForegroundPrimary,
-                    fontSize = 16.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Icon(
+                    imageVector = Icons.Filled.Tune,
+                    contentDescription = "切换平台",
+                    tint = ForegroundPrimary,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
 
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = selectedPlatform?.label ?: "汇总",
-                color = ForegroundPrimary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        if (onSettingsClick != null) {
             Icon(
-                imageVector = Icons.Filled.Tune,
-                contentDescription = "切换平台",
+                imageVector = Icons.Filled.Settings,
+                contentDescription = "设置",
                 tint = ForegroundPrimary,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier
+                    .size(24.dp)
+                    .clickable(onClick = onSettingsClick),
             )
         }
     }
@@ -657,6 +678,8 @@ fun SymbolSuggestionSection(
 fun TransactionRow(
     item: TransactionUiModel,
     onClick: () -> Unit,
+    isSelected: Boolean = false,
+    showCheckbox: Boolean = false,
 ) {
     val (badgeBackground, badgeForeground) = tradeTypeColors(item.tradeType)
     Row(
@@ -669,6 +692,17 @@ fun TransactionRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top,
     ) {
+        if (showCheckbox) {
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = null,
+                colors = CheckboxDefaults.colors(
+                    checkedColor = ForegroundPrimary,
+                    uncheckedColor = ForegroundMuted,
+                ),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(10.dp),

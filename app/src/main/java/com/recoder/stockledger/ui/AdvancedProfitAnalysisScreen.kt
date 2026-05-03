@@ -51,12 +51,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.ExchangeRates
+import com.recoder.stockledger.data.Market
+import com.recoder.stockledger.data.TradeType
+import com.recoder.stockledger.data.local.TransactionEntity
 import com.recoder.stockledger.data.ProfitAnalysisPointUiModel
 import com.recoder.stockledger.data.ProfitAnalysisUiModel
 import com.recoder.stockledger.data.SecurityProfitAnalysisUiModel
@@ -71,6 +75,7 @@ import com.recoder.stockledger.ui.theme.MarketDown
 import com.recoder.stockledger.ui.theme.MarketDownSoft
 import com.recoder.stockledger.ui.theme.MarketUp
 import com.recoder.stockledger.ui.theme.MarketUpSoft
+import com.recoder.stockledger.ui.theme.StockLedgerTheme
 import com.recoder.stockledger.ui.theme.SurfaceInverse
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import java.text.DecimalFormat
@@ -158,8 +163,11 @@ fun AdvancedProfitAnalysisRoute(
     exchangeRates: ExchangeRates,
     selectedPlatform: BrokerPlatform?,
     onPlatformClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
+    onSecurityClick: (String, String) -> Unit = { _, _ -> },
+    onViewFullRanking: () -> Unit = {},
 ) {
     var selectedRange by rememberSaveable { mutableStateOf(AdvancedProfitRange.THIS_MONTH) }
     var chartMetric by rememberSaveable { mutableStateOf(AdvancedChartMetric.RETURN) }
@@ -228,6 +236,25 @@ fun AdvancedProfitAnalysisRoute(
             rangeEnd = rangeEnd,
         )
     }
+    val rangeFeeStats = remember(analysis.transactions, rangeStart, rangeEnd, exchangeRates) {
+        val rangeTxns = analysis.transactions.filter { txn ->
+            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+            tradeType?.isSecurityTrade == true &&
+                txn.tradeDate >= rangeStart.toString() &&
+                txn.tradeDate <= rangeEnd.toString()
+        }
+        Triple(
+            rangeTxns.sumOf { txn ->
+                val market = runCatching { Market.valueOf(txn.market) }.getOrNull() ?: Market.US
+                txn.commission * exchangeRates.rateToCny(market)
+            },
+            rangeTxns.sumOf { txn ->
+                val market = runCatching { Market.valueOf(txn.market) }.getOrNull() ?: Market.US
+                txn.tax * exchangeRates.rateToCny(market)
+            },
+            rangeTxns.size,
+        )
+    }
     val securityStats = remember(analysis.securityAnalyses, rangeStart, rangeEnd) {
         analysis.securityAnalyses
             .mapNotNull { buildAdvancedSecurityRangeStats(it, rangeStart, rangeEnd) }
@@ -249,15 +276,16 @@ fun AdvancedProfitAnalysisRoute(
             PlatformTopBar(
                 selectedPlatform = selectedPlatform,
                 onClick = onPlatformClick,
+                onSettingsClick = onSettingsClick,
                 modifier = Modifier.statusBarsPadding(),
             )
 
+            // Fixed time range selector (stays at top when scrolling)
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 SegmentRow(
                     options = AdvancedProfitRange.entries,
@@ -285,7 +313,16 @@ fun AdvancedProfitAnalysisRoute(
                         )
                     }
                 }
+            }
 
+            // Scrollable content
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, top = 0.dp, bottom = 120.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
                 AdvancedSummaryBlock(
                     stats = rangeStats,
                     displayCurrency = displayCurrency,
@@ -311,6 +348,30 @@ fun AdvancedProfitAnalysisRoute(
                     )
                 }
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    AnalysisStatCard(
+                        title = "佣金/平台费",
+                        value = advancedFormatUnsignedAmount(rangeFeeStats.first, displayCurrency, exchangeRates),
+                        valueColor = ForegroundPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    AnalysisStatCard(
+                        title = "税费",
+                        value = advancedFormatUnsignedAmount(rangeFeeStats.second, displayCurrency, exchangeRates),
+                        valueColor = ForegroundPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    AnalysisStatCard(
+                        title = "交易次数",
+                        value = "${rangeFeeStats.third} 笔",
+                        valueColor = ForegroundPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
                 AdvancedChartSection(
                     points = rangePoints,
                     stats = rangeStats,
@@ -320,17 +381,7 @@ fun AdvancedProfitAnalysisRoute(
                     onMetricSelected = { chartMetric = it },
                 )
 
-                if (selectedSecurityStats != null) {
-                    AdvancedSecuritySection(
-                        stats = securityStats,
-                        selectedKey = selectedSecurityKey,
-                        onSelected = { selectedSecurityKey = it },
-                        selectedStats = selectedSecurityStats,
-                        displayCurrency = displayCurrency,
-                        exchangeRates = exchangeRates,
-                    )
-                }
-
+                // Calendar before leaderboard
                 AdvancedCalendarSection(
                     points = allPoints,
                     latestDate = analysis.latestDate,
@@ -345,6 +396,16 @@ fun AdvancedProfitAnalysisRoute(
                     onPreviousPage = { pageOffset -= 1 },
                     onNextPage = { pageOffset += 1 },
                 )
+
+                if (securityStats.isNotEmpty()) {
+                    AdvancedSecuritySection(
+                        stats = securityStats,
+                        displayCurrency = displayCurrency,
+                        exchangeRates = exchangeRates,
+                        onSecurityClick = onSecurityClick,
+                        onViewFullRanking = onViewFullRanking,
+                    )
+                }
             }
         }
 
@@ -569,7 +630,7 @@ private fun AdvancedTrendChart(
             verticalAlignment = Alignment.Top,
         ) {
             Column(
-                modifier = Modifier.height(180.dp).width(72.dp),
+                modifier = Modifier.height(180.dp).width(52.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.End,
             ) {
@@ -693,7 +754,7 @@ private fun AdvancedTrendChart(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 80.dp),
+                .padding(start = 60.dp),
         ) {
             labels.forEachIndexed { index, label ->
                 Box(
@@ -720,12 +781,19 @@ private fun AdvancedTrendChart(
 @Composable
 private fun AdvancedSecuritySection(
     stats: List<AdvancedSecurityRangeStats>,
-    selectedKey: String,
-    onSelected: (String) -> Unit,
-    selectedStats: AdvancedSecurityRangeStats,
     displayCurrency: DisplayCurrency,
     exchangeRates: ExchangeRates,
+    onSecurityClick: (String, String) -> Unit,
+    onViewFullRanking: () -> Unit,
 ) {
+    var showProfit by rememberSaveable { mutableStateOf(true) }
+    val ranked = if (showProfit) {
+        stats.filter { it.totalProfitCny > 0 }.sortedByDescending { it.totalProfitCny }
+    } else {
+        stats.filter { it.totalProfitCny < 0 }.sortedBy { it.totalProfitCny }
+    }
+    val top5 = ranked.take(5)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -735,20 +803,16 @@ private fun AdvancedSecuritySection(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            text = "个股区间盈亏",
+            text = "区间盈亏排行",
             color = ForegroundPrimary,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
         )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            stats.forEach { item ->
-                val selected = item.key == selectedKey
+        // Tab chips
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(true to "盈利Top5", false to "亏损Top5").forEach { (isProfit, label) ->
+                val selected = showProfit == isProfit
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
@@ -758,62 +822,89 @@ private fun AdvancedSecuritySection(
                             color = BorderSubtle,
                             shape = RoundedCornerShape(999.dp),
                         )
-                        .clickable { onSelected(item.key) }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .clickable { showProfit = isProfit }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        text = "${item.name} ${item.symbol}",
+                        text = label,
                         color = if (selected) BackgroundPrimary else ForegroundPrimary,
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
         }
 
-        Text(
-            text = "${selectedStats.name} ${selectedStats.symbol} · ${selectedStats.marketLabel}",
-            color = ForegroundSecondary,
-            fontSize = 13.sp,
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            AnalysisStatCard(
-                title = "区间盈亏",
-                value = advancedFormatSignedAmount(selectedStats.totalProfitCny, displayCurrency, exchangeRates),
-                valueColor = advancedTrendColor(selectedStats.totalProfitCny),
-                background = BackgroundPrimary,
-                modifier = Modifier.weight(1f),
+        // Leaderboard list
+        if (top5.isEmpty()) {
+            Text(
+                text = if (showProfit) "当前区间内没有盈利的股票" else "当前区间内没有亏损的股票",
+                color = ForegroundMuted,
+                fontSize = 13.sp,
             )
-            AnalysisStatCard(
-                title = "胜率",
-                value = advancedFormatWinRate(selectedStats.winRate),
-                valueColor = ForegroundPrimary,
-                background = BackgroundPrimary,
-                modifier = Modifier.weight(1f),
-            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                top5.forEachIndexed { index, item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSecurityClick(item.symbol, item.marketLabel) }
+                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "${index + 1}",
+                            color = ForegroundMuted,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.width(24.dp),
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.name,
+                                color = ForegroundPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                text = "${item.symbol} · ${item.marketLabel}",
+                                color = ForegroundMuted,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = advancedFormatSignedAmount(item.totalProfitCny, displayCurrency, exchangeRates),
+                                color = advancedTrendColor(item.totalProfitCny),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = ForegroundMuted,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        // View full ranking link
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onViewFullRanking() }
+                .padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            AnalysisStatCard(
-                title = "日均盈亏",
-                value = advancedFormatSignedAmount(selectedStats.averageDailyProfitCny, displayCurrency, exchangeRates),
-                valueColor = advancedTrendColor(selectedStats.averageDailyProfitCny),
-                background = BackgroundPrimary,
-                modifier = Modifier.weight(1f),
-            )
-            AnalysisStatCard(
-                title = "最佳单日",
-                value = advancedFormatSignedAmount(selectedStats.bestDayProfitCny, displayCurrency, exchangeRates),
-                valueColor = advancedTrendColor(selectedStats.bestDayProfitCny),
-                background = BackgroundPrimary,
-                modifier = Modifier.weight(1f),
+            Text(
+                text = "查看完整排行 >",
+                color = AdvancedAnalysisLineColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
             )
         }
     }
@@ -1509,5 +1600,247 @@ private fun advancedFormatCompactValue(
     return when (unit) {
         AdvancedValueUnit.AMOUNT -> "$sign${advancedNumberFormatter.format(advancedConvertFromCny(value.absoluteValue, displayCurrency, exchangeRates))}"
         AdvancedValueUnit.PERCENT -> "$sign${advancedNumberFormatter.format(value.absoluteValue)}%"
+    }
+}
+
+// ── Full Ranking Page ──────────────────────────────────────────────
+
+@Composable
+fun FullRankingRoute(
+    analysis: ProfitAnalysisUiModel,
+    displayCurrency: DisplayCurrency,
+    exchangeRates: ExchangeRates,
+    onBack: () -> Unit,
+    onSecurityClick: (String, String) -> Unit,
+    onDestinationSelected: (TopLevelDestination) -> Unit,
+) {
+    var selectedRange by rememberSaveable { mutableStateOf(AdvancedProfitRange.ALL) }
+    var customStart by rememberSaveable { mutableStateOf(analysis.dailyPoints.minOfOrNull { it.date }?.toString().orEmpty()) }
+    var customEnd by rememberSaveable { mutableStateOf(analysis.latestDate.toString()) }
+    var showProfit by rememberSaveable { mutableStateOf(true) }
+    var sortAscending by rememberSaveable { mutableStateOf(false) }
+
+    val allPoints = remember(analysis) {
+        analysis.dailyPoints.sortedBy { it.date }.ifEmpty {
+            listOf(ProfitAnalysisPointUiModel(date = analysis.latestDate, dailyProfitCny = 0.0, cumulativeProfitCny = 0.0))
+        }
+    }
+    val firstDate = allPoints.firstOrNull()?.date ?: analysis.latestDate
+
+    val (rangeStart, rangeEnd) = remember(selectedRange, customStart, customEnd, firstDate, analysis.latestDate) {
+        resolveAdvancedRangeWindow(
+            latestDate = analysis.latestDate,
+            firstDate = firstDate,
+            range = selectedRange,
+            customStart = customStart,
+            customEnd = customEnd,
+        )
+    }
+    val securityStats = remember(analysis.securityAnalyses, rangeStart, rangeEnd) {
+        analysis.securityAnalyses
+            .mapNotNull { buildAdvancedSecurityRangeStats(it, rangeStart, rangeEnd) }
+    }
+    val filtered = remember(securityStats, showProfit) {
+        if (showProfit) securityStats.filter { it.totalProfitCny > 0 }
+        else securityStats.filter { it.totalProfitCny < 0 }
+    }
+    val sorted = remember(filtered, sortAscending) {
+        if (sortAscending) filtered.sortedBy { it.totalProfitCny }
+        else filtered.sortedByDescending { it.totalProfitCny }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BackgroundPrimary),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            ScreenHeader(title = "盈亏排行", onBack = onBack)
+
+            // Fixed: time range selector + tabs
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 0.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SegmentRow(
+                    options = AdvancedProfitRange.entries,
+                    selected = selectedRange,
+                    label = { it.label },
+                    onSelected = { selectedRange = it },
+                )
+                if (selectedRange == AdvancedProfitRange.CUSTOM) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        AdvancedDateField(
+                            label = "开始日期",
+                            value = customStart,
+                            modifier = Modifier.weight(1f),
+                            onValueChange = { customStart = it },
+                        )
+                        AdvancedDateField(
+                            label = "结束日期",
+                            value = customEnd,
+                            modifier = Modifier.weight(1f),
+                            onValueChange = { customEnd = it },
+                        )
+                    }
+                }
+
+                // Tab chips + sort toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(true to "盈利排行", false to "亏损排行").forEach { (isProfit, label) ->
+                            val selected = showProfit == isProfit
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (selected) SurfaceInverse else BackgroundPrimary)
+                                    .border(
+                                        width = if (selected) 0.dp else 1.dp,
+                                        color = BorderSubtle,
+                                        shape = RoundedCornerShape(999.dp),
+                                    )
+                                    .clickable {
+                                        showProfit = isProfit
+                                        sortAscending = !isProfit
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (selected) BackgroundPrimary else ForegroundPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(BackgroundPrimary)
+                            .border(width = 1.dp, color = BorderSubtle, shape = RoundedCornerShape(999.dp))
+                            .clickable { sortAscending = !sortAscending }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = if (sortAscending) "升序" else "降序",
+                            color = ForegroundMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+
+            // Scrollable ranking list
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, bottom = 120.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (sorted.isEmpty()) {
+                    Text(
+                        text = if (showProfit) "当前区间内没有盈利的股票" else "当前区间内没有亏损的股票",
+                        color = ForegroundMuted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 32.dp),
+                    )
+                } else {
+                    sorted.forEachIndexed { index, item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSecurityClick(item.symbol, item.marketLabel) }
+                                .padding(horizontal = 8.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "${index + 1}",
+                                color = ForegroundMuted,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(28.dp),
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.name,
+                                    color = ForegroundPrimary,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    text = "${item.symbol} · ${item.marketLabel}",
+                                    color = ForegroundMuted,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = advancedFormatSignedAmount(item.totalProfitCny, displayCurrency, exchangeRates),
+                                    color = advancedTrendColor(item.totalProfitCny),
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = ForegroundMuted,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        BottomPillNavigation(
+            current = TopLevelDestination.ANALYSIS,
+            onDestinationSelected = onDestinationSelected,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun AdvancedProfitAnalysisRoutePreview() {
+    StockLedgerTheme {
+        AdvancedProfitAnalysisRoute(
+            analysis = PreviewFixtures.profitAnalysis,
+            displayCurrency = DisplayCurrency.CNY,
+            exchangeRates = PreviewFixtures.exchangeRates,
+            selectedPlatform = BrokerPlatform.HSBC,
+            onPlatformClick = {},
+            onSettingsClick = {},
+            onDisplayCurrencySelected = {},
+            onDestinationSelected = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun FullRankingRoutePreview() {
+    StockLedgerTheme {
+        FullRankingRoute(
+            analysis = PreviewFixtures.profitAnalysis,
+            displayCurrency = DisplayCurrency.CNY,
+            exchangeRates = PreviewFixtures.exchangeRates,
+            onBack = {},
+            onSecurityClick = { _, _ -> },
+            onDestinationSelected = {},
+        )
     }
 }

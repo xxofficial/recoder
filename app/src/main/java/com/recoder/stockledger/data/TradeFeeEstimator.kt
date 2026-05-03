@@ -2,6 +2,7 @@ package com.recoder.stockledger.data
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.LocalDate
 import kotlin.math.min
 
 enum class FeeEstimateCoverage {
@@ -18,6 +19,8 @@ data class TradeFeePlanOption(
 
 data class TradeFeeEstimateContext(
     val monthlyTurnoverHkdBeforeTrade: Double? = null,
+    val zhuoruiCommissionFreeEndDate: LocalDate? = null,
+    val tradeDate: LocalDate? = null,
 )
 
 data class TradeFeeEstimate(
@@ -326,7 +329,7 @@ object TradeFeeEstimator {
             BrokerPlatform.LONGBRIDGE -> estimateLongbridge(market, tradeType, price, quantity, profile)
             BrokerPlatform.HSBC -> estimateHsbc(market, tradeType, price, quantity, profile, context)
             BrokerPlatform.WEBULL -> estimateWebull(market, tradeType, price, quantity, profile)
-            BrokerPlatform.ZHUORUI -> estimateZhuorui(market, tradeType, price, quantity, profile)
+            BrokerPlatform.ZHUORUI -> estimateZhuorui(market, tradeType, price, quantity, profile, context)
             else -> unsupportedEstimate(profile.note)
         }
     }
@@ -534,10 +537,12 @@ object TradeFeeEstimator {
         price: Double,
         quantity: Int,
         profile: TradeFeeProfile,
+        context: TradeFeeEstimateContext = TradeFeeEstimateContext(),
     ): TradeFeeEstimate = when (market) {
         Market.HONG_KONG -> {
             val amount = amount(price, quantity)
-            val commission = max(amount * bd("0.0003"), bd(3))
+            val standardCommission = max(amount * bd("0.0003"), bd(3))
+            val commission = if (isZhuoruiCommissionFree(profile, context)) bd(0) else standardCommission
             val platformFee = if (profile.planId == PLAN_ZHUORUI_LEGACY_CUSTOMER) bd(0) else bd(12)
             val charges = hkMarketCharges(amount, settlementRule = HkSettlementRule.ZHUORUI)
             buildEstimate(
@@ -553,7 +558,8 @@ object TradeFeeEstimator {
         Market.US -> {
             val shareCount = bd(quantity)
             val amount = amount(price, quantity)
-            val commission = max(bd("0.0049") * shareCount, bd("0.99"))
+            val standardCommission = max(bd("0.0049") * shareCount, bd("0.99"))
+            val commission = if (isZhuoruiCommissionFree(profile, context)) bd(0) else standardCommission
             val platformFee = if (profile.planId == PLAN_ZHUORUI_LEGACY_CUSTOMER) {
                 bd(0)
             } else {
@@ -577,7 +583,8 @@ object TradeFeeEstimator {
 
         Market.A_SHARE -> {
             val amount = amount(price, quantity)
-            val commission = max(amount * bd("0.0003"), bd(3))
+            val standardCommission = max(amount * bd("0.0003"), bd(3))
+            val commission = if (isZhuoruiCommissionFree(profile, context)) bd(0) else standardCommission
             val platformFee = if (profile.planId == PLAN_ZHUORUI_LEGACY_CUSTOMER) bd(0) else bd(12)
             val charges = mutableListOf<Pair<String, BigDecimal>>()
             charges += "经手费" to max(amount * bd("0.0000341"), bd("0.01"))
@@ -597,6 +604,16 @@ object TradeFeeEstimator {
         }
 
         else -> unsupportedEstimate(profile.note)
+    }
+
+    private fun isZhuoruiCommissionFree(
+        profile: TradeFeeProfile,
+        context: TradeFeeEstimateContext,
+    ): Boolean {
+        if (profile.planId != PLAN_ZHUORUI_NEW_CUSTOMER) return false
+        val endDate = context.zhuoruiCommissionFreeEndDate ?: return false
+        val tradeDate = context.tradeDate ?: return false
+        return !tradeDate.isAfter(endDate)
     }
 
     private fun hsbcTrade25CommissionHk(

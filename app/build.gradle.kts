@@ -37,6 +37,10 @@ android {
         }
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -87,6 +91,7 @@ dependencies {
     implementation("org.eclipse.angus:jakarta.mail:2.0.0")
     implementation("org.eclipse.angus:angus-activation:2.0.0")
     implementation("jakarta.activation:jakarta.activation-api:2.1.1")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     ksp("androidx.room:room-compiler:2.6.1")
     testImplementation("junit:junit:4.13.2")
 

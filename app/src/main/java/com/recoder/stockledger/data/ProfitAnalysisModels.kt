@@ -1,5 +1,6 @@
 package com.recoder.stockledger.data
 
+import com.recoder.stockledger.data.local.TransactionEntity
 import java.time.LocalDate
 
 data class ProfitAnalysisUiModel(
@@ -17,6 +18,10 @@ data class ProfitAnalysisUiModel(
     val securityAnalyses: List<SecurityProfitAnalysisUiModel> = emptyList(),
     val netInflowCny: Double = 0.0,
     val latestDate: LocalDate = LocalDate.now(),
+    val totalCommissionCny: Double = 0.0,
+    val totalTaxCny: Double = 0.0,
+    val securityTradeCount: Int = 0,
+    val transactions: List<TransactionEntity> = emptyList(),
 )
 
 data class ProfitAnalysisPointUiModel(
@@ -40,4 +45,5 @@ data class SecurityProfitPointUiModel(
     val date: LocalDate,
     val dailyProfitCny: Double,
     val cumulativeProfitCny: Double,
+    val closePrice: Double? = null,
 )

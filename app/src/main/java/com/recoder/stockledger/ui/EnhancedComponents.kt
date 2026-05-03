@@ -38,9 +38,12 @@ import com.recoder.stockledger.ui.theme.SurfaceSecondary
 @Composable
 fun EnhancedHoldingsCard(
     item: HoldingUiModel,
+    onClick: (() -> Unit)? = null,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -90,9 +93,9 @@ fun PreciseSellCandidateSection(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("选择已买入股票", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text("选择持仓股票", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         if (candidates.isEmpty()) {
-            Text("当前没有可卖出的持仓，请先录入买入交易。", color = ForegroundSecondary, fontSize = 13.sp)
+            Text("当前没有持仓记录，可在下方输入股票代码进行沽空。", color = ForegroundSecondary, fontSize = 13.sp)
         } else {
             candidates.forEach { candidate ->
                 val isSelected = selectedSymbol.equals(candidate.symbol, ignoreCase = true) &&

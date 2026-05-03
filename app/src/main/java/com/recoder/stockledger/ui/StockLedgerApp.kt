@@ -64,9 +64,15 @@ private object Routes {
     const val Operations = "operations"
     const val Transactions = "transactions"
     const val TradeEntry = "trade-entry"
+    const val Settings = "settings"
+    const val FullRanking = "full-ranking"
+    const val StockDetail = "stock-detail"
     const val TradeTypeArg = "tradeType"
+    const val SymbolArg = "symbol"
+    const val MarketArg = "market"
 
     fun tradeEntry(type: TradeType): String = "$TradeEntry/${type.name}"
+    fun stockDetail(symbol: String, market: String): String = "$StockDetail/$symbol/$market"
 }
 
 @Composable
@@ -88,9 +94,15 @@ fun StockLedgerApp(
             ledgerViewModel.importBackup(uri)
         }
     }
+    val pdfImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            ledgerViewModel.importZhuoruiStatementPdfs(uris)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = false,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.fillMaxWidth(0.78f),
@@ -103,6 +115,7 @@ fun StockLedgerApp(
                         coroutineScope.launch { drawerState.close() }
                     },
                     onPlatformVisibilityChange = ledgerViewModel::setPlatformVisibility,
+                    onClose = { coroutineScope.launch { drawerState.close() } },
                 )
             }
         },
@@ -120,15 +133,28 @@ fun StockLedgerApp(
                         holdings = uiState.holdings,
                         selectedPlatform = uiState.selectedPlatform,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
+                        onSettingsClick = { navController.navigate(Routes.Settings) },
                         onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
                         onRefresh = ledgerViewModel::refreshQuotesByPull,
                         onDestinationSelected = { destination ->
                             when (destination) {
                                 TopLevelDestination.HOLDINGS -> Unit
-                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) { launchSingleTop = true }
-                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) { launchSingleTop = true }
-                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) { launchSingleTop = true }
+                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
                             }
+                        },
+                        onHoldingClick = { holding ->
+                            navController.navigate(Routes.stockDetail(holding.code, holding.market.label))
                         },
                     )
                 }
@@ -140,14 +166,30 @@ fun StockLedgerApp(
                         exchangeRates = uiState.exchangeRates,
                         selectedPlatform = uiState.selectedPlatform,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
+                        onSettingsClick = { navController.navigate(Routes.Settings) },
                         onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
                         onDestinationSelected = { destination ->
                             when (destination) {
-                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) { launchSingleTop = true }
+                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
                                 TopLevelDestination.ANALYSIS -> Unit
-                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) { launchSingleTop = true }
-                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) { launchSingleTop = true }
+                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
                             }
+                        },
+                        onSecurityClick = { symbol, market ->
+                            navController.navigate(Routes.stockDetail(symbol, market))
+                        },
+                        onViewFullRanking = {
+                            navController.navigate(Routes.FullRanking)
                         },
                     )
                 }
@@ -156,6 +198,7 @@ fun StockLedgerApp(
                     OperationsRoute(
                         selectedPlatform = uiState.selectedPlatform,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
+                        onSettingsClick = { navController.navigate(Routes.Settings) },
                         onBuyClick = {
                             ledgerViewModel.openTradeEntry(TradeType.BUY)
                             navController.navigate(Routes.tradeEntry(TradeType.BUY))
@@ -182,8 +225,6 @@ fun StockLedgerApp(
                             importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                         },
                         backupStatusMessage = uiState.backupStatusMessage,
-                        selectedPlatformFeePlan = uiState.selectedPlatformFeePlan,
-                        onPlatformFeePlanSelected = ledgerViewModel::selectPlatformFeePlan,
                         hsbcImportDraftText = uiState.hsbcImportDraftText,
                         hsbcImportStatusMessage = uiState.hsbcImportStatusMessage,
                         onHsbcImportDraftTextChange = ledgerViewModel::updateHsbcImportDraftText,
@@ -202,12 +243,27 @@ fun StockLedgerApp(
                         onSyncZhuoruiMailboxNow = ledgerViewModel::syncZhuoruiMailboxNow,
                         onEnableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(true) },
                         onDisableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(false) },
+                        zhuoruiStatementPdfPassword = uiState.zhuoruiStatementPdfPassword,
+                        zhuoruiStatementPdfImportStatusMessage = uiState.zhuoruiStatementPdfImportStatusMessage,
+                        onZhuoruiStatementPdfPasswordChange = ledgerViewModel::updateZhuoruiStatementPdfPassword,
+                        onImportZhuoruiStatementPdfs = {
+                            pdfImportLauncher.launch(arrayOf("application/pdf"))
+                        },
                         onDestinationSelected = { destination ->
                             when (destination) {
-                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) { launchSingleTop = true }
-                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) { launchSingleTop = true }
+                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
                                 TopLevelDestination.OPERATIONS -> Unit
-                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) { launchSingleTop = true }
+                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
                             }
                         },
                     )
@@ -237,14 +293,31 @@ fun StockLedgerApp(
                             }
                         },
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
+                        onSettingsClick = { navController.navigate(Routes.Settings) },
                         onDestinationSelected = { destination ->
                             when (destination) {
-                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) { launchSingleTop = true }
-                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) { launchSingleTop = true }
-                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) { launchSingleTop = true }
+                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
                                 TopLevelDestination.TRANSACTIONS -> Unit
                             }
                         },
+                        batchSelectionMode = uiState.batchSelectionMode,
+                        selectedTransactionIds = uiState.selectedTransactionIds,
+                        onEnterBatchMode = ledgerViewModel::enterBatchSelectionMode,
+                        onExitBatchMode = ledgerViewModel::exitBatchSelectionMode,
+                        onToggleSelection = ledgerViewModel::toggleTransactionSelection,
+                        onSelectAll = ledgerViewModel::selectAllTransactions,
+                        onDeleteSelected = ledgerViewModel::deleteSelectedTransactions,
                     )
                 }
 
@@ -267,6 +340,7 @@ fun StockLedgerApp(
                         onSellCandidateSelected = ledgerViewModel::selectSellCandidate,
                         onSymbolSuggestionSelected = ledgerViewModel::selectSymbolSuggestion,
                         onMarketSelected = ledgerViewModel::selectTradeMarket,
+                        onCashCurrencySelected = ledgerViewModel::selectCashCurrency,
                         onSymbolChange = ledgerViewModel::onSymbolInputChanged,
                         onDateChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(tradeDate = value) } },
                         onPriceChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(priceLabel = value) } },
@@ -300,6 +374,89 @@ fun StockLedgerApp(
                                             launchSingleTop = true
                                         }
                                     }
+                                }
+                            }
+                        },
+                    )
+                }
+
+                composable(Routes.Settings) {
+                    SettingsRoute(
+                        selectedPlatform = uiState.selectedPlatform,
+                        selectedPlatformFeePlan = uiState.selectedPlatformFeePlan,
+                        onPlatformFeePlanSelected = ledgerViewModel::selectPlatformFeePlan,
+                        zhuoruiPromoConfig = uiState.zhuoruiPromoConfig,
+                        onZhuoruiPromoChange = ledgerViewModel::updateZhuoruiPromoConfig,
+                        onSaveZhuoruiPromo = ledgerViewModel::saveZhuoruiPromoConfig,
+                        onPlatformClick = { coroutineScope.launch { drawerState.open() } },
+                        onBackClick = { navController.popBackStack() },
+                    )
+                }
+
+                composable(Routes.FullRanking) {
+                    FullRankingRoute(
+                        analysis = uiState.profitAnalysis,
+                        displayCurrency = uiState.displayCurrency,
+                        exchangeRates = uiState.exchangeRates,
+                        onBack = { navController.popBackStack() },
+                        onSecurityClick = { symbol, market ->
+                            navController.navigate(Routes.stockDetail(symbol, market))
+                        },
+                        onDestinationSelected = { destination ->
+                            when (destination) {
+                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                            }
+                        },
+                    )
+                }
+
+                composable(
+                    route = "${Routes.StockDetail}/{${Routes.SymbolArg}}/{${Routes.MarketArg}}",
+                    arguments = listOf(
+                        navArgument(Routes.SymbolArg) { type = NavType.StringType },
+                        navArgument(Routes.MarketArg) { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val symbol = backStackEntry.arguments?.getString(Routes.SymbolArg).orEmpty()
+                    val market = backStackEntry.arguments?.getString(Routes.MarketArg).orEmpty()
+                    StockDetailRoute(
+                        symbol = symbol,
+                        marketLabel = market,
+                        analysis = uiState.profitAnalysis,
+                        displayCurrency = uiState.displayCurrency,
+                        onBack = { navController.popBackStack() },
+                        onDestinationSelected = { destination ->
+                            when (destination) {
+                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
+                                }
+                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
+                                    launchSingleTop = true
+                                    popUpTo(Routes.Holdings) { saveState = true }
                                 }
                             }
                         },
@@ -341,6 +498,7 @@ private fun PlatformDrawerContent(
     visibilityOptions: List<PlatformVisibilityUiModel>,
     onSelect: (BrokerPlatform?) -> Unit,
     onPlatformVisibilityChange: (BrokerPlatform, Boolean) -> Unit,
+    onClose: () -> Unit = {},
 ) {
     var showVisibilitySettings by remember { mutableStateOf(false) }
 
@@ -352,7 +510,21 @@ private fun PlatformDrawerContent(
             .padding(horizontal = 18.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("交易平台", color = ForegroundPrimary, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("交易平台", color = ForegroundPrimary, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Text(
+                text = "关闭",
+                color = ForegroundMuted,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .clickable { onClose() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
         Text("侧边栏切换后，持仓、盈亏和流水会同步显示对应平台的数据。", color = ForegroundSecondary, fontSize = 13.sp)
         if (!showVisibilitySettings) {
             Text("当前显示", color = ForegroundMuted, fontSize = 12.sp)

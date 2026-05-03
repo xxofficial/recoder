@@ -14,4 +14,7 @@ object StockLedgerPreferences {
     const val KEY_ZHUORUI_EMAIL_FOLDER = "zhuorui_email_folder"
     const val KEY_ZHUORUI_EMAIL_LAST_SYNC_AT = "zhuorui_email_last_sync_at"
     const val KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE = "zhuorui_email_last_sync_message"
+    const val KEY_ZHUORUI_PROMO_START_DATE = "zhuorui_promo_start_date"
+    const val KEY_ZHUORUI_PROMO_DURATION_DAYS = "zhuorui_promo_duration_days"
+    const val KEY_ZHUORUI_STATEMENT_PDF_PASSWORD = "zhuorui_statement_pdf_password"
 }

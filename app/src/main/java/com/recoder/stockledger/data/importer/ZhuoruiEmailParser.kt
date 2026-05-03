@@ -1,5 +1,6 @@
 package com.recoder.stockledger.data.importer
 
+import android.util.Log
 import com.recoder.stockledger.data.ImportSourceChannel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.TradeType
@@ -22,6 +23,8 @@ data class ParsedZhuoruiEmail(
 )
 
 object ZhuoruiEmailParser {
+    private const val TAG = "ZhuoruiEmailParser"
+
     fun parse(rawText: String): ParsedZhuoruiEmail? {
         val normalizedText = normalizeRawText(rawText)
         val lines = normalizedText
@@ -29,38 +32,85 @@ object ZhuoruiEmailParser {
             .map { it.trim() }
             .filter { it.isNotBlank() && it != "[图片]" && !it.startsWith("Fwd:", ignoreCase = true) }
             .toList()
-        if (lines.isEmpty()) return null
+        if (lines.isEmpty()) {
+            Log.w(TAG, "parse: 过滤后无有效行")
+            return null
+        }
 
         val joinedText = lines.joinToString(separator = "\n")
-        val headerMatch = headerRegex.find(joinedText) ?: return null
+        val headerMatch = headerRegex.find(joinedText)
+        if (headerMatch == null) {
+            Log.w(TAG, "parse: 邮件头正则不匹配, 前100字=${joinedText.take(100).replace("\n", "\\n")}")
+            return null
+        }
         val accountId = headerMatch.groupValues[1]
-        val market = resolveMarket(headerMatch.groupValues[2]) ?: return null
+        val market = resolveMarket(headerMatch.groupValues[2])
+        if (market == null) {
+            Log.w(TAG, "parse: 市场类型无法识别: '${headerMatch.groupValues[2]}'")
+            return null
+        }
         val tradeDateTime = runCatching {
             LocalDateTime.parse(headerMatch.groupValues[3], dateTimeFormatter)
-        }.getOrNull() ?: return null
-        val tradeType = resolveTradeType(headerMatch.groupValues[4]) ?: return null
+        }.getOrNull()
+        if (tradeDateTime == null) {
+            Log.w(TAG, "parse: 日期时间解析失败: '${headerMatch.groupValues[3]}'")
+            return null
+        }
+        val tradeType = resolveTradeType(headerMatch.groupValues[4])
+        if (tradeType == null) {
+            Log.w(TAG, "parse: 交易类型无法识别: '${headerMatch.groupValues[4]}'")
+            return null
+        }
 
-        val detailContent = extractDetailContent(joinedText) ?: return null
+        val detailContent = extractDetailContent(joinedText)
+        if (detailContent == null) {
+            Log.w(TAG, "parse: 未找到'累计成交金额'锚点或详情为空")
+            return null
+        }
         val detailTokens = detailContent
             .replace(Regex("\\s+"), " ")
             .trim()
             .split(" ")
             .filter { it.isNotBlank() }
-        if (detailTokens.size < 7) return null
+        if (detailTokens.size < 7) {
+            Log.w(TAG, "parse: 详情token不足7个: ${detailTokens.size}个, tokens=$detailTokens")
+            return null
+        }
 
-        val cumulativeAmount = detailTokens.last().sanitizeNumber() ?: return null
-        val cumulativeQuantity = detailTokens.getOrNull(detailTokens.lastIndex - 1)?.sanitizeInteger() ?: return null
-        val amount = detailTokens.getOrNull(detailTokens.lastIndex - 2)?.sanitizeNumber() ?: return null
-        val quantity = detailTokens.getOrNull(detailTokens.lastIndex - 3)?.sanitizeInteger() ?: return null
-        val price = detailTokens.getOrNull(detailTokens.lastIndex - 4)?.sanitizeNumber() ?: return null
+        val amount = detailTokens.getOrNull(detailTokens.lastIndex - 2)?.sanitizeNumber()
+        if (amount == null) {
+            Log.w(TAG, "parse: 成交金额解析失败: '${detailTokens.getOrNull(detailTokens.lastIndex - 2)}'")
+            return null
+        }
+        val quantity = detailTokens.getOrNull(detailTokens.lastIndex - 3)?.sanitizeInteger()
+        if (quantity == null) {
+            Log.w(TAG, "parse: 成交数量解析失败: '${detailTokens.getOrNull(detailTokens.lastIndex - 3)}'")
+            return null
+        }
+        val price = detailTokens.getOrNull(detailTokens.lastIndex - 4)?.sanitizeNumber()
+        if (price == null) {
+            Log.w(TAG, "parse: 价格解析失败: '${detailTokens.getOrNull(detailTokens.lastIndex - 4)}'")
+            return null
+        }
         val tokensBeforePrice = detailTokens.dropLast(5)
-        val currencyResolution = resolveCurrencyAndSymbol(tokensBeforePrice) ?: return null
+        val currencyResolution = resolveCurrencyAndSymbol(tokensBeforePrice)
+        if (currencyResolution == null) {
+            Log.w(TAG, "parse: 币种/代码解析失败: tokensBeforePrice=$tokensBeforePrice")
+            return null
+        }
         val rawSymbol = currencyResolution.first
         val currencyCode = currencyResolution.second
         val nameTokens = tokensBeforePrice.dropLast(currencyResolution.third)
         val name = nameTokens.joinToString(separator = " ").trim()
-        if (name.isBlank()) return null
-        val symbol = resolveSymbol(rawSymbol, market) ?: return null
+        if (name.isBlank()) {
+            Log.w(TAG, "parse: 证券名称为空: rawSymbol=$rawSymbol")
+            return null
+        }
+        val symbol = resolveSymbol(rawSymbol, market)
+        if (symbol == null) {
+            Log.w(TAG, "parse: 代码格式无效: rawSymbol='$rawSymbol', market=$market")
+            return null
+        }
         val externalReference = buildExternalReference(
             accountId = accountId,
             tradeType = tradeType,
@@ -70,8 +120,7 @@ object ZhuoruiEmailParser {
             tradeDateTime = tradeDateTime,
         )
 
-        if (cumulativeQuantity < quantity || cumulativeAmount < amount) return null
-
+        Log.d(TAG, "parse: 解析成功 $tradeType $symbol x$quantity @$price ($market)")
         return ParsedZhuoruiEmail(
             sourceChannel = ImportSourceChannel.ZHUORUI_EMAIL,
             tradeType = tradeType,

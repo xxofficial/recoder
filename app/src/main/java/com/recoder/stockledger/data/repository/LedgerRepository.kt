@@ -15,6 +15,7 @@ import com.recoder.stockledger.data.importer.HsbcNotificationParser
 import com.recoder.stockledger.data.importer.HsbcNotificationStatus
 import com.recoder.stockledger.data.importer.ParsedZhuoruiEmail
 import com.recoder.stockledger.data.importer.ZhuoruiEmailParser
+import com.recoder.stockledger.data.importer.ZhuoruiStatementPdfParser
 import com.recoder.stockledger.data.local.LedgerDao
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
@@ -210,6 +211,8 @@ class DefaultLedgerRepository(
 
     suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
 
+    suspend fun deleteTransactionsByIds(ids: List<Long>): Int = dao.deleteTransactionsByIds(ids)
+
     suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
         dao.replaceTransactions(transactions)
     }
@@ -326,6 +329,8 @@ class DefaultLedgerRepository(
         ZhuoruiEmailParser.parse(rawText)?.let { parsed ->
             return importParsedZhuoruiEmail(parsed)
         }
+        val preview = rawText.take(200).replace("\n", "\\n")
+        Log.w(TAG, "手动导入解析失败: 未匹配任何格式, 正文前200字=$preview")
         return TradeImportResult(
             outcome = TradeImportOutcome.UNSUPPORTED,
             message = "未识别出可导入的交易邮件或通知格式",
@@ -387,6 +392,13 @@ class DefaultLedgerRepository(
             tradeDate = receivedAt.toLocalDate().toString(),
             tradeTime = receivedAt.toLocalTime().format(timeFormatter),
         )
+        // Resolve stock name: if parsed name is same as symbol, look up from quote snapshots
+        val resolvedName = if (parsed.name == parsed.symbol || parsed.name.isBlank()) {
+            dao.findStockNameFromQuotes(parsed.symbol, parsed.market.name) ?: parsed.name
+        } else {
+            parsed.name
+        }
+
         addTrade(
             TradeDraftInput(
                 tradeType = parsed.tradeType,
@@ -395,7 +407,7 @@ class DefaultLedgerRepository(
                 externalReference = parsed.externalReference,
                 market = parsed.market,
                 symbol = parsed.symbol,
-                name = parsed.name,
+                name = resolvedName,
                 tradeDate = receivedAt.toLocalDate().toString(),
                 price = price,
                 quantity = parsed.quantity,
@@ -475,6 +487,90 @@ class DefaultLedgerRepository(
             message = "已自动导入卓锐${parsed.tradeType.label}记录 ${parsed.symbol} ${parsed.quantity} 股，费用已按方案估算",
             externalReference = parsed.externalReference,
         )
+    }
+
+    suspend fun importZhuoruiStatementPdf(
+        inputStream: java.io.InputStream,
+        password: String,
+    ): List<TradeImportResult> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "开始导入PDF结单, password长度=${password.length}")
+        val parsedTrades = ZhuoruiStatementPdfParser.parsePdf(inputStream, password)
+        Log.d(TAG, "PDF解析完成, 找到${parsedTrades.size}条交易记录")
+        if (parsedTrades.isEmpty()) {
+            Log.w(TAG, "PDF结单中未找到可导入的交易记录")
+            return@withContext listOf(
+                TradeImportResult(
+                    outcome = TradeImportOutcome.UNSUPPORTED,
+                    message = "PDF结单中未找到可导入的交易记录",
+                )
+            )
+        }
+
+        val results = mutableListOf<TradeImportResult>()
+        for (parsed in parsedTrades) {
+            val externalReference = "ZR-STMT-${parsed.tradeRef}"
+            val existing = dao.findTransactionByExternalReference(
+                platform = BrokerPlatform.ZHUORUI.name,
+                externalReference = externalReference,
+            )
+            if (existing != null) {
+                results.add(
+                    TradeImportResult(
+                        outcome = TradeImportOutcome.DUPLICATE,
+                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在，已跳过",
+                        externalReference = externalReference,
+                    )
+                )
+                continue
+            }
+
+            val feeEstimate = estimateImportedTradeFees(
+                tradeType = parsed.tradeType,
+                platform = BrokerPlatform.ZHUORUI,
+                market = parsed.market,
+                price = parsed.price,
+                quantity = parsed.quantity,
+                tradeDate = parsed.tradeDate.toString(),
+                tradeTime = "00:00",
+            )
+            addTrade(
+                TradeDraftInput(
+                    tradeType = parsed.tradeType,
+                    platform = BrokerPlatform.ZHUORUI,
+                    sourceChannel = parsed.sourceChannel,
+                    externalReference = externalReference,
+                    market = parsed.market,
+                    symbol = parsed.symbol,
+                    name = parsed.name,
+                    tradeDate = parsed.tradeDate.toString(),
+                    price = parsed.price,
+                    quantity = parsed.quantity,
+                    commission = feeEstimate.commission,
+                    tax = feeEstimate.tax,
+                    note = buildImportedNote(
+                        sourceChannel = parsed.sourceChannel,
+                        externalReference = externalReference,
+                        rawText = parsed.rawLine,
+                        suffix = importedFeeNoteSuffix(feeEstimate),
+                    ),
+                    tradeTime = "00:00",
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+            results.add(
+                TradeImportResult(
+                    outcome = TradeImportOutcome.IMPORTED,
+                    message = "已导入${parsed.tradeType.label} ${parsed.symbol} ${parsed.quantity} 股",
+                    externalReference = externalReference,
+                )
+            )
+        }
+
+        if (results.any { it.outcome == TradeImportOutcome.IMPORTED }) {
+            refreshQuotesForPortfolio(transactions.first())
+        }
+
+        results
     }
 
     suspend fun deleteHolding(symbol: String, market: Market): Int {
@@ -732,7 +828,7 @@ class DefaultLedgerRepository(
 
                 val startIndex = (total - fetchCount.coerceIn(1, 500) + 1).coerceAtLeast(1)
                 val messages = folder.getMessages(startIndex, total)
-                    .sortedByDescending { messageTimestampMillis(it) ?: 0L }
+                    .sortedBy { messageTimestampMillis(it) ?: 0L }
 
                 var importedCount = 0
                 var duplicateCount = 0
@@ -741,16 +837,22 @@ class DefaultLedgerRepository(
                 val defaultThreshold = (lastSyncAtMillis - MAIL_RESYNC_LOOKBACK_MS)
                     .coerceAtLeast(System.currentTimeMillis() - MAIL_MAX_LOOKBACK_MS)
                 val scanThreshold = earliestReceivedAtMillis ?: defaultThreshold
+                Log.d(TAG, "卓锐邮箱同步开始: 共${messages.size}封邮件, scanThreshold=$scanThreshold")
 
                 for (message in messages) {
                     val messageTimestamp = messageTimestampMillis(message)
+                    val subject = runCatching { message.subject }.getOrNull() ?: "(无主题)"
                     if (messageTimestamp != null) {
                         latestSeenMessageAt = maxOf(latestSeenMessageAt ?: 0L, messageTimestamp)
-                        if (messageTimestamp < scanThreshold) continue
+                        if (messageTimestamp < scanThreshold) {
+                            Log.d(TAG, "跳过邮件(时间早于阈值): subject=$subject, ts=$messageTimestamp")
+                            continue
+                        }
                     }
 
                     val rawText = extractMessageText(message)
                     if (rawText.isBlank()) {
+                        Log.w(TAG, "邮件正文为空, 跳过: subject=$subject")
                         ignoredCount += 1
                         continue
                     }
@@ -759,13 +861,25 @@ class DefaultLedgerRepository(
                         .trim()
                     val parsed = ZhuoruiEmailParser.parse(normalizedText)
                     if (parsed == null) {
+                        val preview = normalizedText.take(200).replace("\n", "\\n")
+                        Log.w(TAG, "邮件解析失败: subject=$subject, 正文前200字=$preview")
                         ignoredCount += 1
                         continue
                     }
-                    when (importParsedZhuoruiEmail(parsed).outcome) {
-                        TradeImportOutcome.IMPORTED -> importedCount += 1
-                        TradeImportOutcome.DUPLICATE -> duplicateCount += 1
-                        else -> ignoredCount += 1
+                    val result = importParsedZhuoruiEmail(parsed)
+                    when (result.outcome) {
+                        TradeImportOutcome.IMPORTED -> {
+                            Log.d(TAG, "导入成功: ${parsed.tradeType} ${parsed.symbol} x${parsed.quantity} @${parsed.price}")
+                            importedCount += 1
+                        }
+                        TradeImportOutcome.DUPLICATE -> {
+                            Log.d(TAG, "重复记录, 跳过: ${parsed.symbol} ${parsed.tradeDateTime}")
+                            duplicateCount += 1
+                        }
+                        else -> {
+                            Log.w(TAG, "导入失败: ${parsed.symbol}, outcome=${result.outcome}, msg=${result.message}")
+                            ignoredCount += 1
+                        }
                     }
                 }
 
@@ -773,6 +887,7 @@ class DefaultLedgerRepository(
                     refreshQuotesForPortfolio(transactions.first())
                 }
 
+                Log.d(TAG, "卓锐邮箱同步完成: imported=$importedCount, duplicate=$duplicateCount, ignored=$ignoredCount")
                 ZhuoruiMailboxSyncResult(
                     importedCount = importedCount,
                     duplicateCount = duplicateCount,
@@ -861,8 +976,9 @@ class DefaultLedgerRepository(
         message.receivedDate?.time ?: message.sentDate?.time
 
     private companion object {
+        const val TAG = "LedgerRepository"
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
-        const val DEFAULT_MAIL_FETCH_BATCH_SIZE = 80
+        const val DEFAULT_MAIL_FETCH_BATCH_SIZE = 200
         const val MAIL_RESYNC_LOOKBACK_MS = 24L * 60 * 60 * 1000
         const val MAIL_MAX_LOOKBACK_MS = 14L * 24 * 60 * 60 * 1000
     }

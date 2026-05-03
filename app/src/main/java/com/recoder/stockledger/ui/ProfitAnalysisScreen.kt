@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -68,6 +69,7 @@ import com.recoder.stockledger.ui.theme.MarketDown
 import com.recoder.stockledger.ui.theme.MarketDownSoft
 import com.recoder.stockledger.ui.theme.MarketUp
 import com.recoder.stockledger.ui.theme.MarketUpSoft
+import com.recoder.stockledger.ui.theme.StockLedgerTheme
 import com.recoder.stockledger.ui.theme.SurfaceInverse
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import java.text.DecimalFormat
@@ -87,7 +89,7 @@ import kotlin.math.roundToInt
 private val AnalysisLineColor = Color(0xFF3B82F6)
 private val AnalysisFillTopColor = Color(0x443B82F6)
 private val AnalysisFillBottomColor = Color(0x003B82F6)
-private val SegmentBackground = Color(0xFFF3F4F6)
+internal val SegmentBackground = Color(0xFFF3F4F6)
 private val numberFormatter = DecimalFormat("#,##0.00")
 private val wholeNumberFormatter = DecimalFormat("0")
 private val chartDateFormatter = DateTimeFormatter.ofPattern("yyyy/M/d")
@@ -1188,5 +1190,19 @@ private fun formatCompactValue(
     return when (unit) {
         ValueUnit.AMOUNT -> "$sign${numberFormatter.format(convertFromCny(value.absoluteValue, displayCurrency, exchangeRates))}"
         ValueUnit.PERCENT -> "$sign${numberFormatter.format(value.absoluteValue)}%"
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun ProfitAnalysisRoutePreview() {
+    StockLedgerTheme {
+        ProfitAnalysisRoute(
+            analysis = PreviewFixtures.profitAnalysis,
+            displayCurrency = DisplayCurrency.CNY,
+            exchangeRates = PreviewFixtures.exchangeRates,
+            onDisplayCurrencySelected = {},
+            onDestinationSelected = {},
+        )
     }
 }

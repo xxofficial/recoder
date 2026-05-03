@@ -1,5 +1,7 @@
 package com.recoder.stockledger.data
 
+import java.time.LocalDate
+
 enum class Market(
     val label: String,
     val currencySymbol: String,
@@ -122,6 +124,7 @@ enum class ImportSourceChannel(val label: String) {
     HSBC_SMS("汇丰短信"),
     HSBC_EMAIL("汇丰邮件"),
     ZHUORUI_EMAIL("卓锐邮件"),
+    ZHUORUI_STATEMENT("卓锐结单"),
 }
 
 data class PortfolioSummary(
@@ -133,6 +136,10 @@ data class PortfolioSummary(
     val totalProfit: String,
     val totalProfitHint: String,
     val dayProfit: String,
+    val holdingsValue: String,
+    val commissionTotal: String,
+    val taxTotal: String,
+    val tradeCount: String,
     val refreshState: RefreshState,
     val refreshMessage: String,
     val refreshTimeLabel: String?,
@@ -228,3 +235,21 @@ data class SecuritySuggestionUiModel(
     val market: Market,
     val displayLabel: String,
 )
+
+data class ZhuoruiPromoConfig(
+    val startDate: String = "",
+    val durationDays: Int = 100,
+) {
+    val endDate: LocalDate?
+        get() {
+            if (startDate.isBlank()) return null
+            val parsed = runCatching { LocalDate.parse(startDate) }.getOrNull() ?: return null
+            return parsed.plusDays(durationDays.toLong())
+        }
+
+    val isActive: Boolean
+        get() {
+            val end = endDate ?: return false
+            return !LocalDate.now().isAfter(end)
+        }
+}

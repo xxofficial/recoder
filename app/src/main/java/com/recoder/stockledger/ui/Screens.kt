@@ -3,10 +3,12 @@
 import android.app.DatePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -45,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.recoder.stockledger.data.BrokerPlatform
@@ -52,7 +55,6 @@ import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.HoldingUiModel
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.MarketFilter
-import com.recoder.stockledger.data.PlatformFeePlanUiModel
 import com.recoder.stockledger.data.PortfolioSummary
 import com.recoder.stockledger.data.RefreshState
 import com.recoder.stockledger.data.SecuritySuggestionUiModel
@@ -72,6 +74,7 @@ import com.recoder.stockledger.ui.theme.ForegroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundSecondary
 import com.recoder.stockledger.ui.theme.MarketDown
 import com.recoder.stockledger.ui.theme.MarketUp
+import com.recoder.stockledger.ui.theme.StockLedgerTheme
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import java.time.LocalDate
 
@@ -83,9 +86,11 @@ fun HoldingsRoute(
     holdings: List<HoldingUiModel>,
     selectedPlatform: BrokerPlatform?,
     onPlatformClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
     onRefresh: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
+    onHoldingClick: (HoldingUiModel) -> Unit = {},
 ) {
     val pullRefreshState = rememberPullRefreshState(
         refreshing = summary.refreshState == RefreshState.REFRESHING,
@@ -101,6 +106,7 @@ fun HoldingsRoute(
             PlatformTopBar(
                 selectedPlatform = selectedPlatform,
                 onClick = onPlatformClick,
+                onSettingsClick = onSettingsClick,
                 modifier = Modifier.statusBarsPadding(),
             )
 
@@ -169,13 +175,47 @@ fun HoldingsRoute(
                             modifier = Modifier.weight(1f),
                         )
                         SummaryMetric(
-                            label = "当日盈亏",
-                            value = summary.dayProfit,
-                            hint = "按昨收估算",
-                            valueColor = if (summary.dayProfit.startsWith("-")) MarketDown else MarketUp,
+                            label = "持仓总市值",
+                            value = summary.holdingsValue,
+                            hint = "按现价估算",
                             modifier = Modifier.weight(1f),
                         )
                     }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = SurfaceSecondary,
+                            shape = RoundedCornerShape(16.dp),
+                        )
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("交易统计", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        SummaryMetric(
+                            label = "佣金/平台费",
+                            value = summary.commissionTotal,
+                            hint = "累计",
+                            modifier = Modifier.weight(1f),
+                        )
+                        SummaryMetric(
+                            label = "税费",
+                            value = summary.taxTotal,
+                            hint = "累计",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    SummaryMetric(
+                        label = "交易次数",
+                        value = summary.tradeCount,
+                        hint = "证券买入/卖出",
+                    )
                 }
 
                 Text("持仓列表", color = ForegroundPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -193,7 +233,7 @@ fun HoldingsRoute(
                         Text("当前范围内还没有持仓。", color = ForegroundMuted, fontSize = 14.sp)
                     } else {
                         holdings.forEach { item ->
-                            EnhancedHoldingsCard(item = item)
+                            EnhancedHoldingsCard(item = item, onClick = { onHoldingClick(item) })
                         }
                     }
                 }
@@ -232,10 +272,12 @@ fun HoldingsRoute(
         )
     }
 }
+
 @Composable
 fun OperationsRoute(
     selectedPlatform: BrokerPlatform?,
     onPlatformClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     onBuyClick: () -> Unit,
     onSellClick: () -> Unit,
     onDepositClick: () -> Unit,
@@ -243,8 +285,6 @@ fun OperationsRoute(
     onExportBackupClick: () -> Unit,
     onImportBackupClick: () -> Unit,
     backupStatusMessage: String?,
-    selectedPlatformFeePlan: PlatformFeePlanUiModel?,
-    onPlatformFeePlanSelected: (String) -> Unit,
     hsbcImportDraftText: String,
     hsbcImportStatusMessage: String?,
     onHsbcImportDraftTextChange: (String) -> Unit,
@@ -259,6 +299,10 @@ fun OperationsRoute(
     onSyncZhuoruiMailboxNow: () -> Unit,
     onEnableZhuoruiEmailAutoImport: () -> Unit,
     onDisableZhuoruiEmailAutoImport: () -> Unit,
+    zhuoruiStatementPdfPassword: String,
+    zhuoruiStatementPdfImportStatusMessage: String?,
+    onZhuoruiStatementPdfPasswordChange: (String) -> Unit,
+    onImportZhuoruiStatementPdfs: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
@@ -272,6 +316,7 @@ fun OperationsRoute(
             PlatformTopBar(
                 selectedPlatform = selectedPlatform,
                 onClick = onPlatformClick,
+                onSettingsClick = onSettingsClick,
                 modifier = Modifier.statusBarsPadding(),
             )
 
@@ -323,60 +368,6 @@ fun OperationsRoute(
                     if (!backupStatusMessage.isNullOrBlank()) {
                         Text(
                             text = backupStatusMessage,
-                            color = ForegroundMuted,
-                            fontSize = 12.sp,
-                        )
-                    }
-                }
-
-                selectedPlatformFeePlan?.let { feePlan ->
-                    val selectedOption = feePlan.options.firstOrNull { it.isSelected } ?: feePlan.options.first()
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                color = SurfaceSecondary,
-                                shape = RoundedCornerShape(16.dp),
-                            )
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text("费率方案", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "只影响后续自动估算，不会改动已保存记录；切换后录入页会立刻按新方案重新估算。",
-                            color = ForegroundSecondary,
-                            fontSize = 13.sp,
-                        )
-                        Text(
-                            "当前平台：${feePlan.platform.label}",
-                            color = ForegroundMuted,
-                            fontSize = 12.sp,
-                        )
-                        FilterChipWrapRow(
-                            options = feePlan.options,
-                            selected = selectedOption,
-                            label = { it.label },
-                            onSelected = { option ->
-                                if (!option.isSelected) {
-                                    onPlatformFeePlanSelected(option.id)
-                                }
-                            },
-                        )
-                        if (feePlan.options.size == 1) {
-                            Text(
-                                "当前只收录 1 套公开方案，后续如果平台公布更多完整费率规则，我再继续补。",
-                                color = ForegroundMuted,
-                                fontSize = 12.sp,
-                            )
-                        }
-                        Text(
-                            "当前：${feePlan.selectedPlanLabel}",
-                            color = ForegroundPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            feePlan.selectedPlanDescription,
                             color = ForegroundMuted,
                             fontSize = 12.sp,
                         )
@@ -586,6 +577,46 @@ fun OperationsRoute(
                             )
                         }
                     }
+
+                    // PDF Statement Import Section
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("电子结单导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "支持导入卓锐证券的月结单或日结单（PDF格式），可同时选择多个文件批量导入。",
+                            color = ForegroundSecondary,
+                            fontSize = 13.sp,
+                        )
+                        InputFieldBlock(
+                            label = "PDF结单密码",
+                            value = zhuoruiStatementPdfPassword,
+                            placeholder = "请输入PDF文件密码",
+                            isPassword = true,
+                            keyboardType = KeyboardType.Password,
+                            supportingText = "密码在结单PDF文件名中或由券商提供",
+                            onValueChange = onZhuoruiStatementPdfPasswordChange,
+                        )
+                        FilledActionButton(
+                            text = "选择PDF文件导入",
+                            onClick = onImportZhuoruiStatementPdfs,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        zhuoruiStatementPdfImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                            Text(
+                                text = message,
+                                color = ForegroundMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -615,9 +646,18 @@ fun TransactionsRoute(
     onResetFilters: () -> Unit,
     onEditTradeClick: (Long) -> Unit,
     onPlatformClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
+    batchSelectionMode: Boolean = false,
+    selectedTransactionIds: Set<Long> = emptySet(),
+    onEnterBatchMode: () -> Unit = {},
+    onExitBatchMode: () -> Unit = {},
+    onToggleSelection: (Long) -> Unit = {},
+    onSelectAll: (List<Long>) -> Unit = {},
+    onDeleteSelected: () -> Unit = {},
 ) {
     var showFilterSheet by remember { mutableStateOf(false) }
+    var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var draftTradeFilter by remember { mutableStateOf(selectedTradeFilter) }
     var draftMarketFilter by remember { mutableStateOf(selectedMarketFilter) }
     var draftStartDate by remember { mutableStateOf(transactionDateStart) }
@@ -638,6 +678,7 @@ fun TransactionsRoute(
             PlatformTopBar(
                 selectedPlatform = selectedPlatform,
                 onClick = onPlatformClick,
+                onSettingsClick = onSettingsClick,
                 modifier = Modifier.statusBarsPadding(),
             )
 
@@ -648,28 +689,94 @@ fun TransactionsRoute(
                     .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    InputFieldBlock(
-                        label = "",
-                        value = transactionKeyword,
-                        placeholder = "搜索证券名称或代码",
-                        modifier = Modifier.weight(1f),
-                        onValueChange = onTransactionKeywordChange,
-                    )
-                    FilterActionButton(
-                        active = hasActiveFilters,
-                        onClick = {
-                            draftTradeFilter = selectedTradeFilter
-                            draftMarketFilter = selectedMarketFilter
-                            draftStartDate = transactionDateStart
-                            draftEndDate = transactionDateEnd
-                            showFilterSheet = true
-                        },
-                    )
+                if (batchSelectionMode) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val allIds = sections.flatMap { section -> section.items.map { it.id } }
+                        val allSelected = allIds.isNotEmpty() && allIds.all { it in selectedTransactionIds }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    if (allSelected) onExitBatchMode() else onSelectAll(allIds)
+                                }
+                                .background(SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                text = if (allSelected) "取消全选" else "全选",
+                                color = ForegroundPrimary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "已选 ${selectedTransactionIds.size} 笔",
+                            color = ForegroundMuted,
+                            fontSize = 13.sp,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    if (selectedTransactionIds.isNotEmpty()) showBatchDeleteDialog = true
+                                }
+                                .background(if (selectedTransactionIds.isNotEmpty()) MarketDown else SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                text = "删除(${selectedTransactionIds.size})",
+                                color = if (selectedTransactionIds.isNotEmpty()) BackgroundPrimary else ForegroundMuted,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onExitBatchMode() }
+                                .background(SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text("取消", color = ForegroundPrimary, fontSize = 13.sp)
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        InputFieldBlock(
+                            label = "",
+                            value = transactionKeyword,
+                            placeholder = "搜索证券名称或代码",
+                            modifier = Modifier.weight(1f),
+                            onValueChange = onTransactionKeywordChange,
+                        )
+                        FilterActionButton(
+                            active = hasActiveFilters,
+                            onClick = {
+                                draftTradeFilter = selectedTradeFilter
+                                draftMarketFilter = selectedMarketFilter
+                                draftStartDate = transactionDateStart
+                                draftEndDate = transactionDateEnd
+                                showFilterSheet = true
+                            },
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onEnterBatchMode() }
+                                .background(SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text("批量删除", color = ForegroundPrimary, fontSize = 13.sp)
+                        }
+                    }
                 }
 
                 if (sections.isEmpty()) {
@@ -690,7 +797,15 @@ fun TransactionsRoute(
                             section.items.forEach { item ->
                                 TransactionRow(
                                     item = item,
-                                    onClick = { onEditTradeClick(item.id) },
+                                    onClick = {
+                                        if (batchSelectionMode) {
+                                            onToggleSelection(item.id)
+                                        } else {
+                                            onEditTradeClick(item.id)
+                                        }
+                                    },
+                                    isSelected = item.id in selectedTransactionIds,
+                                    showCheckbox = batchSelectionMode,
                                 )
                             }
                         }
@@ -703,6 +818,38 @@ fun TransactionsRoute(
             current = TopLevelDestination.TRANSACTIONS,
             onDestinationSelected = onDestinationSelected,
             modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+
+    if (showBatchDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteDialog = false },
+            title = { Text("批量删除") },
+            text = { Text("确认删除选中的 ${selectedTransactionIds.size} 笔记录？删除后无法恢复。") },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            showBatchDeleteDialog = false
+                            onDeleteSelected()
+                        }
+                        .background(MarketDown)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text("删除", color = BackgroundPrimary, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showBatchDeleteDialog = false }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text("取消", color = ForegroundPrimary)
+                }
+            },
         )
     }
 
@@ -802,6 +949,7 @@ fun TradeEntryRoute(
     onSellCandidateSelected: (SellCandidateUiModel) -> Unit,
     onSymbolSuggestionSelected: (SecuritySuggestionUiModel) -> Unit,
     onMarketSelected: (Market) -> Unit,
+    onCashCurrencySelected: (DisplayCurrency) -> Unit,
     onSymbolChange: (String) -> Unit,
     onDateChange: (String) -> Unit,
     onPriceChange: (String) -> Unit,
@@ -817,16 +965,13 @@ fun TradeEntryRoute(
     val isSellTrade = state.selectedType == TradeType.SELL
     val (tradeTypeBadgeBackground, tradeTypeBadgeForeground) = tradeTypeColors(state.selectedType)
     var showDeleteDialog by remember { mutableStateOf(false) }
-    val cashCurrencyCode = when (displayCurrency) {
-        DisplayCurrency.USD -> "USD"
-        DisplayCurrency.CNY -> "CNY"
-        DisplayCurrency.HKD -> "HKD"
+    val cashCurrency = when (state.market) {
+        Market.US -> DisplayCurrency.USD
+        Market.HONG_KONG -> DisplayCurrency.HKD
+        else -> DisplayCurrency.CNY
     }
-    val cashCurrencyLabel = when (displayCurrency) {
-        DisplayCurrency.USD -> "美元"
-        DisplayCurrency.CNY -> "人民币"
-        DisplayCurrency.HKD -> "港币"
-    }
+    val cashCurrencyCode = cashCurrency.code
+    val cashCurrencyLabel = cashCurrency.label
 
     Column(
         modifier = Modifier
@@ -960,6 +1105,22 @@ fun TradeEntryRoute(
                         )
                     }
                 } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("货币种类", color = ForegroundSecondary, fontSize = 14.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            DisplayCurrency.entries.forEach { currency ->
+                                FilterChip(
+                                    text = currency.label,
+                                    selected = cashCurrency == currency,
+                                    modifier = Modifier.weight(1f),
+                                    onClick = { onCashCurrencySelected(currency) },
+                                )
+                            }
+                        }
+                    }
                     InputFieldBlock(
                         label = if (state.selectedType == TradeType.DEPOSIT) {
                             "入金金额 ($cashCurrencyCode)"
@@ -1122,7 +1283,7 @@ private fun FilterActionButton(
 }
 
 @Composable
-private fun <T> FilterChipWrapRow(
+internal fun <T> FilterChipWrapRow(
     options: List<T>,
     selected: T,
     label: (T) -> String,
@@ -1282,6 +1443,120 @@ private fun normalizeDateRange(
         normalizedEnd to normalizedStart
     } else {
         normalizedStart to normalizedEnd
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun HoldingsRoutePreview() {
+    StockLedgerTheme {
+        HoldingsRoute(
+            summary = PreviewFixtures.portfolioSummary,
+            displayCurrency = DisplayCurrency.CNY,
+            holdings = PreviewFixtures.holdings,
+            selectedPlatform = BrokerPlatform.HSBC,
+            onPlatformClick = {},
+            onSettingsClick = {},
+            onDisplayCurrencySelected = {},
+            onRefresh = {},
+            onDestinationSelected = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun OperationsRoutePreview() {
+    StockLedgerTheme {
+        OperationsRoute(
+            selectedPlatform = BrokerPlatform.HSBC,
+            onPlatformClick = {},
+            onSettingsClick = {},
+            onBuyClick = {},
+            onSellClick = {},
+            onDepositClick = {},
+            onWithdrawClick = {},
+            onExportBackupClick = {},
+            onImportBackupClick = {},
+            backupStatusMessage = "最近备份已完成",
+            hsbcImportDraftText = PreviewFixtures.hsbcImportDraftText,
+            hsbcImportStatusMessage = "已解析 1 条",
+            onHsbcImportDraftTextChange = {},
+            onImportHsbcNotificationText = {},
+            zhuoruiEmailSyncConfig = ZhuoruiEmailSyncConfig(),
+            zhuoruiEmailManualSyncOptions = ZhuoruiEmailManualSyncOptions(),
+            zhuoruiEmailAutoImportEnabled = false,
+            zhuoruiEmailSyncStatusMessage = null,
+            onZhuoruiEmailSyncConfigChange = {},
+            onZhuoruiEmailManualSyncOptionsChange = {},
+            onSaveZhuoruiEmailSyncConfig = {},
+            onSyncZhuoruiMailboxNow = {},
+            onEnableZhuoruiEmailAutoImport = {},
+            onDisableZhuoruiEmailAutoImport = {},
+            zhuoruiStatementPdfPassword = "",
+            zhuoruiStatementPdfImportStatusMessage = null,
+            onZhuoruiStatementPdfPasswordChange = {},
+            onImportZhuoruiStatementPdfs = {},
+            onDestinationSelected = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun TransactionsRoutePreview() {
+    StockLedgerTheme {
+        TransactionsRoute(
+            sections = PreviewFixtures.transactionSections,
+            selectedPlatform = BrokerPlatform.HSBC,
+            selectedTradeFilter = TransactionFilter.ALL,
+            selectedMarketFilter = MarketFilter.ALL,
+            transactionKeyword = "",
+            transactionDateStart = "",
+            transactionDateEnd = "",
+            onTradeFilterSelected = {},
+            onMarketFilterSelected = {},
+            onTransactionKeywordChange = {},
+            onTransactionDateRangeChange = { _, _ -> },
+            onResetFilters = {},
+            onEditTradeClick = {},
+            onPlatformClick = {},
+            onSettingsClick = {},
+            onDestinationSelected = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 900)
+@Composable
+private fun TradeEntryRoutePreview() {
+    StockLedgerTheme {
+        TradeEntryRoute(
+            state = PreviewFixtures.tradeEntryState,
+            isEditing = false,
+            displayCurrency = DisplayCurrency.USD,
+            availablePlatforms = BrokerPlatform.configurableEntries,
+            sellCandidates = PreviewFixtures.sellCandidates,
+            symbolLookup = PreviewFixtures.symbolLookup,
+            symbolSuggestions = PreviewFixtures.symbolSuggestions,
+            canSubmit = true,
+            validationMessage = null,
+            onBackClick = {},
+            onTradePlatformSelected = {},
+            onSellCandidateSelected = {},
+            onSymbolSuggestionSelected = {},
+            onMarketSelected = {},
+            onCashCurrencySelected = {},
+            onSymbolChange = {},
+            onDateChange = {},
+            onPriceChange = {},
+            onQuantityChange = {},
+            onCommissionChange = {},
+            onTaxChange = {},
+            onRecalculateFees = {},
+            onNoteChange = {},
+            onSubmit = {},
+        )
     }
 }
 
