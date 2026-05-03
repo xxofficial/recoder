@@ -125,6 +125,10 @@ data class LedgerUiState(
     val zhuoruiPromoConfig: ZhuoruiPromoConfig = ZhuoruiPromoConfig(),
     val zhuoruiStatementPdfPassword: String = "",
     val zhuoruiStatementPdfImportStatusMessage: String? = null,
+    val alibabaBailianApiKey: String = "",
+    val visionImportEnabled: Boolean = false,
+    val visionImportModel: String = "",
+    val visionImportStatusMessage: String? = null,
     val batchSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
 )
@@ -165,6 +169,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val zhuoruiEmailSyncStatusMessage = MutableStateFlow(loadZhuoruiEmailSyncStatusMessage())
     private val zhuoruiStatementPdfPassword = MutableStateFlow(loadZhuoruiStatementPdfPassword())
     private val zhuoruiStatementPdfImportStatusMessage = MutableStateFlow<String?>(null)
+    private val alibabaBailianApiKey = MutableStateFlow(loadAlibabaBailianApiKey())
+    private val visionImportEnabled = MutableStateFlow(loadVisionImportEnabled())
+    private val visionImportModel = MutableStateFlow(loadVisionImportModel())
+    private val visionImportStatusMessage = MutableStateFlow<String?>(null)
     private val batchSelectionMode = MutableStateFlow(false)
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
@@ -423,6 +431,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         state.copy(zhuoruiStatementPdfPassword = password)
     }.combine(zhuoruiStatementPdfImportStatusMessage) { state, message ->
         state.copy(zhuoruiStatementPdfImportStatusMessage = message)
+    }.combine(alibabaBailianApiKey) { state, key ->
+        state.copy(alibabaBailianApiKey = key)
+    }.combine(visionImportEnabled) { state, enabled ->
+        state.copy(visionImportEnabled = enabled)
+    }.combine(visionImportModel) { state, model ->
+        state.copy(visionImportModel = model)
+    }.combine(visionImportStatusMessage) { state, message ->
+        state.copy(visionImportStatusMessage = message)
     }.combine(batchSelectionMode) { state, batchMode ->
         state.copy(batchSelectionMode = batchMode)
     }.combine(selectedTransactionIds) { state, selectedIds ->
@@ -3131,6 +3147,112 @@ private data class RefreshMeta(
             }
             zhuoruiStatementPdfImportStatusMessage.value = message
         }
+    }
+
+    fun importZhuoruiStatementPdfsViaVision(uris: List<Uri>) {
+        val apiKey = alibabaBailianApiKey.value
+        val password = zhuoruiStatementPdfPassword.value
+        if (apiKey.isBlank()) {
+            visionImportStatusMessage.value = "请先设置阿里云百炼 API Key"
+            return
+        }
+        if (password.isBlank()) {
+            visionImportStatusMessage.value = "请先输入PDF结单密码"
+            return
+        }
+        if (uris.isEmpty()) {
+            visionImportStatusMessage.value = "请选择要导入的PDF文件"
+            return
+        }
+
+        viewModelScope.launch {
+            visionImportStatusMessage.value = "正在识图解析${uris.size}个PDF文件..."
+            var totalImported = 0
+            var totalDuplicate = 0
+            var totalFailed = 0
+
+            val model = visionImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-vl-max"
+            val client = com.recoder.stockledger.data.importer.vision.OpenAiVisionClient(
+                apiKey = apiKey,
+                model = model,
+                baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            )
+            val importer = com.recoder.stockledger.data.importer.vision.VisionPdfImporter(
+                context = getApplication(),
+                apiClient = client,
+            )
+
+            for (uri in uris) {
+                runCatching {
+                    val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                    inputStream?.use { stream ->
+                        val trades = importer.importStatement(stream, password)
+                        val results = repository.importParsedTrades(trades)
+                        for (result in results) {
+                            when (result.outcome) {
+                                com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
+                                com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                else -> totalFailed++
+                            }
+                        }
+                        if (trades.isEmpty()) {
+                            totalFailed++
+                        }
+                    }
+                }.onFailure { error ->
+                    totalFailed++
+                    android.util.Log.e("LedgerViewModel", "Vision导入失败: ${error.message}", error)
+                }
+            }
+
+            val message = buildString {
+                append("识图导入完成：")
+                if (totalImported > 0) append("新增 $totalImported 条 ")
+                if (totalDuplicate > 0) append("重复 $totalDuplicate 条 ")
+                if (totalFailed > 0) append("失败 $totalFailed 个文件")
+                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0) {
+                    append("未找到可导入的交易记录")
+                }
+            }
+            visionImportStatusMessage.value = message
+        }
+    }
+
+    fun updateAlibabaBailianApiKey(key: String) {
+        alibabaBailianApiKey.value = key
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, key)
+            .apply()
+    }
+
+    fun updateVisionImportEnabled(enabled: Boolean) {
+        visionImportEnabled.value = enabled
+        preferences.edit()
+            .putBoolean(StockLedgerPreferences.KEY_VISION_IMPORT_ENABLED, enabled)
+            .apply()
+    }
+
+    fun updateVisionImportModel(model: String) {
+        visionImportModel.value = model
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, model)
+            .apply()
+    }
+
+    fun clearVisionImportStatus() {
+        visionImportStatusMessage.value = null
+    }
+
+    private fun loadAlibabaBailianApiKey(): String {
+        return preferences.getString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, "").orEmpty()
+    }
+
+    private fun loadVisionImportEnabled(): Boolean {
+        return preferences.getBoolean(StockLedgerPreferences.KEY_VISION_IMPORT_ENABLED, false)
+    }
+
+    private fun loadVisionImportModel(): String {
+        return preferences.getString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, "").orEmpty()
     }
 
     private fun reconcileZhuoruiEmailAutoSync() {

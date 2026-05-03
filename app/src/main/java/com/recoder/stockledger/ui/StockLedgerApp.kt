@@ -99,6 +99,11 @@ fun StockLedgerApp(
             ledgerViewModel.importZhuoruiStatementPdfs(uris)
         }
     }
+    val pdfVisionImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            ledgerViewModel.importZhuoruiStatementPdfsViaVision(uris)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -249,6 +254,11 @@ fun StockLedgerApp(
                         onImportZhuoruiStatementPdfs = {
                             pdfImportLauncher.launch(arrayOf("application/pdf"))
                         },
+                        visionImportEnabled = uiState.visionImportEnabled,
+                        visionImportStatusMessage = uiState.visionImportStatusMessage,
+                        onImportZhuoruiStatementPdfsViaVision = {
+                            pdfVisionImportLauncher.launch(arrayOf("application/pdf"))
+                        },
                         onDestinationSelected = { destination ->
                             when (destination) {
                                 TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
@@ -388,6 +398,12 @@ fun StockLedgerApp(
                         zhuoruiPromoConfig = uiState.zhuoruiPromoConfig,
                         onZhuoruiPromoChange = ledgerViewModel::updateZhuoruiPromoConfig,
                         onSaveZhuoruiPromo = ledgerViewModel::saveZhuoruiPromoConfig,
+                        alibabaBailianApiKey = uiState.alibabaBailianApiKey,
+                        visionImportEnabled = uiState.visionImportEnabled,
+                        visionImportModel = uiState.visionImportModel,
+                        onAlibabaBailianApiKeyChange = ledgerViewModel::updateAlibabaBailianApiKey,
+                        onVisionImportEnabledChange = ledgerViewModel::updateVisionImportEnabled,
+                        onVisionImportModelChange = ledgerViewModel::updateVisionImportModel,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },
                     )

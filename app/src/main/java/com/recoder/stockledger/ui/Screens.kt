@@ -303,6 +303,9 @@ fun OperationsRoute(
     zhuoruiStatementPdfImportStatusMessage: String?,
     onZhuoruiStatementPdfPasswordChange: (String) -> Unit,
     onImportZhuoruiStatementPdfs: () -> Unit,
+    visionImportEnabled: Boolean,
+    visionImportStatusMessage: String?,
+    onImportZhuoruiStatementPdfsViaVision: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
@@ -615,6 +618,20 @@ fun OperationsRoute(
                                 color = ForegroundMuted,
                                 fontSize = 12.sp,
                             )
+                        }
+                        if (visionImportEnabled) {
+                            OutlineActionButton(
+                                text = "识图导入（阿里云百炼）",
+                                onClick = onImportZhuoruiStatementPdfsViaVision,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            visionImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                Text(
+                                    text = message,
+                                    color = ForegroundMuted,
+                                    fontSize = 12.sp,
+                                )
+                            }
                         }
                     }
                 }
@@ -1026,11 +1043,6 @@ fun TradeEntryRoute(
                             background = tradeTypeBadgeBackground,
                             foreground = tradeTypeBadgeForeground,
                         )
-                        Text(
-                            text = if (isEditing) "编辑时不可修改" else "由操作页入口决定",
-                            color = ForegroundMuted,
-                            fontSize = 12.sp,
-                        )
                     }
                 }
 
@@ -1039,15 +1051,6 @@ fun TradeEntryRoute(
                     availablePlatforms = availablePlatforms,
                     onSelected = onTradePlatformSelected,
                 )
-
-                if (isSellTrade) {
-                    PreciseSellCandidateSection(
-                        candidates = sellCandidates,
-                        selectedSymbol = symbolLookup.resolvedSymbol,
-                        selectedMarket = symbolLookup.resolvedMarket,
-                        onSelected = onSellCandidateSelected,
-                    )
-                }
 
                 if (isSecurityTrade) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1497,6 +1500,9 @@ private fun OperationsRoutePreview() {
             zhuoruiStatementPdfImportStatusMessage = null,
             onZhuoruiStatementPdfPasswordChange = {},
             onImportZhuoruiStatementPdfs = {},
+            visionImportEnabled = true,
+            visionImportStatusMessage = null,
+            onImportZhuoruiStatementPdfsViaVision = {},
             onDestinationSelected = {},
         )
     }

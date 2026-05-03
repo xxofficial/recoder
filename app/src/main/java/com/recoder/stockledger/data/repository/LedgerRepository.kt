@@ -575,6 +575,76 @@ class DefaultLedgerRepository(
         results
     }
 
+    suspend fun importParsedTrades(
+        parsedTrades: List<com.recoder.stockledger.data.importer.ParsedStatementTrade>,
+    ): List<TradeImportResult> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<TradeImportResult>()
+        for (parsed in parsedTrades) {
+            val externalReference = "ZR-STMT-${parsed.tradeRef}"
+            val existing = dao.findTransactionByExternalReference(
+                platform = BrokerPlatform.ZHUORUI.name,
+                externalReference = externalReference,
+            )
+            if (existing != null) {
+                results.add(
+                    TradeImportResult(
+                        outcome = TradeImportOutcome.DUPLICATE,
+                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在，已跳过",
+                        externalReference = externalReference,
+                    )
+                )
+                continue
+            }
+
+            val feeEstimate = estimateImportedTradeFees(
+                tradeType = parsed.tradeType,
+                platform = BrokerPlatform.ZHUORUI,
+                market = parsed.market,
+                price = parsed.price,
+                quantity = parsed.quantity,
+                tradeDate = parsed.tradeDate.toString(),
+                tradeTime = "00:00",
+            )
+            addTrade(
+                TradeDraftInput(
+                    tradeType = parsed.tradeType,
+                    platform = BrokerPlatform.ZHUORUI,
+                    sourceChannel = parsed.sourceChannel,
+                    externalReference = externalReference,
+                    market = parsed.market,
+                    symbol = parsed.symbol,
+                    name = parsed.name,
+                    tradeDate = parsed.tradeDate.toString(),
+                    price = parsed.price,
+                    quantity = parsed.quantity,
+                    commission = feeEstimate.commission,
+                    tax = feeEstimate.tax,
+                    note = buildImportedNote(
+                        sourceChannel = parsed.sourceChannel,
+                        externalReference = externalReference,
+                        rawText = parsed.rawLine,
+                        suffix = importedFeeNoteSuffix(feeEstimate),
+                    ),
+                    tradeTime = "00:00",
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+            results.add(
+                TradeImportResult(
+                    outcome = TradeImportOutcome.IMPORTED,
+                    message = "已导入${parsed.tradeType.label} ${parsed.symbol} ${parsed.quantity} 股",
+                    externalReference = externalReference,
+                )
+            )
+        }
+
+        if (results.any { it.outcome == TradeImportOutcome.IMPORTED }) {
+            refreshQuotesForPortfolio(transactions.first())
+        }
+
+        results
+    }
+
     suspend fun deleteHolding(symbol: String, market: Market): Int {
         return dao.deleteHolding(symbol = symbol, market = market.name)
     }

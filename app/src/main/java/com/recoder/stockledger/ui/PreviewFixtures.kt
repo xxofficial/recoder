@@ -239,7 +239,7 @@ internal object PreviewFixtures {
         ),
     )
 
-    val tradeEntryState = SampleData.tradeForm(TradeType.BUY).copy(
+    val tradeEntryState = SampleData.tradeForm(TradeType.SELL).copy(
         symbolOrName = "AAPL",
         priceLabel = "193.25",
         quantityLabel = "10",
