@@ -306,6 +306,8 @@ fun OperationsRoute(
     visionImportEnabled: Boolean,
     visionImportStatusMessage: String?,
     onImportZhuoruiStatementPdfsViaVision: () -> Unit,
+    textImportStatusMessage: String?,
+    onImportZhuoruiStatementPdfsViaTextModel: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
@@ -594,7 +596,7 @@ fun OperationsRoute(
                     ) {
                         Text("电子结单导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "支持导入卓锐证券的月结单或日结单（PDF格式），可同时选择多个文件批量导入。",
+                            "支持导入卓锐证券的日结单（PDF格式），可同时选择多个文件批量导入。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
@@ -621,11 +623,23 @@ fun OperationsRoute(
                         }
                         if (visionImportEnabled) {
                             OutlineActionButton(
-                                text = "识图导入（阿里云百炼）",
+                                text = "识图导入",
                                 onClick = onImportZhuoruiStatementPdfsViaVision,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             visionImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                Text(
+                                    text = message,
+                                    color = ForegroundMuted,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            OutlineActionButton(
+                                text = "文本大模型导入",
+                                onClick = onImportZhuoruiStatementPdfsViaTextModel,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            textImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
                                 Text(
                                     text = message,
                                     color = ForegroundMuted,
@@ -1503,6 +1517,8 @@ private fun OperationsRoutePreview() {
             visionImportEnabled = true,
             visionImportStatusMessage = null,
             onImportZhuoruiStatementPdfsViaVision = {},
+            textImportStatusMessage = null,
+            onImportZhuoruiStatementPdfsViaTextModel = {},
             onDestinationSelected = {},
         )
     }

@@ -104,6 +104,11 @@ fun StockLedgerApp(
             ledgerViewModel.importZhuoruiStatementPdfsViaVision(uris)
         }
     }
+    val pdfTextImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            ledgerViewModel.importZhuoruiStatementPdfsViaTextModel(uris)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -258,6 +263,10 @@ fun StockLedgerApp(
                         visionImportStatusMessage = uiState.visionImportStatusMessage,
                         onImportZhuoruiStatementPdfsViaVision = {
                             pdfVisionImportLauncher.launch(arrayOf("application/pdf"))
+                        },
+                        textImportStatusMessage = uiState.textImportStatusMessage,
+                        onImportZhuoruiStatementPdfsViaTextModel = {
+                            pdfTextImportLauncher.launch(arrayOf("application/pdf"))
                         },
                         onDestinationSelected = { destination ->
                             when (destination) {

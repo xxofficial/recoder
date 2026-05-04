@@ -19,6 +19,25 @@ Rules:
         if (passwordHint != null) {
             append("Note: The PDF was password-protected with password: $passwordHint\n\n")
         }
+        append(fieldInstructions())
+        append("\nReturn EXACTLY this JSON structure (no markdown, no extra text):\n")
+        append(jsonExample())
+    }
+
+    fun textUserPrompt(rawText: String, passwordHint: String? = null): String = buildString {
+        append("The following text was extracted from a daily stock trading statement PDF.\n\n")
+        if (passwordHint != null) {
+            append("Note: The PDF was password-protected with password: $passwordHint\n\n")
+        }
+        append(fieldInstructions())
+        append("\nReturn EXACTLY this JSON structure (no markdown, no extra text):\n")
+        append(jsonExample())
+        append("\n--- BEGIN EXTRACTED PDF TEXT ---\n")
+        append(rawText)
+        append("\n--- END EXTRACTED PDF TEXT ---\n")
+    }
+
+    private fun fieldInstructions(): String = buildString {
         append("For each trade, extract the following fields:\n")
         append("- trade_date: YYYY-MM-DD format\n")
         append("- trade_type: \"BUY\" or \"SELL\". Chinese directions: 买入/买/買入/買 = BUY, 沽出/卖出/賣出/沽/賣 = SELL\n")
@@ -38,8 +57,9 @@ Rules:
         append("  - transaction_fee: transaction activity fee\n")
         append("  - stamp_duty: stamp tax\n")
         append("  - other_fees: any other fees\n")
-        append("\nReturn EXACTLY this JSON structure (no markdown, no extra text):\n")
-        append("""
+    }
+
+    private fun jsonExample(): String = """
 {
   "trades": [
     {
@@ -65,6 +85,5 @@ Rules:
     }
   ]
 }
-""".trimIndent())
-    }
+""".trimIndent()
 }

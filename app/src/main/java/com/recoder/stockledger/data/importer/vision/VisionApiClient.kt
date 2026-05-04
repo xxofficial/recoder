@@ -18,6 +18,11 @@ interface VisionApiClient {
         images: List<ByteArray>,
         passwordHint: String? = null,
     ): VisionExtractionResult
+
+    suspend fun extractTradesFromText(
+        text: String,
+        passwordHint: String? = null,
+    ): VisionExtractionResult
 }
 
 class OpenAiVisionClient(
@@ -70,6 +75,46 @@ class OpenAiVisionClient(
         }
     }
 
+    override suspend fun extractTradesFromText(
+        text: String,
+        passwordHint: String?,
+    ): VisionExtractionResult = withContext(Dispatchers.IO) {
+        try {
+            val requestBody = buildTextRequestBody(text, passwordHint)
+            Log.d(TAG, "Text request body size: ${requestBody.length} chars")
+
+            val connection = URL(baseUrl).openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Authorization", "Bearer $apiKey")
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.doOutput = true
+            connection.connectTimeout = 60_000
+            connection.readTimeout = 120_000
+
+            connection.outputStream.use { os ->
+                os.write(requestBody.toByteArray(Charsets.UTF_8))
+            }
+
+            val responseCode = connection.responseCode
+            val responseText = if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $responseCode"
+            }
+
+            Log.d(TAG, "Text response code: $responseCode")
+
+            if (responseCode !in 200..299) {
+                return@withContext VisionExtractionResult.Error("API error $responseCode: $responseText")
+            }
+
+            parseOpenAiResponse(responseText)
+        } catch (e: Exception) {
+            Log.e(TAG, "Text API call failed", e)
+            VisionExtractionResult.Error("Network/IO error: ${e.message}")
+        }
+    }
+
     private fun buildRequestBody(images: List<ByteArray>, passwordHint: String?): String {
         val contentArray = JSONArray()
         contentArray.put(JSONObject().apply {
@@ -93,6 +138,27 @@ class OpenAiVisionClient(
         val messages = JSONArray().put(JSONObject().apply {
             put("role", "user")
             put("content", contentArray)
+        })
+
+        val root = JSONObject().apply {
+            put("model", model)
+            put("messages", messages)
+            put("response_format", JSONObject().apply { put("type", "json_object") })
+            put("max_tokens", 4096)
+            put("temperature", 0.0)
+        }
+        return root.toString()
+    }
+
+    private fun buildTextRequestBody(text: String, passwordHint: String?): String {
+        val messages = JSONArray()
+        messages.put(JSONObject().apply {
+            put("role", "system")
+            put("content", TradeExtractionPrompt.systemPrompt())
+        })
+        messages.put(JSONObject().apply {
+            put("role", "user")
+            put("content", TradeExtractionPrompt.textUserPrompt(text, passwordHint))
         })
 
         val root = JSONObject().apply {

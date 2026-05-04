@@ -130,6 +130,7 @@ data class LedgerUiState(
     val visionImportModel: String = "",
     val visionApiBaseUrl: String = "",
     val visionImportStatusMessage: String? = null,
+    val textImportStatusMessage: String? = null,
     val batchSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
 )
@@ -175,6 +176,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val visionImportModel = MutableStateFlow(loadVisionImportModel())
     private val visionApiBaseUrl = MutableStateFlow(loadVisionApiBaseUrl())
     private val visionImportStatusMessage = MutableStateFlow<String?>(null)
+    private val textImportStatusMessage = MutableStateFlow<String?>(null)
     private val batchSelectionMode = MutableStateFlow(false)
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
@@ -443,6 +445,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         state.copy(visionApiBaseUrl = url)
     }.combine(visionImportStatusMessage) { state, message ->
         state.copy(visionImportStatusMessage = message)
+    }.combine(textImportStatusMessage) { state, message ->
+        state.copy(textImportStatusMessage = message)
     }.combine(batchSelectionMode) { state, batchMode ->
         state.copy(batchSelectionMode = batchMode)
     }.combine(selectedTransactionIds) { state, selectedIds ->
@@ -3252,8 +3256,82 @@ private data class RefreshMeta(
             .apply()
     }
 
+    fun importZhuoruiStatementPdfsViaTextModel(uris: List<Uri>) {
+        val apiKey = alibabaBailianApiKey.value
+        val password = zhuoruiStatementPdfPassword.value
+        if (apiKey.isBlank()) {
+            textImportStatusMessage.value = "请先设置 API Key"
+            return
+        }
+        if (password.isBlank()) {
+            textImportStatusMessage.value = "请先输入PDF结单密码"
+            return
+        }
+        if (uris.isEmpty()) {
+            textImportStatusMessage.value = "请选择要导入的PDF文件"
+            return
+        }
+
+        viewModelScope.launch {
+            textImportStatusMessage.value = "正在文本解析${uris.size}个PDF文件..."
+            var totalImported = 0
+            var totalDuplicate = 0
+            var totalFailed = 0
+
+            val model = visionImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-vl-max"
+            val baseUrl = visionApiBaseUrl.value.takeIf { it.isNotBlank() }
+                ?: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+            val client = com.recoder.stockledger.data.importer.vision.OpenAiVisionClient(
+                apiKey = apiKey,
+                model = model,
+                baseUrl = baseUrl,
+            )
+            val importer = com.recoder.stockledger.data.importer.vision.TextPdfImporter(
+                apiClient = client,
+            )
+
+            for (uri in uris) {
+                runCatching {
+                    val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                    inputStream?.use { stream ->
+                        val trades = importer.importStatement(stream, password)
+                        val results = repository.importParsedTrades(trades)
+                        for (result in results) {
+                            when (result.outcome) {
+                                com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
+                                com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                else -> totalFailed++
+                            }
+                        }
+                        if (trades.isEmpty()) {
+                            totalFailed++
+                        }
+                    }
+                }.onFailure { error ->
+                    totalFailed++
+                    android.util.Log.e("LedgerViewModel", "文本导入失败: ${error.message}", error)
+                }
+            }
+
+            val message = buildString {
+                append("文本导入完成：")
+                if (totalImported > 0) append("新增 $totalImported 条 ")
+                if (totalDuplicate > 0) append("重复 $totalDuplicate 条 ")
+                if (totalFailed > 0) append("失败 $totalFailed 个文件")
+                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0) {
+                    append("未找到可导入的交易记录")
+                }
+            }
+            textImportStatusMessage.value = message
+        }
+    }
+
     fun clearVisionImportStatus() {
         visionImportStatusMessage.value = null
+    }
+
+    fun clearTextImportStatus() {
+        textImportStatusMessage.value = null
     }
 
     private fun loadAlibabaBailianApiKey(): String {

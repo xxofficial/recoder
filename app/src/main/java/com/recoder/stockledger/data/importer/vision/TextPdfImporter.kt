@@ -1,25 +1,23 @@
 package com.recoder.stockledger.data.importer.vision
 
-import android.content.Context
 import android.util.Log
 import com.recoder.stockledger.data.importer.ParsedStatementTrade
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
-import java.io.File
 import java.io.InputStream
 
-class VisionPdfImporter(
-    private val context: Context,
+class TextPdfImporter(
     private val apiClient: VisionApiClient,
 ) {
     private companion object {
-        const val TAG = "VisionPdfImporter"
+        const val TAG = "TextPdfImporter"
     }
 
     /**
-     * Import trades from a PDF statement using vision-based extraction.
+     * Import trades from a PDF statement using text-based LLM extraction.
      *
      * @param inputStream PDF input stream.
      * @param password PDF password if encrypted.
@@ -30,22 +28,19 @@ class VisionPdfImporter(
         password: String? = null,
     ): List<ParsedStatementTrade> = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "Starting vision-based import, password=${password != null}")
+            Log.d(TAG, "Starting text-based import, password=${password != null}")
 
-            // 1. Decrypt if needed (PdfRenderer cannot handle encrypted PDFs)
-            val decryptedStream = decryptIfNeeded(inputStream, password)
+            // 1. Decrypt and extract text
+            val text = extractText(inputStream, password)
+            Log.d(TAG, "Extracted text length: ${text.length}")
 
-            // 2. Render PDF pages to images
-            val images = PdfPageRenderer.renderPages(decryptedStream, password = null)
-            Log.d(TAG, "Rendered ${images.size} page images")
-
-            if (images.isEmpty()) {
-                Log.w(TAG, "No pages rendered from PDF")
+            if (text.isBlank()) {
+                Log.w(TAG, "No text extracted from PDF")
                 return@withContext emptyList<ParsedStatementTrade>()
             }
 
-            // 3. Call vision API
-            val result = apiClient.extractTrades(images, passwordHint = password)
+            // 2. Call text-based API
+            val result = apiClient.extractTradesFromText(text, passwordHint = password)
 
             when (result) {
                 is VisionExtractionResult.Success -> {
@@ -66,27 +61,28 @@ class VisionPdfImporter(
         }
     }
 
-    /**
-     * If the PDF is encrypted, decrypt it using PDFBox and return a new InputStream.
-     * Otherwise return the original stream.
-     */
-    private fun decryptIfNeeded(inputStream: InputStream, password: String?): InputStream {
-        if (password.isNullOrBlank()) return inputStream
-
+    private fun extractText(inputStream: InputStream, password: String?): String {
         return try {
-            val doc = PDDocument.load(inputStream, password)
-            if (doc.isEncrypted) {
-                doc.setAllSecurityToBeRemoved(true)
-                doc.documentCatalog  // force decryption
+            val doc = if (!password.isNullOrBlank()) {
+                PDDocument.load(inputStream, password).apply {
+                    if (isEncrypted) {
+                        setAllSecurityToBeRemoved(true)
+                    }
+                }
+            } else {
+                PDDocument.load(inputStream)
             }
-            val baos = java.io.ByteArrayOutputStream()
-            doc.save(baos)
-            doc.close()
-            Log.d(TAG, "PDF decrypted successfully, security removed=${!doc.isEncrypted}")
-            ByteArrayInputStream(baos.toByteArray())
+            doc.use { document ->
+                val stripper = PDFTextStripper().apply {
+                    sortByPosition = true
+                }
+                val text = stripper.getText(document)
+                Log.d(TAG, "PDF text extraction successful, pages=${document.numberOfPages}")
+                text
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Decryption failed or PDF not encrypted, using original stream: ${e.message}")
-            inputStream
+            Log.e(TAG, "Text extraction failed", e)
+            ""
         }
     }
 

@@ -238,7 +238,7 @@ fun SettingsRoute(
                     ) {
                         Text("识图导入设置", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "使用阿里云百炼大模型视觉识别解析PDF结单。需要联网，结单图片将发送至阿里云API处理。",
+                            "使用视觉识别大模型解析PDF结单。需要联网，结单图片将发送至API处理。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
@@ -254,25 +254,23 @@ fun SettingsRoute(
                             )
                         }
                         InputFieldBlock(
-                            label = "阿里云百炼 API Key",
+                            label = "API Key",
                             value = alibabaBailianApiKey,
-                            placeholder = "sk-xxxxxxxx",
+                            placeholder = "",
                             isPassword = true,
-                            supportingText = "在阿里云百炼控制台获取 API Key",
                             onValueChange = onAlibabaBailianApiKeyChange,
                         )
                         InputFieldBlock(
-                            label = "模型名称（可选）",
+                            label = "模型名称",
                             value = visionImportModel,
-                            placeholder = "qwen-vl-max",
-                            supportingText = "留空默认使用 qwen-vl-max",
+                            placeholder = "",
                             onValueChange = onVisionImportModelChange,
                         )
                         InputFieldBlock(
-                            label = "API Base URL（可选）",
+                            label = "API Base URL",
                             value = visionApiBaseUrl,
-                            placeholder = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-                            supportingText = "留空默认使用阿里云百炼端点",
+                            placeholder = "",
+                            supportingText = "OpenAI接口协议",
                             onValueChange = onVisionApiBaseUrlChange,
                         )
                     }
