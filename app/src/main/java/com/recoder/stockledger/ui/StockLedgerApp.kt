@@ -401,9 +401,11 @@ fun StockLedgerApp(
                         alibabaBailianApiKey = uiState.alibabaBailianApiKey,
                         visionImportEnabled = uiState.visionImportEnabled,
                         visionImportModel = uiState.visionImportModel,
+                        visionApiBaseUrl = uiState.visionApiBaseUrl,
                         onAlibabaBailianApiKeyChange = ledgerViewModel::updateAlibabaBailianApiKey,
                         onVisionImportEnabledChange = ledgerViewModel::updateVisionImportEnabled,
                         onVisionImportModelChange = ledgerViewModel::updateVisionImportModel,
+                        onVisionApiBaseUrlChange = ledgerViewModel::updateVisionApiBaseUrl,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },
                     )

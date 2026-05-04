@@ -21,4 +21,5 @@ object StockLedgerPreferences {
     const val KEY_ALIBABA_BAILIAN_API_KEY = "alibaba_bailian_api_key"
     const val KEY_VISION_IMPORT_ENABLED = "vision_import_enabled"
     const val KEY_VISION_IMPORT_MODEL = "vision_import_model"
+    const val KEY_VISION_API_BASE_URL = "vision_api_base_url"
 }

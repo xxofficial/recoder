@@ -91,4 +91,26 @@ interface LedgerDao {
         """,
     )
     suspend fun findStockNameFromQuotes(symbol: String, market: String): String?
+
+    @Query(
+        """
+        SELECT * FROM transactions
+        WHERE platform = :platform
+          AND symbol = :symbol
+          AND market = :market
+          AND tradeDate = :tradeDate
+          AND tradeType = :tradeType
+          AND quantity = :quantity
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun findDuplicateTransaction(
+        platform: String,
+        symbol: String,
+        market: String,
+        tradeDate: String,
+        tradeType: String,
+        quantity: Int,
+    ): TransactionEntity?
 }

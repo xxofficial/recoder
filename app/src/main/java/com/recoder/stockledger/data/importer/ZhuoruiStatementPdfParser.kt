@@ -22,6 +22,10 @@ data class ParsedStatementTrade(
     val quantity: Int,
     val amount: Double,
     val tradeDate: LocalDate,
+    val tradeTime: String? = null,
+    val commission: Double? = null,
+    val platformFee: Double? = null,
+    val tax: Double? = null,
     val tradeRef: String,
     val rawLine: String,
 )

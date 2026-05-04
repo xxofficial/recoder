@@ -54,9 +54,11 @@ fun SettingsRoute(
     alibabaBailianApiKey: String,
     visionImportEnabled: Boolean,
     visionImportModel: String,
+    visionApiBaseUrl: String,
     onAlibabaBailianApiKeyChange: (String) -> Unit,
     onVisionImportEnabledChange: (Boolean) -> Unit,
     onVisionImportModelChange: (String) -> Unit,
+    onVisionApiBaseUrlChange: (String) -> Unit,
     onPlatformClick: () -> Unit,
     onBackClick: () -> Unit,
 ) {
@@ -266,6 +268,13 @@ fun SettingsRoute(
                             supportingText = "留空默认使用 qwen-vl-max",
                             onValueChange = onVisionImportModelChange,
                         )
+                        InputFieldBlock(
+                            label = "API Base URL（可选）",
+                            value = visionApiBaseUrl,
+                            placeholder = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                            supportingText = "留空默认使用阿里云百炼端点",
+                            onValueChange = onVisionApiBaseUrlChange,
+                        )
                     }
                 }
             }
@@ -329,9 +338,11 @@ private fun SettingsRoutePreview() {
             alibabaBailianApiKey = "",
             visionImportEnabled = true,
             visionImportModel = "",
+            visionApiBaseUrl = "",
             onAlibabaBailianApiKeyChange = {},
             onVisionImportEnabledChange = {},
             onVisionImportModelChange = {},
+            onVisionApiBaseUrlChange = {},
             onPlatformClick = {},
             onBackClick = {},
         )

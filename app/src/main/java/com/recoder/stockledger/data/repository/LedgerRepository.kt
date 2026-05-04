@@ -526,15 +526,46 @@ class DefaultLedgerRepository(
                 continue
             }
 
-            val feeEstimate = estimateImportedTradeFees(
-                tradeType = parsed.tradeType,
-                platform = BrokerPlatform.ZHUORUI,
-                market = parsed.market,
-                price = parsed.price,
-                quantity = parsed.quantity,
+            val duplicate = dao.findDuplicateTransaction(
+                platform = BrokerPlatform.ZHUORUI.name,
+                symbol = parsed.symbol,
+                market = parsed.market.name,
                 tradeDate = parsed.tradeDate.toString(),
-                tradeTime = "00:00",
+                tradeType = parsed.tradeType.name,
+                quantity = parsed.quantity,
             )
+            if (duplicate != null) {
+                results.add(
+                    TradeImportResult(
+                        outcome = TradeImportOutcome.DUPLICATE,
+                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在（按内容匹配），已跳过",
+                        externalReference = externalReference,
+                    )
+                )
+                continue
+            }
+
+            val hasParsedFees = parsed.commission != null || parsed.tax != null || parsed.platformFee != null
+            val feeEstimate = if (!hasParsedFees) {
+                estimateImportedTradeFees(
+                    tradeType = parsed.tradeType,
+                    platform = BrokerPlatform.ZHUORUI,
+                    market = parsed.market,
+                    price = parsed.price,
+                    quantity = parsed.quantity,
+                    tradeDate = parsed.tradeDate.toString(),
+                    tradeTime = parsed.tradeTime ?: "00:00",
+                )
+            } else null
+
+            val commission = parsed.commission ?: feeEstimate?.commission ?: 0.0
+            val tax = parsed.tax ?: feeEstimate?.tax ?: 0.0
+            val noteSuffix = if (hasParsedFees) {
+                "费用按结单原始数据导入"
+            } else {
+                feeEstimate?.let { importedFeeNoteSuffix(it) } ?: ""
+            }
+
             addTrade(
                 TradeDraftInput(
                     tradeType = parsed.tradeType,
@@ -547,15 +578,15 @@ class DefaultLedgerRepository(
                     tradeDate = parsed.tradeDate.toString(),
                     price = parsed.price,
                     quantity = parsed.quantity,
-                    commission = feeEstimate.commission,
-                    tax = feeEstimate.tax,
+                    commission = commission,
+                    tax = tax,
                     note = buildImportedNote(
                         sourceChannel = parsed.sourceChannel,
                         externalReference = externalReference,
                         rawText = parsed.rawLine,
-                        suffix = importedFeeNoteSuffix(feeEstimate),
+                        suffix = noteSuffix,
                     ),
-                    tradeTime = "00:00",
+                    tradeTime = parsed.tradeTime ?: "00:00",
                     createdAt = System.currentTimeMillis(),
                 ),
             )
@@ -596,15 +627,46 @@ class DefaultLedgerRepository(
                 continue
             }
 
-            val feeEstimate = estimateImportedTradeFees(
-                tradeType = parsed.tradeType,
-                platform = BrokerPlatform.ZHUORUI,
-                market = parsed.market,
-                price = parsed.price,
-                quantity = parsed.quantity,
+            val duplicate = dao.findDuplicateTransaction(
+                platform = BrokerPlatform.ZHUORUI.name,
+                symbol = parsed.symbol,
+                market = parsed.market.name,
                 tradeDate = parsed.tradeDate.toString(),
-                tradeTime = "00:00",
+                tradeType = parsed.tradeType.name,
+                quantity = parsed.quantity,
             )
+            if (duplicate != null) {
+                results.add(
+                    TradeImportResult(
+                        outcome = TradeImportOutcome.DUPLICATE,
+                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在（按内容匹配），已跳过",
+                        externalReference = externalReference,
+                    )
+                )
+                continue
+            }
+
+            val hasParsedFees = parsed.commission != null || parsed.tax != null || parsed.platformFee != null
+            val feeEstimate = if (!hasParsedFees) {
+                estimateImportedTradeFees(
+                    tradeType = parsed.tradeType,
+                    platform = BrokerPlatform.ZHUORUI,
+                    market = parsed.market,
+                    price = parsed.price,
+                    quantity = parsed.quantity,
+                    tradeDate = parsed.tradeDate.toString(),
+                    tradeTime = parsed.tradeTime ?: "00:00",
+                )
+            } else null
+
+            val commission = parsed.commission ?: feeEstimate?.commission ?: 0.0
+            val tax = parsed.tax ?: feeEstimate?.tax ?: 0.0
+            val noteSuffix = if (hasParsedFees) {
+                "费用按结单原始数据导入"
+            } else {
+                feeEstimate?.let { importedFeeNoteSuffix(it) } ?: ""
+            }
+
             addTrade(
                 TradeDraftInput(
                     tradeType = parsed.tradeType,
@@ -617,15 +679,15 @@ class DefaultLedgerRepository(
                     tradeDate = parsed.tradeDate.toString(),
                     price = parsed.price,
                     quantity = parsed.quantity,
-                    commission = feeEstimate.commission,
-                    tax = feeEstimate.tax,
+                    commission = commission,
+                    tax = tax,
                     note = buildImportedNote(
                         sourceChannel = parsed.sourceChannel,
                         externalReference = externalReference,
                         rawText = parsed.rawLine,
-                        suffix = importedFeeNoteSuffix(feeEstimate),
+                        suffix = noteSuffix,
                     ),
-                    tradeTime = "00:00",
+                    tradeTime = parsed.tradeTime ?: "00:00",
                     createdAt = System.currentTimeMillis(),
                 ),
             )

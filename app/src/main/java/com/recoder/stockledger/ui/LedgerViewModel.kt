@@ -128,6 +128,7 @@ data class LedgerUiState(
     val alibabaBailianApiKey: String = "",
     val visionImportEnabled: Boolean = false,
     val visionImportModel: String = "",
+    val visionApiBaseUrl: String = "",
     val visionImportStatusMessage: String? = null,
     val batchSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
@@ -172,6 +173,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val alibabaBailianApiKey = MutableStateFlow(loadAlibabaBailianApiKey())
     private val visionImportEnabled = MutableStateFlow(loadVisionImportEnabled())
     private val visionImportModel = MutableStateFlow(loadVisionImportModel())
+    private val visionApiBaseUrl = MutableStateFlow(loadVisionApiBaseUrl())
     private val visionImportStatusMessage = MutableStateFlow<String?>(null)
     private val batchSelectionMode = MutableStateFlow(false)
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
@@ -437,6 +439,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         state.copy(visionImportEnabled = enabled)
     }.combine(visionImportModel) { state, model ->
         state.copy(visionImportModel = model)
+    }.combine(visionApiBaseUrl) { state, url ->
+        state.copy(visionApiBaseUrl = url)
     }.combine(visionImportStatusMessage) { state, message ->
         state.copy(visionImportStatusMessage = message)
     }.combine(batchSelectionMode) { state, batchMode ->
@@ -3172,10 +3176,12 @@ private data class RefreshMeta(
             var totalFailed = 0
 
             val model = visionImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-vl-max"
+            val baseUrl = visionApiBaseUrl.value.takeIf { it.isNotBlank() }
+                ?: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
             val client = com.recoder.stockledger.data.importer.vision.OpenAiVisionClient(
                 apiKey = apiKey,
                 model = model,
-                baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                baseUrl = baseUrl,
             )
             val importer = com.recoder.stockledger.data.importer.vision.VisionPdfImporter(
                 context = getApplication(),
@@ -3239,6 +3245,13 @@ private data class RefreshMeta(
             .apply()
     }
 
+    fun updateVisionApiBaseUrl(url: String) {
+        visionApiBaseUrl.value = url
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, url)
+            .apply()
+    }
+
     fun clearVisionImportStatus() {
         visionImportStatusMessage.value = null
     }
@@ -3253,6 +3266,10 @@ private data class RefreshMeta(
 
     private fun loadVisionImportModel(): String {
         return preferences.getString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, "").orEmpty()
+    }
+
+    private fun loadVisionApiBaseUrl(): String {
+        return preferences.getString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, "").orEmpty()
     }
 
     private fun reconcileZhuoruiEmailAutoSync() {

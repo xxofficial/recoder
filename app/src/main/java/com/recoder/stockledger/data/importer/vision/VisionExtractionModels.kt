@@ -42,6 +42,12 @@ fun VisionExtractedTrade.toParsedStatementTrade(tradeRef: String): com.recoder.s
         quantity = quantity,
         amount = amount,
         tradeDate = tradeDate,
+        tradeTime = "00:00",
+        commission = fees?.commission?.takeIf { it > 0 },
+        platformFee = fees?.platformFee?.takeIf { it > 0 },
+        tax = fees?.stampDuty?.takeIf { it > 0 }
+            ?: fees?.transactionFee?.takeIf { it > 0 }
+            ?: fees?.otherFees?.takeIf { it > 0 },
         tradeRef = tradeRef,
         rawLine = rawText,
     )
