@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.PlatformFeePlanUiModel
 import com.recoder.stockledger.data.ZhuoruiPromoConfig
+import com.recoder.stockledger.data.ZhuoruiPdfImportMode
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -52,12 +53,14 @@ fun SettingsRoute(
     onZhuoruiPromoChange: (ZhuoruiPromoConfig) -> Unit,
     onSaveZhuoruiPromo: () -> Unit,
     alibabaBailianApiKey: String,
-    visionImportEnabled: Boolean,
+    zhuoruiPdfImportMode: ZhuoruiPdfImportMode,
     visionImportModel: String,
+    textImportModel: String,
     visionApiBaseUrl: String,
     onAlibabaBailianApiKeyChange: (String) -> Unit,
-    onVisionImportEnabledChange: (Boolean) -> Unit,
+    onZhuoruiPdfImportModeChange: (ZhuoruiPdfImportMode) -> Unit,
     onVisionImportModelChange: (String) -> Unit,
+    onTextImportModelChange: (String) -> Unit,
     onVisionApiBaseUrlChange: (String) -> Unit,
     onPlatformClick: () -> Unit,
     onBackClick: () -> Unit,
@@ -224,7 +227,7 @@ fun SettingsRoute(
                     }
                 }
 
-                // Vision import settings
+                // Zhuorui PDF Import settings
                 if (selectedPlatform == BrokerPlatform.ZHUORUI) {
                     Column(
                         modifier = Modifier
@@ -236,43 +239,53 @@ fun SettingsRoute(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text("识图导入设置", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("卓锐结单PDF导入设置", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "使用视觉识别大模型解析PDF结单。需要联网，结单图片将发送至API处理。",
+                            "选择解析PDF结单的方式。正则匹配在本地运行，大模型方式需要联网并消耗API额度。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("启用识图导入", color = ForegroundPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Switch(
-                                checked = visionImportEnabled,
-                                onCheckedChange = onVisionImportEnabledChange,
+                        
+                        FilterChipWrapRow(
+                            options = ZhuoruiPdfImportMode.entries,
+                            selected = zhuoruiPdfImportMode,
+                            label = { it.label },
+                            onSelected = onZhuoruiPdfImportModeChange,
+                        )
+
+                        if (zhuoruiPdfImportMode != ZhuoruiPdfImportMode.REGEX) {
+                            InputFieldBlock(
+                                label = "API Key",
+                                value = alibabaBailianApiKey,
+                                placeholder = "请输入 API Key",
+                                isPassword = true,
+                                onValueChange = onAlibabaBailianApiKeyChange,
+                            )
+                            
+                            if (zhuoruiPdfImportMode == ZhuoruiPdfImportMode.VISION) {
+                                InputFieldBlock(
+                                    label = "识图模型名称",
+                                    value = visionImportModel,
+                                    placeholder = "默认 qwen-vl-max",
+                                    onValueChange = onVisionImportModelChange,
+                                )
+                            } else if (zhuoruiPdfImportMode == ZhuoruiPdfImportMode.TEXT_MODEL) {
+                                InputFieldBlock(
+                                    label = "文本模型名称",
+                                    value = textImportModel,
+                                    placeholder = "默认 qwen-max",
+                                    onValueChange = onTextImportModelChange,
+                                )
+                            }
+                            
+                            InputFieldBlock(
+                                label = "API Base URL",
+                                value = visionApiBaseUrl,
+                                placeholder = "默认 阿里云百炼 URL",
+                                supportingText = "OpenAI接口协议",
+                                onValueChange = onVisionApiBaseUrlChange,
                             )
                         }
-                        InputFieldBlock(
-                            label = "API Key",
-                            value = alibabaBailianApiKey,
-                            placeholder = "",
-                            isPassword = true,
-                            onValueChange = onAlibabaBailianApiKeyChange,
-                        )
-                        InputFieldBlock(
-                            label = "模型名称",
-                            value = visionImportModel,
-                            placeholder = "",
-                            onValueChange = onVisionImportModelChange,
-                        )
-                        InputFieldBlock(
-                            label = "API Base URL",
-                            value = visionApiBaseUrl,
-                            placeholder = "",
-                            supportingText = "OpenAI接口协议",
-                            onValueChange = onVisionApiBaseUrlChange,
-                        )
                     }
                 }
             }
@@ -334,12 +347,14 @@ private fun SettingsRoutePreview() {
             onZhuoruiPromoChange = {},
             onSaveZhuoruiPromo = {},
             alibabaBailianApiKey = "",
-            visionImportEnabled = true,
+            zhuoruiPdfImportMode = ZhuoruiPdfImportMode.REGEX,
             visionImportModel = "",
+            textImportModel = "",
             visionApiBaseUrl = "",
             onAlibabaBailianApiKeyChange = {},
-            onVisionImportEnabledChange = {},
+            onZhuoruiPdfImportModeChange = {},
             onVisionImportModelChange = {},
+            onTextImportModelChange = {},
             onVisionApiBaseUrlChange = {},
             onPlatformClick = {},
             onBackClick = {},

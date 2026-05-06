@@ -51,7 +51,7 @@ internal object PreviewFixtures {
         HoldingUiModel(
             name = "腾讯控股",
             code = "00700",
-            market = Market.HONG_KONG,
+            market = Market.HK,
             quantityLabel = "300股",
             costLabel = "HK$320.00",
             priceLabel = "HK$371.20",
@@ -167,7 +167,7 @@ internal object PreviewFixtures {
             SecurityProfitAnalysisUiModel(
                 symbol = "00700",
                 name = "腾讯控股",
-                market = Market.HONG_KONG,
+                market = Market.HK,
                 dailyPoints = listOf(
                     SecurityProfitPointUiModel(LocalDate.now().minusDays(2), 530.0, 11500.0, 368.0),
                     SecurityProfitPointUiModel(LocalDate.now().minusDays(1), 140.0, 11640.0, 369.2),

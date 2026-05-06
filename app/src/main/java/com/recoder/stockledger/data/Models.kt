@@ -8,9 +8,22 @@ enum class Market(
     val toCnyRate: Double,
 ) {
     A_SHARE("A股", "¥", 1.0),
-    HONG_KONG("港股", "HK$", 0.92),
+    HK("港股", "HK$", 0.92),
     US("美股", "$", 7.20),
     CASH("现金", "¥", 1.0),
+    ;
+
+    companion object {
+        fun fromString(name: String): Market? {
+            return when (name.uppercase()) {
+                "HK", "HONG_KONG" -> HK
+                "A_SHARE" -> A_SHARE
+                "US" -> US
+                "CASH" -> CASH
+                else -> entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            }
+        }
+    }
 }
 
 enum class DisplayCurrency(
@@ -75,9 +88,15 @@ enum class MarketFilter(
 ) {
     ALL("全部市场", null),
     A_SHARE("A股", Market.A_SHARE),
-    HONG_KONG("港股", Market.HONG_KONG),
+    HK("港股", Market.HK),
     US("美股", Market.US),
     CASH("现金", Market.CASH),
+}
+
+enum class ZhuoruiPdfImportMode(val label: String) {
+    REGEX("正则匹配 (本地)"),
+    VISION("视觉大模型 (识图)"),
+    TEXT_MODEL("文本大模型 (文本提取)")
 }
 
 enum class BrokerPlatform(

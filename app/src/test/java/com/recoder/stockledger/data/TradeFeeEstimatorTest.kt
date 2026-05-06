@@ -9,7 +9,7 @@ class TradeFeeEstimatorTest {
     fun `hsbc hk buy uses minimum brokerage and hk levies`() {
         val estimate = TradeFeeEstimator.estimate(
             platform = BrokerPlatform.HSBC,
-            market = Market.HONG_KONG,
+            market = Market.HK,
             tradeType = TradeType.BUY,
             price = 10.0,
             quantity = 100,
@@ -109,7 +109,7 @@ class TradeFeeEstimatorTest {
             .id
         val estimate = TradeFeeEstimator.estimate(
             platform = BrokerPlatform.ZHUORUI,
-            market = Market.HONG_KONG,
+            market = Market.HK,
             tradeType = TradeType.BUY,
             price = 20.0,
             quantity = 100,

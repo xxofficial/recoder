@@ -959,7 +959,7 @@ fun TradeEntryMarketSelector(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
-        SelectableBlock("港股", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
+        SelectableBlock("港股", selected == Market.HK, Modifier.weight(1f)) { onSelected(Market.HK) }
         SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
     }
 }
@@ -1137,7 +1137,7 @@ fun MarketSelector(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
-        SelectableBlock("港股", selected == Market.HONG_KONG, Modifier.weight(1f)) { onSelected(Market.HONG_KONG) }
+        SelectableBlock("港股", selected == Market.HK, Modifier.weight(1f)) { onSelected(Market.HK) }
         SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
     }
 }

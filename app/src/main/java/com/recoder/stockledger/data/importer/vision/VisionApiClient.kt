@@ -225,7 +225,7 @@ class OpenAiVisionClient(
 
         val market = when (obj.optString("market", "").uppercase()) {
             "US" -> Market.US
-            "HK", "HONG_KONG" -> Market.HONG_KONG
+            "HK", "HONG_KONG" -> Market.HK
             "CN", "CHINA", "A_SHARE" -> Market.A_SHARE
             else -> Market.US
         }

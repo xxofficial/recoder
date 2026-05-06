@@ -245,11 +245,11 @@ fun AdvancedProfitAnalysisRoute(
         }
         Triple(
             rangeTxns.sumOf { txn ->
-                val market = runCatching { Market.valueOf(txn.market) }.getOrNull() ?: Market.US
+                val market = Market.fromString(txn.market) ?: Market.US
                 txn.commission * exchangeRates.rateToCny(market)
             },
             rangeTxns.sumOf { txn ->
-                val market = runCatching { Market.valueOf(txn.market) }.getOrNull() ?: Market.US
+                val market = Market.fromString(txn.market) ?: Market.US
                 txn.tax * exchangeRates.rateToCny(market)
             },
             rangeTxns.size,

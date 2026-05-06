@@ -105,7 +105,7 @@ fun StockDetailRoute(
     val allSecurityTransactions = remember(analysis.transactions, symbol, marketLabel) {
         analysis.transactions.filter { txn ->
             txn.symbol == symbol &&
-                runCatching { Market.valueOf(txn.market) }.getOrNull()?.label == marketLabel
+                Market.fromString(txn.market)?.label == marketLabel
         }.sortedWith(compareBy({ it.tradeDate }, { it.tradeTime }, { it.createdAt }))
     }
 

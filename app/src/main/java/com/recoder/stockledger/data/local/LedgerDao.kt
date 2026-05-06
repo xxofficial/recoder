@@ -85,6 +85,16 @@ interface LedgerDao {
 
     @Query(
         """
+        SELECT name FROM transactions
+        WHERE symbol = :symbol AND market = :market AND name != ''
+        ORDER BY tradeDate DESC, tradeTime DESC, id DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun findStockNameFromTransactions(symbol: String, market: String): String?
+
+    @Query(
+        """
         SELECT name FROM quote_snapshots
         WHERE symbol = :symbol AND market = :market AND name != ''
         LIMIT 1

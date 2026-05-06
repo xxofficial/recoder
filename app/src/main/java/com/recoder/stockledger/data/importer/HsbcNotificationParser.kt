@@ -125,15 +125,15 @@ object HsbcNotificationParser {
     ): Pair<String, Market>? {
         val compactSymbol = rawSymbol.trim().uppercase()
         return when {
-            compactSymbol.endsWith(".HK") -> compactSymbol to Market.HONG_KONG
+            compactSymbol.endsWith(".HK") -> compactSymbol to Market.HK
             compactSymbol.all(Char::isDigit) && compactSymbol.length in 1..5 -> {
                 val normalized = compactSymbol.padStart(4, '0') + ".HK"
-                normalized to Market.HONG_KONG
+                normalized to Market.HK
             }
 
             compactSymbol.all(Char::isDigit) && compactSymbol.length == 6 -> compactSymbol to Market.A_SHARE
             compactSymbol.matches(Regex("[A-Z][A-Z0-9.-]{0,9}")) -> compactSymbol to when (currencyCode) {
-                "HKD" -> Market.HONG_KONG
+                "HKD" -> Market.HK
                 else -> Market.US
             }
 

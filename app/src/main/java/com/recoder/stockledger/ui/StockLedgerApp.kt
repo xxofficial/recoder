@@ -99,16 +99,6 @@ fun StockLedgerApp(
             ledgerViewModel.importZhuoruiStatementPdfs(uris)
         }
     }
-    val pdfVisionImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) {
-            ledgerViewModel.importZhuoruiStatementPdfsViaVision(uris)
-        }
-    }
-    val pdfTextImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) {
-            ledgerViewModel.importZhuoruiStatementPdfsViaTextModel(uris)
-        }
-    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -259,15 +249,6 @@ fun StockLedgerApp(
                         onImportZhuoruiStatementPdfs = {
                             pdfImportLauncher.launch(arrayOf("application/pdf"))
                         },
-                        visionImportEnabled = uiState.visionImportEnabled,
-                        visionImportStatusMessage = uiState.visionImportStatusMessage,
-                        onImportZhuoruiStatementPdfsViaVision = {
-                            pdfVisionImportLauncher.launch(arrayOf("application/pdf"))
-                        },
-                        textImportStatusMessage = uiState.textImportStatusMessage,
-                        onImportZhuoruiStatementPdfsViaTextModel = {
-                            pdfTextImportLauncher.launch(arrayOf("application/pdf"))
-                        },
                         onDestinationSelected = { destination ->
                             when (destination) {
                                 TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
@@ -408,12 +389,14 @@ fun StockLedgerApp(
                         onZhuoruiPromoChange = ledgerViewModel::updateZhuoruiPromoConfig,
                         onSaveZhuoruiPromo = ledgerViewModel::saveZhuoruiPromoConfig,
                         alibabaBailianApiKey = uiState.alibabaBailianApiKey,
-                        visionImportEnabled = uiState.visionImportEnabled,
+                        zhuoruiPdfImportMode = uiState.zhuoruiPdfImportMode,
                         visionImportModel = uiState.visionImportModel,
+                        textImportModel = uiState.textImportModel,
                         visionApiBaseUrl = uiState.visionApiBaseUrl,
                         onAlibabaBailianApiKeyChange = ledgerViewModel::updateAlibabaBailianApiKey,
-                        onVisionImportEnabledChange = ledgerViewModel::updateVisionImportEnabled,
+                        onZhuoruiPdfImportModeChange = ledgerViewModel::updateZhuoruiPdfImportMode,
                         onVisionImportModelChange = ledgerViewModel::updateVisionImportModel,
+                        onTextImportModelChange = ledgerViewModel::updateTextImportModel,
                         onVisionApiBaseUrlChange = ledgerViewModel::updateVisionApiBaseUrl,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },

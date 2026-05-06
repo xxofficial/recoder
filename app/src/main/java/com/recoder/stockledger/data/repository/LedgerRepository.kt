@@ -164,6 +164,7 @@ class DefaultLedgerRepository(
     }
 
     suspend fun addTrade(input: TradeDraftInput) {
+        val resolvedName = resolveConsistentName(input.symbol, input.market, input.name)
         dao.insertTransaction(
             TransactionEntity(
                 tradeType = input.tradeType.name,
@@ -172,7 +173,7 @@ class DefaultLedgerRepository(
                 externalReference = input.externalReference,
                 market = input.market.name,
                 symbol = input.symbol,
-                name = input.name,
+                name = resolvedName,
                 tradeDate = input.tradeDate,
                 tradeTime = input.tradeTime,
                 price = input.price,
@@ -189,6 +190,7 @@ class DefaultLedgerRepository(
         transactionId: Long,
         input: TradeDraftInput,
     ) {
+        val resolvedName = resolveConsistentName(input.symbol, input.market, input.name)
         dao.updateTransaction(
             TransactionEntity(
                 id = transactionId,
@@ -198,7 +200,7 @@ class DefaultLedgerRepository(
                 externalReference = input.externalReference,
                 market = input.market.name,
                 symbol = input.symbol,
-                name = input.name,
+                name = resolvedName,
                 tradeDate = input.tradeDate,
                 tradeTime = input.tradeTime,
                 price = input.price,
@@ -209,6 +211,20 @@ class DefaultLedgerRepository(
                 createdAt = input.createdAt,
             ),
         )
+    }
+
+    private suspend fun resolveConsistentName(symbol: String, market: Market, providedName: String): String {
+        if (symbol.isBlank()) return providedName
+        
+        // 1. Try to find from existing transactions
+        val existingName = dao.findStockNameFromTransactions(symbol, market.name)
+        if (existingName != null && existingName.isNotBlank()) return existingName
+        
+        // 2. Try to find from quotes
+        val quoteName = dao.findStockNameFromQuotes(symbol, market.name)
+        if (quoteName != null && quoteName.isNotBlank()) return quoteName
+        
+        return providedName
     }
 
     suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
@@ -276,7 +292,7 @@ class DefaultLedgerRepository(
         val selectedPlatform = payload.optString("selectedPlatform")
             .takeIf { it.isNotBlank() }
             ?.let { name -> BrokerPlatform.entries.firstOrNull { it.name == name && it.isConfigurable } }
-        val importedTransactions = buildList {
+        val rawTransactions = buildList {
             for (index in 0 until transactionsArray.length()) {
                 val item = transactionsArray.optJSONObject(index) ?: continue
                 add(
@@ -286,7 +302,7 @@ class DefaultLedgerRepository(
                         platform = item.optString("platform").ifBlank { BrokerPlatform.UNSPECIFIED.name },
                         sourceChannel = item.optString("sourceChannel").takeIf { it.isNotBlank() },
                         externalReference = item.optString("externalReference").takeIf { it.isNotBlank() },
-                        market = item.optString("market"),
+                        market = Market.fromString(item.optString("market"))?.name ?: item.optString("market"),
                         symbol = item.optString("symbol"),
                         name = item.optString("name"),
                         tradeDate = item.optString("tradeDate"),
@@ -301,6 +317,24 @@ class DefaultLedgerRepository(
                 )
             }
         }
+
+        // Ensure name consistency based on symbol: pick the most recent name for each symbol
+        val symbolToName = rawTransactions
+            .filter { it.symbol.isNotBlank() && it.name.isNotBlank() }
+            .groupBy { it.market to it.symbol }
+            .mapValues { (_, txns) ->
+                txns.maxByOrNull { "${it.tradeDate} ${it.tradeTime}" }?.name ?: ""
+            }
+
+        val importedTransactions = rawTransactions.map { txn ->
+            val consistentName = symbolToName[txn.market to txn.symbol]
+            if (consistentName != null && consistentName.isNotBlank()) {
+                txn.copy(name = consistentName)
+            } else {
+                txn
+            }
+        }
+
         val restoredPlatforms = if (enabledPlatforms.isNotEmpty()) {
             enabledPlatforms
         } else {
@@ -763,7 +797,7 @@ class DefaultLedgerRepository(
                 QuoteRequest(
                     symbol = head.symbol,
                     name = head.name,
-                    market = Market.valueOf(head.market),
+                    market = Market.fromString(head.market) ?: Market.CASH,
                 )
             }
 
@@ -811,7 +845,7 @@ class DefaultLedgerRepository(
                 digits.takeIf { it.length == 6 }
             }
 
-            Market.HONG_KONG -> {
+            Market.HK -> {
                 val digits = compact
                     .removePrefix("HK")
                     .removeSuffix(".HK")
@@ -912,7 +946,7 @@ class DefaultLedgerRepository(
                 val isBeforeDraft = existingDate.isBefore(draftDate) ||
                     (existingDate == draftDate && existingTime <= draftTime)
                 if (!isBeforeDraft) return@mapNotNull null
-                val market = runCatching { Market.valueOf(transaction.market) }.getOrNull()
+                val market = Market.fromString(transaction.market)
                     ?: return@mapNotNull null
                 amountToHkdEquivalent(transaction.price * transaction.quantity, market)
             }
@@ -920,10 +954,10 @@ class DefaultLedgerRepository(
     }
 
     private fun amountToHkdEquivalent(amount: Double, market: Market): Double {
-        if (market == Market.HONG_KONG) return amount
+        if (market == Market.HK) return amount
         val currentRates = exchangeRates.value
         val amountCny = amount * currentRates.rateToCny(market)
-        val hkdRateToCny = currentRates.rateToCny(Market.HONG_KONG)
+        val hkdRateToCny = currentRates.rateToCny(Market.HK)
         return if (hkdRateToCny <= 1e-6) amount else amountCny / hkdRateToCny
     }
 
@@ -1212,7 +1246,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         val historyCode = resolveHistoryCode(request)
         val endpoint = when (request.market) {
             Market.A_SHARE, Market.US -> "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-            Market.HONG_KONG -> "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
+            Market.HK -> "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
             Market.CASH -> return emptyList()
         }
         val body = httpGet(
@@ -1267,7 +1301,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .mapNotNull { line -> parseTencentLine(line, codeToRequest) }
-            .associateBy { requestKey(it.symbol, Market.valueOf(it.market)) }
+            .associateBy { requestKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
     }
 
     private fun fetchSinaQuotes(requests: List<QuoteRequest>): Map<String, QuoteSnapshotEntity> {
@@ -1286,7 +1320,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .mapNotNull { line -> parseSinaLine(line, codeToRequest) }
-            .associateBy { requestKey(it.symbol, Market.valueOf(it.market)) }
+            .associateBy { requestKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
     }
 
     private fun parseTencentLine(
@@ -1345,7 +1379,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         val parts = payload.split(",")
         return when (request.market) {
             Market.A_SHARE -> parseSinaAShare(request, parts)
-            Market.HONG_KONG -> parseSinaHongKong(request, parts)
+            Market.HK -> parseSinaHongKong(request, parts)
             Market.US -> parseSinaUs(request, parts)
             Market.CASH -> null
         }
@@ -1458,12 +1492,12 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
                         )
                     }
 
-                    Market.HONG_KONG -> {
+                    Market.HK -> {
                         if (typeCode != "31") return@mapNotNull null
                         SecurityLookupResult(
                             symbol = "${code.padStart(4, '0')}.HK",
                             name = name,
-                            market = Market.HONG_KONG,
+                            market = Market.HK,
                         )
                     }
 
@@ -1488,7 +1522,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             if (raw.startsWith("6")) "sh$raw" else "sz$raw"
         }
 
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val raw = request.symbol.substringBefore(".").padStart(5, '0')
             "hk$raw"
         }
@@ -1503,7 +1537,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             if (raw.startsWith("6")) "sh$raw" else "sz$raw"
         }
 
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val raw = request.symbol.substringBefore(".").padStart(5, '0')
             "hk$raw"
         }
@@ -1518,7 +1552,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             if (raw.startsWith("6")) "sh$raw" else "sz$raw"
         }
 
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val raw = request.symbol.substringBefore(".").padStart(5, '0')
             "hk$raw"
         }
@@ -1776,7 +1810,7 @@ class FakeQuoteDataSource : QuoteDataSource {
 
         return fakeNames.mapNotNull { (symbol, name) ->
             val currentMarket = when {
-                symbol.endsWith(".HK") -> Market.HONG_KONG
+                symbol.endsWith(".HK") -> Market.HK
                 symbol.all { it.isLetterOrDigit() || it == '.' || it == '-' } &&
                     symbol.any(Char::isLetter) &&
                     !symbol.all(Char::isDigit) -> Market.US
@@ -1785,7 +1819,7 @@ class FakeQuoteDataSource : QuoteDataSource {
             if (currentMarket != market) return@mapNotNull null
 
             val displaySymbol = when (currentMarket) {
-                Market.HONG_KONG -> symbol
+                Market.HK -> symbol
                 Market.US -> symbol
                 Market.A_SHARE -> symbol.substringBefore(".")
                 Market.CASH -> symbol

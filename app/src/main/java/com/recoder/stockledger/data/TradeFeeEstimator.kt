@@ -133,7 +133,7 @@ object TradeFeeEstimator {
             )
 
             BrokerPlatform.EAST_MONEY -> when (market) {
-                Market.HONG_KONG -> TradeFeeProfile(
+                Market.HK -> TradeFeeProfile(
                     coverage = FeeEstimateCoverage.FULL,
                     planId = resolvedPlan.id,
                     planLabel = resolvedPlan.label,
@@ -156,7 +156,7 @@ object TradeFeeEstimator {
             }
 
             BrokerPlatform.LONGBRIDGE -> when (market) {
-                Market.HONG_KONG -> TradeFeeProfile(
+                Market.HK -> TradeFeeProfile(
                     coverage = FeeEstimateCoverage.PARTIAL,
                     planId = resolvedPlan.id,
                     planLabel = resolvedPlan.label,
@@ -179,7 +179,7 @@ object TradeFeeEstimator {
             }
 
             BrokerPlatform.HSBC -> when (market) {
-                Market.HONG_KONG -> when (resolvedPlan.id) {
+                Market.HK -> when (resolvedPlan.id) {
                     PLAN_HSBC_TRADE25 -> TradeFeeProfile(
                         coverage = FeeEstimateCoverage.PARTIAL,
                         planId = resolvedPlan.id,
@@ -220,7 +220,7 @@ object TradeFeeEstimator {
             }
 
             BrokerPlatform.WEBULL -> when (market) {
-                Market.HONG_KONG -> TradeFeeProfile(
+                Market.HK -> TradeFeeProfile(
                     coverage = FeeEstimateCoverage.PARTIAL,
                     planId = resolvedPlan.id,
                     planLabel = resolvedPlan.label,
@@ -243,7 +243,7 @@ object TradeFeeEstimator {
             }
 
             BrokerPlatform.ZHUORUI -> when (market) {
-                Market.HONG_KONG -> when (resolvedPlan.id) {
+                Market.HK -> when (resolvedPlan.id) {
                     PLAN_ZHUORUI_LEGACY_CUSTOMER -> TradeFeeProfile(
                         coverage = FeeEstimateCoverage.PARTIAL,
                         planId = resolvedPlan.id,
@@ -341,7 +341,7 @@ object TradeFeeEstimator {
         quantity: Int,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val amount = amount(price, quantity)
             val commission = bd(0)
             val platformFee = bd(15)
@@ -395,7 +395,7 @@ object TradeFeeEstimator {
         quantity: Int,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val amount = amount(price, quantity)
             val charges = hkMarketCharges(amount, settlementRule = HkSettlementRule.NONE)
             buildEstimate(
@@ -438,7 +438,7 @@ object TradeFeeEstimator {
         profile: TradeFeeProfile,
         context: TradeFeeEstimateContext,
     ): TradeFeeEstimate = when (market) {
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val amount = amount(price, quantity)
             val charges = hkMarketCharges(amount, settlementRule = HkSettlementRule.NONE)
             val commission = when (profile.planId) {
@@ -498,7 +498,7 @@ object TradeFeeEstimator {
         quantity: Int,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val amount = amount(price, quantity)
             val charges = hkMarketCharges(amount, settlementRule = HkSettlementRule.NONE)
             buildEstimate(
@@ -539,7 +539,7 @@ object TradeFeeEstimator {
         profile: TradeFeeProfile,
         context: TradeFeeEstimateContext = TradeFeeEstimateContext(),
     ): TradeFeeEstimate = when (market) {
-        Market.HONG_KONG -> {
+        Market.HK -> {
             val amount = amount(price, quantity)
             val standardCommission = max(amount * bd("0.0003"), bd(3))
             val commission = if (isZhuoruiCommissionFree(profile, context)) bd(0) else standardCommission
@@ -756,7 +756,7 @@ object TradeFeeEstimator {
         bd(price).multiply(bd(quantity))
 
     private fun currency(market: Market, value: Double): String = when (market) {
-        Market.HONG_KONG -> "HK$${money(value)}"
+        Market.HK -> "HK$${money(value)}"
         Market.US -> "$${money(value)}"
         Market.A_SHARE, Market.CASH -> "¥${money(value)}"
     }

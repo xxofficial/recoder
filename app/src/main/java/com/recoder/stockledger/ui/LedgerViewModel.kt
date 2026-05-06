@@ -42,6 +42,7 @@ import com.recoder.stockledger.data.ZhuoruiPromoConfig
 import com.recoder.stockledger.data.TransactionUiModel
 import com.recoder.stockledger.data.ZhuoruiEmailManualSyncOptions
 import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
+import com.recoder.stockledger.data.ZhuoruiPdfImportMode
 import com.recoder.stockledger.data.rateToCny
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
@@ -51,6 +52,7 @@ import com.recoder.stockledger.data.repository.HistoricalClosePoint
 import com.recoder.stockledger.data.repository.ImportedBackup
 import com.recoder.stockledger.data.repository.SecurityLookupResult
 import com.recoder.stockledger.data.repository.TradeDraftInput
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,6 +64,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.math.BigDecimal
 import java.text.DecimalFormat
 import java.time.Instant
@@ -126,11 +129,10 @@ data class LedgerUiState(
     val zhuoruiStatementPdfPassword: String = "",
     val zhuoruiStatementPdfImportStatusMessage: String? = null,
     val alibabaBailianApiKey: String = "",
-    val visionImportEnabled: Boolean = false,
+    val zhuoruiPdfImportMode: ZhuoruiPdfImportMode = ZhuoruiPdfImportMode.REGEX,
     val visionImportModel: String = "",
+    val textImportModel: String = "",
     val visionApiBaseUrl: String = "",
-    val visionImportStatusMessage: String? = null,
-    val textImportStatusMessage: String? = null,
     val batchSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
 )
@@ -172,11 +174,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val zhuoruiStatementPdfPassword = MutableStateFlow(loadZhuoruiStatementPdfPassword())
     private val zhuoruiStatementPdfImportStatusMessage = MutableStateFlow<String?>(null)
     private val alibabaBailianApiKey = MutableStateFlow(loadAlibabaBailianApiKey())
-    private val visionImportEnabled = MutableStateFlow(loadVisionImportEnabled())
+    private val zhuoruiPdfImportMode = MutableStateFlow(loadZhuoruiPdfImportMode())
     private val visionImportModel = MutableStateFlow(loadVisionImportModel())
+    private val textImportModel = MutableStateFlow(loadTextImportModel())
     private val visionApiBaseUrl = MutableStateFlow(loadVisionApiBaseUrl())
-    private val visionImportStatusMessage = MutableStateFlow<String?>(null)
-    private val textImportStatusMessage = MutableStateFlow<String?>(null)
     private val batchSelectionMode = MutableStateFlow(false)
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
@@ -302,110 +303,114 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val (state, platforms, selectedDisplayCurrency) = upstream
         val selectedFilters = state.upstream.upstream.filters
         val context = state.upstream.upstream.context
-        val platformScopedTransactions = filterTransactionsByPlatform(
-            context.transactions,
-            platforms.selected,
-        )
-        val validationMessage = validateTradeDraft(
-            draft = state.upstream.draft,
-            portfolio = context.draftReferencePortfolio,
-            lookup = lookup,
-        )
-        val allTransactionsPortfolio = computePortfolio(
-            transactions = context.transactions,
-            quotes = context.quotes,
-            exchangeRates = repository.exchangeRates.value,
-        )
-        val totalAssetsByPlatform = buildPlatformAssetLabels(
-            transactions = context.transactions,
-            quotes = context.quotes,
-            exchangeRates = repository.exchangeRates.value,
-            displayCurrency = selectedDisplayCurrency,
-            enabledPlatforms = platforms.enabled,
-            summaryPortfolio = allTransactionsPortfolio,
-        )
-        val availableTradePlatforms = buildList {
-            addAll(platforms.enabled)
-            state.upstream.draft.platform
-                .takeIf { current -> current !in platforms.enabled && current.isConfigurable }
-                ?.let(::add)
-        }
-        LedgerUiState(
-            summary = buildSummary(
-                portfolio = context.portfolio,
-                refresh = state.refresh.refresh,
-                refreshedAt = state.refresh.refreshedAt,
-                refreshNote = state.refresh.note,
-                showPullRefreshTime = state.refresh.showPullRefreshTime,
-                displayCurrency = selectedDisplayCurrency,
-                exchangeRates = repository.exchangeRates.value,
-            ),
-            holdings = context.portfolio.holdings,
-            sellCandidates = buildSellCandidates(context.draftReferencePortfolio.positions),
-            transactionSections = buildTransactionSections(
-                transactions = platformScopedTransactions,
-                tradeFilter = selectedFilters.tradeFilter,
-                marketFilter = selectedFilters.marketFilter,
-                keyword = selectedFilters.keyword,
-                startDate = selectedFilters.startDate,
-                endDate = selectedFilters.endDate,
-            ),
-            profitAnalysis = buildProfitAnalysis(
-                portfolio = context.portfolio,
-                transactions = platformScopedTransactions,
-                exchangeRates = repository.exchangeRates.value,
-                historicalCloses = context.historicalCloses,
+        
+        // Ensure heavy computations run off the main thread
+        withContext(Dispatchers.Default) {
+            val platformScopedTransactions = filterTransactionsByPlatform(
+                context.transactions,
+                platforms.selected,
+            )
+            val validationMessage = validateTradeDraft(
+                draft = state.upstream.draft,
+                portfolio = context.draftReferencePortfolio,
+                lookup = lookup,
+            )
+            val allTransactionsPortfolio = computePortfolio(
+                transactions = context.transactions,
                 quotes = context.quotes,
-            ),
-            selectedTradeFilter = selectedFilters.tradeFilter,
-            selectedMarketFilter = selectedFilters.marketFilter,
-            transactionKeyword = selectedFilters.keyword,
-            transactionDateStart = selectedFilters.startDate.orEmpty(),
-            transactionDateEnd = selectedFilters.endDate.orEmpty(),
-            managedPlatforms = buildList {
-                add(
-                    ManagedPlatformUiModel(
-                        platform = null,
-                        label = "汇总",
-                        totalAssetsLabel = totalAssetsByPlatform[null] ?: formatDisplayAmount(
-                            allTransactionsPortfolio.totalAssetsCny,
-                            selectedDisplayCurrency,
-                            repository.exchangeRates.value,
-                        ),
-                        isSelected = platforms.selected == null,
-                    ),
-                )
-                platforms.enabled.forEach { platform ->
+                exchangeRates = repository.exchangeRates.value,
+            )
+            val totalAssetsByPlatform = buildPlatformAssetLabels(
+                transactions = context.transactions,
+                quotes = context.quotes,
+                exchangeRates = repository.exchangeRates.value,
+                displayCurrency = selectedDisplayCurrency,
+                enabledPlatforms = platforms.enabled,
+                summaryPortfolio = allTransactionsPortfolio,
+            )
+            val availableTradePlatforms = buildList {
+                addAll(platforms.enabled)
+                state.upstream.draft.platform
+                    .takeIf { current -> current !in platforms.enabled && current.isConfigurable }
+                    ?.let(::add)
+            }
+            LedgerUiState(
+                summary = buildSummary(
+                    portfolio = context.portfolio,
+                    refresh = state.refresh.refresh,
+                    refreshedAt = state.refresh.refreshedAt,
+                    refreshNote = state.refresh.note,
+                    showPullRefreshTime = state.refresh.showPullRefreshTime,
+                    displayCurrency = selectedDisplayCurrency,
+                    exchangeRates = repository.exchangeRates.value,
+                ),
+                holdings = context.portfolio.holdings,
+                sellCandidates = buildSellCandidates(context.draftReferencePortfolio.positions),
+                transactionSections = buildTransactionSections(
+                    transactions = platformScopedTransactions,
+                    tradeFilter = selectedFilters.tradeFilter,
+                    marketFilter = selectedFilters.marketFilter,
+                    keyword = selectedFilters.keyword,
+                    startDate = selectedFilters.startDate,
+                    endDate = selectedFilters.endDate,
+                ),
+                profitAnalysis = buildProfitAnalysis(
+                    portfolio = context.portfolio,
+                    transactions = platformScopedTransactions,
+                    exchangeRates = repository.exchangeRates.value,
+                    historicalCloses = context.historicalCloses,
+                    quotes = context.quotes,
+                ),
+                selectedTradeFilter = selectedFilters.tradeFilter,
+                selectedMarketFilter = selectedFilters.marketFilter,
+                transactionKeyword = selectedFilters.keyword,
+                transactionDateStart = selectedFilters.startDate.orEmpty(),
+                transactionDateEnd = selectedFilters.endDate.orEmpty(),
+                managedPlatforms = buildList {
                     add(
                         ManagedPlatformUiModel(
-                            platform = platform,
-                            label = platform.label,
-                            totalAssetsLabel = totalAssetsByPlatform[platform]
-                                ?: formatDisplayAmount(0.0, selectedDisplayCurrency, repository.exchangeRates.value),
-                            isSelected = platform == platforms.selected,
+                            platform = null,
+                            label = "汇总",
+                            totalAssetsLabel = totalAssetsByPlatform[null] ?: formatDisplayAmount(
+                                allTransactionsPortfolio.totalAssetsCny,
+                                selectedDisplayCurrency,
+                                repository.exchangeRates.value,
+                            ),
+                            isSelected = platforms.selected == null,
                         ),
                     )
-                }
-            },
-            platformVisibilityOptions = BrokerPlatform.configurableEntries.map { platform ->
-                PlatformVisibilityUiModel(
-                    platform = platform,
-                    label = platform.label,
-                    totalAssetsLabel = totalAssetsByPlatform[platform]
-                        ?: formatDisplayAmount(0.0, selectedDisplayCurrency, repository.exchangeRates.value),
-                    isEnabled = platform in platforms.enabled,
-                )
-            },
-            availableTradePlatforms = availableTradePlatforms,
-            selectedPlatform = platforms.selected,
-            draft = state.upstream.draft,
-            symbolLookup = lookup,
-            canSubmitTrade = validationMessage == null,
-            tradeValidationMessage = validationMessage,
-            editingTransactionId = context.editingTrade?.transactionId,
-            displayCurrency = selectedDisplayCurrency,
-            exchangeRates = repository.exchangeRates.value,
-        )
+                    platforms.enabled.forEach { platform ->
+                        add(
+                            ManagedPlatformUiModel(
+                                platform = platform,
+                                label = platform.label,
+                                totalAssetsLabel = totalAssetsByPlatform[platform]
+                                    ?: formatDisplayAmount(0.0, selectedDisplayCurrency, repository.exchangeRates.value),
+                                isSelected = platform == platforms.selected,
+                            ),
+                        )
+                    }
+                },
+                platformVisibilityOptions = BrokerPlatform.configurableEntries.map { platform ->
+                    PlatformVisibilityUiModel(
+                        platform = platform,
+                        label = platform.label,
+                        totalAssetsLabel = totalAssetsByPlatform[platform]
+                            ?: formatDisplayAmount(0.0, selectedDisplayCurrency, repository.exchangeRates.value),
+                        isEnabled = platform in platforms.enabled,
+                    )
+                },
+                availableTradePlatforms = availableTradePlatforms,
+                selectedPlatform = platforms.selected,
+                draft = state.upstream.draft,
+                symbolLookup = lookup,
+                canSubmitTrade = validationMessage == null,
+                tradeValidationMessage = validationMessage,
+                editingTransactionId = context.editingTrade?.transactionId,
+                displayCurrency = selectedDisplayCurrency,
+                exchangeRates = repository.exchangeRates.value,
+            )
+        }
     }.combine(symbolSuggestions) { state, suggestions ->
         state.copy(symbolSuggestions = suggestions)
     }.combine(platformFeePlanSelections) { state, selections ->
@@ -437,16 +442,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         state.copy(zhuoruiStatementPdfImportStatusMessage = message)
     }.combine(alibabaBailianApiKey) { state, key ->
         state.copy(alibabaBailianApiKey = key)
-    }.combine(visionImportEnabled) { state, enabled ->
-        state.copy(visionImportEnabled = enabled)
+    }.combine(zhuoruiPdfImportMode) { state, mode ->
+        state.copy(zhuoruiPdfImportMode = mode)
     }.combine(visionImportModel) { state, model ->
         state.copy(visionImportModel = model)
+    }.combine(textImportModel) { state, model ->
+        state.copy(textImportModel = model)
     }.combine(visionApiBaseUrl) { state, url ->
         state.copy(visionApiBaseUrl = url)
-    }.combine(visionImportStatusMessage) { state, message ->
-        state.copy(visionImportStatusMessage = message)
-    }.combine(textImportStatusMessage) { state, message ->
-        state.copy(textImportStatusMessage = message)
     }.combine(batchSelectionMode) { state, batchMode ->
         state.copy(batchSelectionMode = batchMode)
     }.combine(selectedTransactionIds) { state, selectedIds ->
@@ -514,7 +517,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             )
             val tradeType = TradeType.valueOf(transaction.tradeType)
             val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
-            val market = Market.valueOf(transaction.market)
+            val market = Market.fromString(transaction.market) ?: Market.CASH
             val resolvedLookup = if (tradeType.isSecurityTrade) {
                 SymbolLookupUiModel(
                     state = SymbolLookupState.RESOLVED,
@@ -1602,7 +1605,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (trimmed.isBlank()) return false
         return when (market) {
             Market.A_SHARE -> trimmed.length >= 2
-            Market.HONG_KONG -> trimmed.length >= 2
+            Market.HK -> trimmed.length >= 2
             Market.US -> trimmed.length >= 1
             Market.CASH -> false
         }
@@ -1617,7 +1620,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 .substringBefore(".")
                 .filter(Char::isDigit)
 
-            Market.HONG_KONG -> compact
+            Market.HK -> compact
                 .removePrefix("HK")
                 .removeSuffix(".HK")
                 .filter(Char::isDigit)
@@ -1630,7 +1633,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
         return when (market) {
             Market.A_SHARE -> digits.length == 6
-            Market.HONG_KONG -> digits.length in 3..5
+            Market.HK -> digits.length in 3..5
             Market.US -> digits.matches(Regex("[A-Z][A-Z0-9.-]{0,9}")) && digits.any(Char::isLetter)
             Market.CASH -> false
         }
@@ -1651,7 +1654,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun lookupHintMessage(market: Market): String = when (market) {
         Market.A_SHARE -> "输入股票代码或名称，支持自动联想和补全"
-        Market.HONG_KONG -> "输入港股代码或名称，支持自动联想和补全"
+        Market.HK -> "输入港股代码或名称，支持自动联想和补全"
         Market.US -> "输入美股代码或名称，支持自动联想和补全"
         Market.CASH -> "现金流水无需识别股票"
     }
@@ -1666,7 +1669,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         exchangeRates: ExchangeRates,
     ): PortfolioSummary {
         val aCount = portfolio.positions.values.count { it.market == Market.A_SHARE && it.quantity != 0 }
-        val hkCount = portfolio.positions.values.count { it.market == Market.HONG_KONG && it.quantity != 0 }
+        val hkCount = portfolio.positions.values.count { it.market == Market.HK && it.quantity != 0 }
         val usCount = portfolio.positions.values.count { it.market == Market.US && it.quantity != 0 }
         return PortfolioSummary(
             totalAssets = formatDisplayAmount(portfolio.totalAssetsCny, displayCurrency, exchangeRates),
@@ -1746,33 +1749,40 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val parsedStartDate = startDate?.let(::parseTradeDateOrNull)
         val parsedEndDate = endDate?.let(::parseTradeDateOrNull)
         val normalizedKeyword = keyword.trim().lowercase()
-        val filtered = transactions
-            .filter { tradeFilter.tradeType == null || it.tradeType == tradeFilter.tradeType.name }
-            .filter { marketFilter.market == null || it.market == marketFilter.market.name }
-            .filter { transaction ->
-                if (normalizedKeyword.isBlank()) {
-                    true
-                } else {
-                    transaction.symbol.lowercase().contains(normalizedKeyword) ||
-                        transaction.name.lowercase().contains(normalizedKeyword)
-                }
+        
+        val filtered = transactions.filter { transaction ->
+            // 1. Trade Type Filter
+            if (tradeFilter.tradeType != null && transaction.tradeType != tradeFilter.tradeType.name) return@filter false
+            
+            // 2. Market Filter
+            if (marketFilter.market != null && transaction.market != marketFilter.market.name) return@filter false
+            
+            // 3. Keyword Filter
+            if (normalizedKeyword.isNotBlank()) {
+                val match = transaction.symbol.lowercase().contains(normalizedKeyword) ||
+                    transaction.name.lowercase().contains(normalizedKeyword)
+                if (!match) return@filter false
             }
-            .filter { transaction ->
+            
+            // 4. Date Filter
+            if (parsedStartDate != null || parsedEndDate != null) {
                 val tradeDate = parseTradeDateOrNull(transaction.tradeDate) ?: return@filter false
-                val isAfterStart = parsedStartDate == null || !tradeDate.isBefore(parsedStartDate)
-                val isBeforeEnd = parsedEndDate == null || !tradeDate.isAfter(parsedEndDate)
-                isAfterStart && isBeforeEnd
+                if (parsedStartDate != null && tradeDate.isBefore(parsedStartDate)) return@filter false
+                if (parsedEndDate != null && tradeDate.isAfter(parsedEndDate)) return@filter false
             }
+            
+            true
+        }
 
         return filtered
             .groupBy { it.tradeDate }
             .toList()
-            .sortedByDescending { (date, _) -> parseTradeDateOrNull(date) ?: LocalDate.MIN }
+            .sortedByDescending { (date, _) -> date } // Assuming ISO format "yyyy-MM-dd" allows string sorting
             .map { (date, entries) ->
                 TransactionSection(
                     title = displayDate(date),
                     items = entries.map { transaction ->
-                        val market = Market.valueOf(transaction.market)
+                        val market = Market.fromString(transaction.market) ?: Market.CASH
                         val tradeType = TradeType.valueOf(transaction.tradeType)
                         val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
                         val cashFlow = transactionCashFlow(transaction, tradeType)
@@ -1819,9 +1829,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val securityMeta = transactions
             .asSequence()
             .filter { TradeType.valueOf(it.tradeType).isSecurityTrade && it.symbol.isNotBlank() }
-            .distinctBy { positionKey(it.symbol, Market.valueOf(it.market)) }
-            .associate { transaction ->
-                val market = Market.valueOf(transaction.market)
+            .distinctBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
+            .map { transaction ->
+                val market = Market.fromString(transaction.market) ?: Market.CASH
+
                 positionKey(transaction.symbol, market) to ResolvedSecurity(
                     symbol = transaction.symbol,
                     name = transaction.name,
@@ -1843,7 +1854,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }),
         )
         val datedTransactions = ordered.mapNotNull { transaction ->
-            val market = runCatching { Market.valueOf(transaction.market) }.getOrNull() ?: Market.CASH
+            val market = Market.fromString(transaction.market) ?: Market.CASH
             val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
             date to transaction
         }
@@ -1877,7 +1888,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         while (!cursor.isAfter(latestDate)) {
             var dailyNetFlowCny = 0.0
             transactionMap[cursor].orEmpty().forEach { transaction ->
-                val market = Market.valueOf(transaction.market)
+                val market = Market.fromString(transaction.market) ?: Market.CASH
                 when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
                     TradeType.DEPOSIT -> {
                         val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
@@ -2100,10 +2111,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val dailyProfitByDate = linkedMapOf<LocalDate, Double>()
         val netFlowByDate = linkedMapOf<LocalDate, Double>()
         val securityProfitByDate = mutableMapOf<String, MutableMap<LocalDate, Double>>()
-        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.valueOf(it.market)) }
+        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
 
         ordered.forEach { transaction ->
-            val market = runCatching { Market.valueOf(transaction.market) }.getOrNull() ?: return@forEach
+            val market = Market.fromString(transaction.market) ?: return@forEach
             val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
                 TradeType.BUY -> {
@@ -2344,13 +2355,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         var securityTradeCount = 0
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({
-                val m = runCatching { Market.valueOf(it.market) }.getOrNull() ?: Market.CASH
+                val m = Market.fromString(it.market) ?: Market.CASH
                 effectiveTradeDate(it.tradeDate, it.tradeTime, m).toString()
             }, { it.tradeTime }, { it.createdAt }),
         )
 
         ordered.forEach { transaction ->
-            val market = Market.valueOf(transaction.market)
+            val market = Market.fromString(transaction.market) ?: Market.CASH
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
                 TradeType.DEPOSIT -> {
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
@@ -2473,7 +2484,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.valueOf(it.market)) }
+        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
         val holdings = positions.values
             .filter { it.quantity != 0 }
             .map { position ->
@@ -2720,7 +2731,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 val isBeforeDraft = transactionDate.isBefore(draftDate) ||
                     (transactionDate == draftDate && transactionTime <= draftTime)
                 if (!isBeforeDraft) return@mapNotNull null
-                val market = runCatching { Market.valueOf(transaction.market) }.getOrNull()
+                val market = Market.fromString(transaction.market)
                     ?: return@mapNotNull null
                 amountToHkdEquivalent(transaction.price * transaction.quantity, market)
             }
@@ -2728,10 +2739,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun amountToHkdEquivalent(amount: Double, market: Market): Double {
-        if (market == Market.HONG_KONG) return amount
+        if (market == Market.HK) return amount
         val exchangeRates = repository.exchangeRates.value
         val amountCny = convertToCny(amount, market, exchangeRates)
-        val hkdRateToCny = exchangeRates.rateToCny(Market.HONG_KONG)
+        val hkdRateToCny = exchangeRates.rateToCny(Market.HK)
         return if (hkdRateToCny <= EPSILON) {
             amount
         } else {
@@ -2767,7 +2778,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             .filter(Char::isDigit)
             .trimStart('0')
 
-        Market.HONG_KONG -> rawInput
+        Market.HK -> rawInput
             .removePrefix("HK")
             .removeSuffix(".HK")
             .filter(Char::isDigit)
@@ -2855,11 +2866,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private fun cashMarketFor(currency: DisplayCurrency): Market = when (currency) {
         DisplayCurrency.USD -> Market.US
         DisplayCurrency.CNY -> Market.CASH
-        DisplayCurrency.HKD -> Market.HONG_KONG
+        DisplayCurrency.HKD -> Market.HK
     }
 
     private fun normalizeCashMarket(market: Market): Market = when (market) {
-        Market.HONG_KONG, Market.US, Market.CASH -> market
+        Market.HK, Market.US, Market.CASH -> market
         Market.A_SHARE -> Market.CASH
     }
 
@@ -3109,6 +3120,14 @@ private data class RefreshMeta(
     }
 
     fun importZhuoruiStatementPdfs(uris: List<Uri>) {
+        when (zhuoruiPdfImportMode.value) {
+            ZhuoruiPdfImportMode.REGEX -> importZhuoruiStatementPdfsViaRegex(uris)
+            ZhuoruiPdfImportMode.VISION -> importZhuoruiStatementPdfsViaVision(uris)
+            ZhuoruiPdfImportMode.TEXT_MODEL -> importZhuoruiStatementPdfsViaTextModel(uris)
+        }
+    }
+
+    private fun importZhuoruiStatementPdfsViaRegex(uris: List<Uri>) {
         val password = zhuoruiStatementPdfPassword.value
         if (password.isBlank()) {
             zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
@@ -3157,24 +3176,24 @@ private data class RefreshMeta(
         }
     }
 
-    fun importZhuoruiStatementPdfsViaVision(uris: List<Uri>) {
+    private fun importZhuoruiStatementPdfsViaVision(uris: List<Uri>) {
         val apiKey = alibabaBailianApiKey.value
         val password = zhuoruiStatementPdfPassword.value
         if (apiKey.isBlank()) {
-            visionImportStatusMessage.value = "请先设置阿里云百炼 API Key"
+            zhuoruiStatementPdfImportStatusMessage.value = "请先设置 API Key"
             return
         }
         if (password.isBlank()) {
-            visionImportStatusMessage.value = "请先输入PDF结单密码"
+            zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
             return
         }
         if (uris.isEmpty()) {
-            visionImportStatusMessage.value = "请选择要导入的PDF文件"
+            zhuoruiStatementPdfImportStatusMessage.value = "请选择要导入的PDF文件"
             return
         }
 
         viewModelScope.launch {
-            visionImportStatusMessage.value = "正在识图解析${uris.size}个PDF文件..."
+            zhuoruiStatementPdfImportStatusMessage.value = "正在识图解析${uris.size}个PDF文件..."
             var totalImported = 0
             var totalDuplicate = 0
             var totalFailed = 0
@@ -3224,61 +3243,33 @@ private data class RefreshMeta(
                     append("未找到可导入的交易记录")
                 }
             }
-            visionImportStatusMessage.value = message
+            zhuoruiStatementPdfImportStatusMessage.value = message
         }
     }
 
-    fun updateAlibabaBailianApiKey(key: String) {
-        alibabaBailianApiKey.value = key
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, key)
-            .apply()
-    }
-
-    fun updateVisionImportEnabled(enabled: Boolean) {
-        visionImportEnabled.value = enabled
-        preferences.edit()
-            .putBoolean(StockLedgerPreferences.KEY_VISION_IMPORT_ENABLED, enabled)
-            .apply()
-    }
-
-    fun updateVisionImportModel(model: String) {
-        visionImportModel.value = model
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, model)
-            .apply()
-    }
-
-    fun updateVisionApiBaseUrl(url: String) {
-        visionApiBaseUrl.value = url
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, url)
-            .apply()
-    }
-
-    fun importZhuoruiStatementPdfsViaTextModel(uris: List<Uri>) {
+    private fun importZhuoruiStatementPdfsViaTextModel(uris: List<Uri>) {
         val apiKey = alibabaBailianApiKey.value
         val password = zhuoruiStatementPdfPassword.value
         if (apiKey.isBlank()) {
-            textImportStatusMessage.value = "请先设置 API Key"
+            zhuoruiStatementPdfImportStatusMessage.value = "请先设置 API Key"
             return
         }
         if (password.isBlank()) {
-            textImportStatusMessage.value = "请先输入PDF结单密码"
+            zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
             return
         }
         if (uris.isEmpty()) {
-            textImportStatusMessage.value = "请选择要导入的PDF文件"
+            zhuoruiStatementPdfImportStatusMessage.value = "请选择要导入的PDF文件"
             return
         }
 
         viewModelScope.launch {
-            textImportStatusMessage.value = "正在文本解析${uris.size}个PDF文件..."
+            zhuoruiStatementPdfImportStatusMessage.value = "正在文本解析${uris.size}个PDF文件..."
             var totalImported = 0
             var totalDuplicate = 0
             var totalFailed = 0
 
-            val model = visionImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-vl-max"
+            val model = textImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-max"
             val baseUrl = visionApiBaseUrl.value.takeIf { it.isNotBlank() }
                 ?: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
             val client = com.recoder.stockledger.data.importer.vision.OpenAiVisionClient(
@@ -3322,28 +3313,68 @@ private data class RefreshMeta(
                     append("未找到可导入的交易记录")
                 }
             }
-            textImportStatusMessage.value = message
+            zhuoruiStatementPdfImportStatusMessage.value = message
         }
     }
 
-    fun clearVisionImportStatus() {
-        visionImportStatusMessage.value = null
+    fun updateAlibabaBailianApiKey(key: String) {
+        alibabaBailianApiKey.value = key
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, key)
+            .apply()
     }
 
-    fun clearTextImportStatus() {
-        textImportStatusMessage.value = null
+    fun updateZhuoruiPdfImportMode(mode: ZhuoruiPdfImportMode) {
+        zhuoruiPdfImportMode.value = mode
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, mode.name)
+            .apply()
+    }
+
+    fun updateVisionImportModel(model: String) {
+        visionImportModel.value = model
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, model)
+            .apply()
+    }
+
+    fun updateTextImportModel(model: String) {
+        textImportModel.value = model
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_TEXT_IMPORT_MODEL, model)
+            .apply()
+    }
+
+    fun updateVisionApiBaseUrl(url: String) {
+        visionApiBaseUrl.value = url
+        preferences.edit()
+            .putString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, url)
+            .apply()
+    }
+
+    fun clearZhuoruiPdfImportStatus() {
+        zhuoruiStatementPdfImportStatusMessage.value = null
     }
 
     private fun loadAlibabaBailianApiKey(): String {
         return preferences.getString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, "").orEmpty()
     }
 
-    private fun loadVisionImportEnabled(): Boolean {
-        return preferences.getBoolean(StockLedgerPreferences.KEY_VISION_IMPORT_ENABLED, false)
+    private fun loadZhuoruiPdfImportMode(): ZhuoruiPdfImportMode {
+        val name = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, ZhuoruiPdfImportMode.REGEX.name)
+        return try {
+            ZhuoruiPdfImportMode.valueOf(name ?: ZhuoruiPdfImportMode.REGEX.name)
+        } catch (_: Exception) {
+            ZhuoruiPdfImportMode.REGEX
+        }
     }
 
     private fun loadVisionImportModel(): String {
         return preferences.getString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, "").orEmpty()
+    }
+
+    private fun loadTextImportModel(): String {
+        return preferences.getString(StockLedgerPreferences.KEY_TEXT_IMPORT_MODEL, "").orEmpty()
     }
 
     private fun loadVisionApiBaseUrl(): String {

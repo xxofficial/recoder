@@ -25,6 +25,6 @@ fun ExchangeRates.rateToCny(currency: DisplayCurrency): Double = when (currency)
 
 fun ExchangeRates.rateToCny(market: Market): Double = when (market) {
     Market.A_SHARE, Market.CASH -> 1.0
-    Market.HONG_KONG -> hkdToCny
+    Market.HK -> hkdToCny
     Market.US -> usdToCny
 }

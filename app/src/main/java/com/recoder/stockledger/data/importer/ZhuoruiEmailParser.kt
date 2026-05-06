@@ -147,7 +147,7 @@ object ZhuoruiEmailParser {
 
     private fun resolveMarket(rawMarket: String): Market? = when (rawMarket) {
         "美股" -> Market.US
-        "港股" -> Market.HONG_KONG
+        "港股" -> Market.HK
         "A股" -> Market.A_SHARE
         else -> null
     }
@@ -156,7 +156,7 @@ object ZhuoruiEmailParser {
         val compact = rawSymbol.trim().uppercase()
         return when (market) {
             Market.US -> compact.takeIf { it.matches(Regex("[A-Z][A-Z0-9.-]{0,9}")) }
-            Market.HONG_KONG -> compact
+            Market.HK -> compact
                 .removePrefix("HK")
                 .removeSuffix(".HK")
                 .filter(Char::isDigit)

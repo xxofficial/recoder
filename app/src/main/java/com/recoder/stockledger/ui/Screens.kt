@@ -7,6 +7,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -110,130 +113,141 @@ fun HoldingsRoute(
                 modifier = Modifier.statusBarsPadding(),
             )
 
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .pullRefresh(pullRefreshState)
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
+                    .padding(start = 20.dp, end = 20.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    InlineCurrencyDropdown(
-                        title = "总资产",
-                        selected = displayCurrency,
-                        onSelected = onDisplayCurrencySelected,
-                    )
-                    Text(summary.totalAssets, color = ForegroundPrimary, fontSize = 36.sp, fontWeight = FontWeight.Bold)
-                    Row {
-                        Text("今日盈亏 ", color = ForegroundMuted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Text(
-                            summary.dayProfit,
-                            color = if (summary.dayProfit.startsWith("-")) MarketDown else MarketUp,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
+                item(key = "summary_header") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        InlineCurrencyDropdown(
+                            title = "总资产",
+                            selected = displayCurrency,
+                            onSelected = onDisplayCurrencySelected,
+                        )
+                        Text(summary.totalAssets, color = ForegroundPrimary, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+                        Row {
+                            Text("今日盈亏 ", color = ForegroundMuted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(
+                                summary.dayProfit,
+                                color = if (summary.dayProfit.startsWith("-")) MarketDown else MarketUp,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+
+                item(key = "summary_metrics") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            SummaryMetric(
+                                label = "净入金",
+                                value = summary.totalCost,
+                                hint = summary.totalCostHint,
+                                modifier = Modifier.weight(1f),
+                            )
+                            SummaryMetric(
+                                label = "可用现金",
+                                value = summary.cashBalance,
+                                hint = summary.cashBalanceHint,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            SummaryMetric(
+                                label = "持仓浮盈",
+                                value = summary.totalProfit,
+                                hint = summary.totalProfitHint,
+                                valueColor = if (summary.totalProfit.startsWith("-")) MarketDown else MarketUp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            SummaryMetric(
+                                label = "持仓总市值",
+                                value = summary.holdingsValue,
+                                hint = "按现价估算",
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+
+                item(key = "trade_stats") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("交易统计", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            SummaryMetric(
+                                label = "佣金/平台费",
+                                value = summary.commissionTotal,
+                                hint = "累计",
+                                modifier = Modifier.weight(1f),
+                            )
+                            SummaryMetric(
+                                label = "税费",
+                                value = summary.taxTotal,
+                                hint = "累计",
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        SummaryMetric(
+                            label = "交易次数",
+                            value = summary.tradeCount,
+                            hint = "证券买入/卖出",
                         )
                     }
                 }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            color = SurfaceSecondary,
-                            shape = RoundedCornerShape(16.dp),
-                        )
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        SummaryMetric(
-                            label = "净入金",
-                            value = summary.totalCost,
-                            hint = summary.totalCostHint,
-                            modifier = Modifier.weight(1f),
-                        )
-                        SummaryMetric(
-                            label = "可用现金",
-                            value = summary.cashBalance,
-                            hint = summary.cashBalanceHint,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        SummaryMetric(
-                            label = "持仓浮盈",
-                            value = summary.totalProfit,
-                            hint = summary.totalProfitHint,
-                            valueColor = if (summary.totalProfit.startsWith("-")) MarketDown else MarketUp,
-                            modifier = Modifier.weight(1f),
-                        )
-                        SummaryMetric(
-                            label = "持仓总市值",
-                            value = summary.holdingsValue,
-                            hint = "按现价估算",
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                item(key = "holdings_title") {
+                    Text("持仓列表", color = ForegroundPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            color = SurfaceSecondary,
-                            shape = RoundedCornerShape(16.dp),
-                        )
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text("交易统计", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                item(key = "holdings_list") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        SummaryMetric(
-                            label = "佣金/平台费",
-                            value = summary.commissionTotal,
-                            hint = "累计",
-                            modifier = Modifier.weight(1f),
-                        )
-                        SummaryMetric(
-                            label = "税费",
-                            value = summary.taxTotal,
-                            hint = "累计",
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    SummaryMetric(
-                        label = "交易次数",
-                        value = summary.tradeCount,
-                        hint = "证券买入/卖出",
-                    )
-                }
-
-                Text("持仓列表", color = ForegroundPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            color = SurfaceSecondary,
-                            shape = RoundedCornerShape(16.dp),
-                        )
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    if (holdings.isEmpty()) {
-                        Text("当前范围内还没有持仓。", color = ForegroundMuted, fontSize = 14.sp)
-                    } else {
-                        holdings.forEach { item ->
-                            EnhancedHoldingsCard(item = item, onClick = { onHoldingClick(item) })
+                        if (holdings.isEmpty()) {
+                            Text("当前范围内还没有持仓。", color = ForegroundMuted, fontSize = 14.sp)
+                        } else {
+                            holdings.forEach { item ->
+                                EnhancedHoldingsCard(item = item, onClick = { onHoldingClick(item) })
+                            }
                         }
                     }
                 }
@@ -303,11 +317,6 @@ fun OperationsRoute(
     zhuoruiStatementPdfImportStatusMessage: String?,
     onZhuoruiStatementPdfPasswordChange: (String) -> Unit,
     onImportZhuoruiStatementPdfs: () -> Unit,
-    visionImportEnabled: Boolean,
-    visionImportStatusMessage: String?,
-    onImportZhuoruiStatementPdfsViaVision: () -> Unit,
-    textImportStatusMessage: String?,
-    onImportZhuoruiStatementPdfsViaTextModel: () -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
@@ -621,32 +630,6 @@ fun OperationsRoute(
                                 fontSize = 12.sp,
                             )
                         }
-                        if (visionImportEnabled) {
-                            OutlineActionButton(
-                                text = "识图导入",
-                                onClick = onImportZhuoruiStatementPdfsViaVision,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            visionImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                                Text(
-                                    text = message,
-                                    color = ForegroundMuted,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                            OutlineActionButton(
-                                text = "文本大模型导入",
-                                onClick = onImportZhuoruiStatementPdfsViaTextModel,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            textImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                                Text(
-                                    text = message,
-                                    color = ForegroundMuted,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                        }
                     }
                 }
             }
@@ -713,131 +696,144 @@ fun TransactionsRoute(
                 modifier = Modifier.statusBarsPadding(),
             )
 
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
+                    .padding(start = 20.dp, end = 20.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                if (batchSelectionMode) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val allIds = sections.flatMap { section -> section.items.map { it.id } }
-                        val allSelected = allIds.isNotEmpty() && allIds.all { it in selectedTransactionIds }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    if (allSelected) onExitBatchMode() else onSelectAll(allIds)
-                                }
-                                .background(SurfaceSecondary)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                item(key = "search_header") {
+                    if (batchSelectionMode) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            val allIds = sections.flatMap { section -> section.items.map { it.id } }
+                            val allSelected = allIds.isNotEmpty() && allIds.all { it in selectedTransactionIds }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        if (allSelected) onExitBatchMode() else onSelectAll(allIds)
+                                    }
+                                    .background(SurfaceSecondary)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    text = if (allSelected) "取消全选" else "全选",
+                                    color = ForegroundPrimary,
+                                    fontSize = 13.sp,
+                                )
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
                             Text(
-                                text = if (allSelected) "取消全选" else "全选",
-                                color = ForegroundPrimary,
+                                text = "已选 ${selectedTransactionIds.size} 笔",
+                                color = ForegroundMuted,
                                 fontSize = 13.sp,
                             )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        if (selectedTransactionIds.isNotEmpty()) showBatchDeleteDialog = true
+                                    }
+                                    .background(if (selectedTransactionIds.isNotEmpty()) MarketDown else SurfaceSecondary)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    text = "删除(${selectedTransactionIds.size})",
+                                    color = if (selectedTransactionIds.isNotEmpty()) BackgroundPrimary else ForegroundMuted,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onExitBatchMode() }
+                                    .background(SurfaceSecondary)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text("取消", color = ForegroundPrimary, fontSize = 13.sp)
+                            }
                         }
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(
-                            text = "已选 ${selectedTransactionIds.size} 笔",
-                            color = ForegroundMuted,
-                            fontSize = 13.sp,
-                        )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    if (selectedTransactionIds.isNotEmpty()) showBatchDeleteDialog = true
-                                }
-                                .background(if (selectedTransactionIds.isNotEmpty()) MarketDown else SurfaceSecondary)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                text = "删除(${selectedTransactionIds.size})",
-                                color = if (selectedTransactionIds.isNotEmpty()) BackgroundPrimary else ForegroundMuted,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
+                            InputFieldBlock(
+                                label = "",
+                                value = transactionKeyword,
+                                placeholder = "搜索证券名称或代码",
+                                modifier = Modifier.weight(1f),
+                                onValueChange = onTransactionKeywordChange,
                             )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onExitBatchMode() }
-                                .background(SurfaceSecondary)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                        ) {
-                            Text("取消", color = ForegroundPrimary, fontSize = 13.sp)
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        InputFieldBlock(
-                            label = "",
-                            value = transactionKeyword,
-                            placeholder = "搜索证券名称或代码",
-                            modifier = Modifier.weight(1f),
-                            onValueChange = onTransactionKeywordChange,
-                        )
-                        FilterActionButton(
-                            active = hasActiveFilters,
-                            onClick = {
-                                draftTradeFilter = selectedTradeFilter
-                                draftMarketFilter = selectedMarketFilter
-                                draftStartDate = transactionDateStart
-                                draftEndDate = transactionDateEnd
-                                showFilterSheet = true
-                            },
-                        )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onEnterBatchMode() }
-                                .background(SurfaceSecondary)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                        ) {
-                            Text("批量删除", color = ForegroundPrimary, fontSize = 13.sp)
+                            FilterActionButton(
+                                active = hasActiveFilters,
+                                onClick = {
+                                    draftTradeFilter = selectedTradeFilter
+                                    draftMarketFilter = selectedMarketFilter
+                                    draftStartDate = transactionDateStart
+                                    draftEndDate = transactionDateEnd
+                                    showFilterSheet = true
+                                },
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onEnterBatchMode() }
+                                    .background(SurfaceSecondary)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text("批量删除", color = ForegroundPrimary, fontSize = 13.sp)
+                            }
                         }
                     }
                 }
 
                 if (sections.isEmpty()) {
-                    Text("当前条件下没有流水记录。", color = ForegroundMuted, fontSize = 14.sp)
+                    item(key = "empty_state") {
+                        Text("当前条件下没有流水记录。", color = ForegroundMuted, fontSize = 14.sp)
+                    }
                 } else {
                     sections.forEach { section ->
-                        Text(section.title, color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    color = SurfaceSecondary,
-                                    shape = RoundedCornerShape(16.dp),
-                                )
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            section.items.forEach { item ->
-                                TransactionRow(
-                                    item = item,
-                                    onClick = {
-                                        if (batchSelectionMode) {
-                                            onToggleSelection(item.id)
-                                        } else {
-                                            onEditTradeClick(item.id)
-                                        }
-                                    },
-                                    isSelected = item.id in selectedTransactionIds,
-                                    showCheckbox = batchSelectionMode,
-                                )
+                        item(key = "title_${section.title}") {
+                            Text(
+                                text = section.title,
+                                color = ForegroundSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        item(key = "group_${section.title}") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = SurfaceSecondary,
+                                        shape = RoundedCornerShape(16.dp),
+                                    )
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                section.items.forEach { item ->
+                                    TransactionRow(
+                                        item = item,
+                                        onClick = {
+                                            if (batchSelectionMode) {
+                                                onToggleSelection(item.id)
+                                            } else {
+                                                onEditTradeClick(item.id)
+                                            }
+                                        },
+                                        isSelected = item.id in selectedTransactionIds,
+                                        showCheckbox = batchSelectionMode,
+                                    )
+                                }
                             }
                         }
                     }
@@ -998,7 +994,7 @@ fun TradeEntryRoute(
     var showDeleteDialog by remember { mutableStateOf(false) }
     val cashCurrency = when (state.market) {
         Market.US -> DisplayCurrency.USD
-        Market.HONG_KONG -> DisplayCurrency.HKD
+        Market.HK -> DisplayCurrency.HKD
         else -> DisplayCurrency.CNY
     }
     val cashCurrencyCode = cashCurrency.code
@@ -1514,11 +1510,6 @@ private fun OperationsRoutePreview() {
             zhuoruiStatementPdfImportStatusMessage = null,
             onZhuoruiStatementPdfPasswordChange = {},
             onImportZhuoruiStatementPdfs = {},
-            visionImportEnabled = true,
-            visionImportStatusMessage = null,
-            onImportZhuoruiStatementPdfsViaVision = {},
-            textImportStatusMessage = null,
-            onImportZhuoruiStatementPdfsViaTextModel = {},
             onDestinationSelected = {},
         )
     }

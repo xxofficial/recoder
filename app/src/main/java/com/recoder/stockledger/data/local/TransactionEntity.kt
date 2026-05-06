@@ -3,7 +3,12 @@ package com.recoder.stockledger.data.local
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "transactions")
+@Entity(
+    tableName = "transactions",
+    indices = [
+        androidx.room.Index(value = ["symbol", "market"]),
+    ],
+)
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val tradeType: String,

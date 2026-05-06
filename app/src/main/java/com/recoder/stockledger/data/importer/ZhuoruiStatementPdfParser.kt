@@ -611,14 +611,14 @@ object ZhuoruiStatementPdfParser {
 
     private fun resolveMarketFromExchange(exchange: String): Market = when (exchange.uppercase()) {
         "NASDAQ", "NYSE", "AMEX", "BATS" -> Market.US
-        "SEHK" -> Market.HONG_KONG
-        "MUTUAL FUND" -> Market.HONG_KONG
+        "SEHK" -> Market.HK
+        "MUTUAL FUND" -> Market.HK
         else -> Market.US
     }
 
     private fun resolveSymbol(stockCode: String, market: Market): String {
         return when (market) {
-            Market.HONG_KONG -> {
+            Market.HK -> {
                 val digits = stockCode.filter(Char::isDigit)
                 when {
                     digits.length == 5 -> digits + ".HK"
