@@ -94,9 +94,12 @@ fun StockLedgerApp(
             ledgerViewModel.importBackup(uri)
         }
     }
+    var pendingPdfImportPlatform by remember { mutableStateOf<BrokerPlatform?>(null) }
     val pdfImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
-            ledgerViewModel.importZhuoruiStatementPdfs(uris)
+            pendingPdfImportPlatform?.let { platform ->
+                ledgerViewModel.importStatementPdfs(uris, platform)
+            }
         }
     }
 
@@ -243,11 +246,19 @@ fun StockLedgerApp(
                         onSyncZhuoruiMailboxNow = ledgerViewModel::syncZhuoruiMailboxNow,
                         onEnableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(true) },
                         onDisableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(false) },
-                        zhuoruiStatementPdfPassword = uiState.zhuoruiStatementPdfPassword,
-                        zhuoruiStatementPdfImportStatusMessage = uiState.zhuoruiStatementPdfImportStatusMessage,
-                        onZhuoruiStatementPdfPasswordChange = ledgerViewModel::updateZhuoruiStatementPdfPassword,
-                        onImportZhuoruiStatementPdfs = {
+                        pdfImportPassword = uiState.zhuoruiStatementPdfPassword,
+                        pdfImportStatusMessage = uiState.pdfImportStatusMessage,
+                        pdfImportProgressFraction = uiState.pdfImportProgressFraction,
+                        hasFailedPdfImports = uiState.hasFailedPdfImports,
+                        onPdfImportPasswordChange = ledgerViewModel::updateZhuoruiStatementPdfPassword,
+                        onImportPdfStatements = { platform ->
+                            // Clear status before launching picker
+                            ledgerViewModel.clearPdfImportStatus()
+                            pendingPdfImportPlatform = platform
                             pdfImportLauncher.launch(arrayOf("application/pdf"))
+                        },
+                        onRetryFailedPdfImport = { platform ->
+                            ledgerViewModel.retryFailedPdfImport(platform)
                         },
                         onDestinationSelected = { destination ->
                             when (destination) {
@@ -389,15 +400,13 @@ fun StockLedgerApp(
                         onZhuoruiPromoChange = ledgerViewModel::updateZhuoruiPromoConfig,
                         onSaveZhuoruiPromo = ledgerViewModel::saveZhuoruiPromoConfig,
                         alibabaBailianApiKey = uiState.alibabaBailianApiKey,
-                        zhuoruiPdfImportMode = uiState.zhuoruiPdfImportMode,
-                        visionImportModel = uiState.visionImportModel,
+                        pdfImportMode = uiState.pdfImportMode,
                         textImportModel = uiState.textImportModel,
-                        visionApiBaseUrl = uiState.visionApiBaseUrl,
+                        llmApiBaseUrl = uiState.llmApiBaseUrl,
                         onAlibabaBailianApiKeyChange = ledgerViewModel::updateAlibabaBailianApiKey,
-                        onZhuoruiPdfImportModeChange = ledgerViewModel::updateZhuoruiPdfImportMode,
-                        onVisionImportModelChange = ledgerViewModel::updateVisionImportModel,
+                        onPdfImportModeChange = ledgerViewModel::updatePdfImportMode,
                         onTextImportModelChange = ledgerViewModel::updateTextImportModel,
-                        onVisionApiBaseUrlChange = ledgerViewModel::updateVisionApiBaseUrl,
+                        onLlmApiBaseUrlChange = ledgerViewModel::updateLlmApiBaseUrl,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },
                     )

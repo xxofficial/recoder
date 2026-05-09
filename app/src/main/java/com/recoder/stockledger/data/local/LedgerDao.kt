@@ -10,6 +10,7 @@ import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
+@JvmSuppressWildcards
 interface LedgerDao {
     @Query("SELECT * FROM transactions ORDER BY tradeDate DESC, tradeTime DESC, id DESC")
     fun observeTransactions(): Flow<List<TransactionEntity>>
@@ -21,7 +22,7 @@ interface LedgerDao {
     suspend fun insertTransaction(transaction: TransactionEntity): Long
 
     @Insert
-    suspend fun insertTransactions(transactions: List<TransactionEntity>)
+    suspend fun insertTransactions(transactions: List<TransactionEntity>): List<Long>
 
     @Query(
         """
@@ -37,22 +38,22 @@ interface LedgerDao {
     ): TransactionEntity?
 
     @Query("DELETE FROM transactions")
-    suspend fun clearTransactions()
+    suspend fun clearTransactions(): Int
 
     @Update
-    suspend fun updateTransaction(transaction: TransactionEntity)
+    suspend fun updateTransaction(transaction: TransactionEntity): Int
 
     @Upsert
-    suspend fun upsertQuotes(quotes: List<QuoteSnapshotEntity>)
+    suspend fun upsertQuotes(quotes: List<QuoteSnapshotEntity>): List<Long>
 
     @Query("SELECT COUNT(*) FROM transactions")
     suspend fun transactionCount(): Int
 
     @Query("DELETE FROM transactions WHERE createdAt BETWEEN 1 AND 5")
-    suspend fun deleteLegacySeedTransactions()
+    suspend fun deleteLegacySeedTransactions(): Int
 
     @Query("DELETE FROM quote_snapshots")
-    suspend fun clearQuotes()
+    suspend fun clearQuotes(): Int
 
     @Query("DELETE FROM transactions WHERE symbol = :symbol AND market = :market")
     suspend fun deleteTransactionsByHolding(symbol: String, market: String): Int
@@ -64,7 +65,7 @@ interface LedgerDao {
     suspend fun deleteTransactionsByIds(ids: List<Long>): Int
 
     @Query("DELETE FROM quote_snapshots WHERE symbol = :symbol AND market = :market")
-    suspend fun deleteQuoteByHolding(symbol: String, market: String)
+    suspend fun deleteQuoteByHolding(symbol: String, market: String): Int
 
     @Transaction
     suspend fun deleteHolding(symbol: String, market: String): Int {
@@ -74,10 +75,10 @@ interface LedgerDao {
     }
 
     @Transaction
-    suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
+    suspend fun replaceTransactions(transactions: List<TransactionEntity>): List<Long> {
         clearTransactions()
         clearQuotes()
-        insertTransactions(transactions)
+        return insertTransactions(transactions)
     }
 
     @Query("SELECT MAX(lastUpdatedAt) FROM quote_snapshots")
@@ -111,6 +112,7 @@ interface LedgerDao {
           AND tradeDate = :tradeDate
           AND tradeType = :tradeType
           AND quantity = :quantity
+          AND ABS(price - :price) < 0.0001
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -122,5 +124,6 @@ interface LedgerDao {
         tradeDate: String,
         tradeType: String,
         quantity: Int,
+        price: Double,
     ): TransactionEntity?
 }

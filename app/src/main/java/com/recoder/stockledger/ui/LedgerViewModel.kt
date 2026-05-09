@@ -1,4 +1,4 @@
-﻿package com.recoder.stockledger.ui
+package com.recoder.stockledger.ui
 
 import android.app.Application
 import android.content.Context
@@ -42,7 +42,7 @@ import com.recoder.stockledger.data.ZhuoruiPromoConfig
 import com.recoder.stockledger.data.TransactionUiModel
 import com.recoder.stockledger.data.ZhuoruiEmailManualSyncOptions
 import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
-import com.recoder.stockledger.data.ZhuoruiPdfImportMode
+import com.recoder.stockledger.data.PdfImportMode
 import com.recoder.stockledger.data.rateToCny
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
@@ -76,6 +76,22 @@ import kotlin.math.absoluteValue
 
 private const val DEFAULT_REFRESH_MESSAGE = "打开应用会自动刷新一次行情，手动下拉 1 分钟内仅可触发一次"
 private const val US_TIMEZONE_CUTOFF = "06:00"
+
+private data class ResolvedSecurity(
+    val symbol: String,
+    val name: String,
+    val market: Market,
+)
+
+private data class PositionComputation(
+    val symbol: String,
+    val name: String,
+    val market: Market,
+    val quantity: Int,
+    val averageCost: Double,
+    val remainingCost: Double,
+    val realizedProfit: Double,
+)
 
 data class LedgerUiState(
     val summary: PortfolioSummary = PortfolioSummary(
@@ -127,12 +143,13 @@ data class LedgerUiState(
     val zhuoruiEmailSyncStatusMessage: String? = null,
     val zhuoruiPromoConfig: ZhuoruiPromoConfig = ZhuoruiPromoConfig(),
     val zhuoruiStatementPdfPassword: String = "",
-    val zhuoruiStatementPdfImportStatusMessage: String? = null,
+    val pdfImportStatusMessage: String? = null,
+    val pdfImportProgressFraction: Float? = null,
+    val hasFailedPdfImports: Boolean = false,
     val alibabaBailianApiKey: String = "",
-    val zhuoruiPdfImportMode: ZhuoruiPdfImportMode = ZhuoruiPdfImportMode.REGEX,
-    val visionImportModel: String = "",
+    val pdfImportMode: PdfImportMode = PdfImportMode.REGEX,
     val textImportModel: String = "",
-    val visionApiBaseUrl: String = "",
+    val llmApiBaseUrl: String = "",
     val batchSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
 )
@@ -172,12 +189,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val zhuoruiEmailAutoImportEnabled = MutableStateFlow(loadZhuoruiEmailAutoImportEnabled())
     private val zhuoruiEmailSyncStatusMessage = MutableStateFlow(loadZhuoruiEmailSyncStatusMessage())
     private val zhuoruiStatementPdfPassword = MutableStateFlow(loadZhuoruiStatementPdfPassword())
-    private val zhuoruiStatementPdfImportStatusMessage = MutableStateFlow<String?>(null)
+    private val pdfImportStatusMessage = MutableStateFlow<String?>(null)
+    private val pdfImportProgressFraction = MutableStateFlow<Float?>(null)
+    private val failedPdfUris = MutableStateFlow<List<Uri>>(emptyList())
     private val alibabaBailianApiKey = MutableStateFlow(loadAlibabaBailianApiKey())
-    private val zhuoruiPdfImportMode = MutableStateFlow(loadZhuoruiPdfImportMode())
-    private val visionImportModel = MutableStateFlow(loadVisionImportModel())
+    private val pdfImportMode = MutableStateFlow(loadPdfImportMode())
     private val textImportModel = MutableStateFlow(loadTextImportModel())
-    private val visionApiBaseUrl = MutableStateFlow(loadVisionApiBaseUrl())
+    private val llmApiBaseUrl = MutableStateFlow(loadLlmApiBaseUrl())
     private val batchSelectionMode = MutableStateFlow(false)
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
@@ -303,7 +321,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val (state, platforms, selectedDisplayCurrency) = upstream
         val selectedFilters = state.upstream.upstream.filters
         val context = state.upstream.upstream.context
-        
+
         // Ensure heavy computations run off the main thread
         withContext(Dispatchers.Default) {
             val platformScopedTransactions = filterTransactionsByPlatform(
@@ -438,18 +456,20 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         state.copy(zhuoruiPromoConfig = promo)
     }.combine(zhuoruiStatementPdfPassword) { state, password ->
         state.copy(zhuoruiStatementPdfPassword = password)
-    }.combine(zhuoruiStatementPdfImportStatusMessage) { state, message ->
-        state.copy(zhuoruiStatementPdfImportStatusMessage = message)
+    }.combine(pdfImportStatusMessage) { state, message ->
+        state.copy(pdfImportStatusMessage = message)
+    }.combine(pdfImportProgressFraction) { state, fraction ->
+        state.copy(pdfImportProgressFraction = fraction)
+    }.combine(failedPdfUris) { state, failed ->
+        state.copy(hasFailedPdfImports = failed.isNotEmpty())
     }.combine(alibabaBailianApiKey) { state, key ->
         state.copy(alibabaBailianApiKey = key)
-    }.combine(zhuoruiPdfImportMode) { state, mode ->
-        state.copy(zhuoruiPdfImportMode = mode)
-    }.combine(visionImportModel) { state, model ->
-        state.copy(visionImportModel = model)
+    }.combine(pdfImportMode) { state, mode ->
+        state.copy(pdfImportMode = mode)
     }.combine(textImportModel) { state, model ->
         state.copy(textImportModel = model)
-    }.combine(visionApiBaseUrl) { state, url ->
-        state.copy(visionApiBaseUrl = url)
+    }.combine(llmApiBaseUrl) { state, url ->
+        state.copy(llmApiBaseUrl = url)
     }.combine(batchSelectionMode) { state, batchMode ->
         state.copy(batchSelectionMode = batchMode)
     }.combine(selectedTransactionIds) { state, selectedIds ->
@@ -1749,28 +1769,28 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val parsedStartDate = startDate?.let(::parseTradeDateOrNull)
         val parsedEndDate = endDate?.let(::parseTradeDateOrNull)
         val normalizedKeyword = keyword.trim().lowercase()
-        
+
         val filtered = transactions.filter { transaction ->
             // 1. Trade Type Filter
             if (tradeFilter.tradeType != null && transaction.tradeType != tradeFilter.tradeType.name) return@filter false
-            
+
             // 2. Market Filter
             if (marketFilter.market != null && transaction.market != marketFilter.market.name) return@filter false
-            
+
             // 3. Keyword Filter
             if (normalizedKeyword.isNotBlank()) {
                 val match = transaction.symbol.lowercase().contains(normalizedKeyword) ||
                     transaction.name.lowercase().contains(normalizedKeyword)
                 if (!match) return@filter false
             }
-            
+
             // 4. Date Filter
             if (parsedStartDate != null || parsedEndDate != null) {
                 val tradeDate = parseTradeDateOrNull(transaction.tradeDate) ?: return@filter false
                 if (parsedStartDate != null && tradeDate.isBefore(parsedStartDate)) return@filter false
                 if (parsedEndDate != null && tradeDate.isAfter(parsedEndDate)) return@filter false
             }
-            
+
             true
         }
 
@@ -1827,10 +1847,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         quotes: List<QuoteSnapshotEntity>,
     ): ProfitAnalysisUiModel {
         val securityMeta = transactions
-            .asSequence()
             .filter { TradeType.valueOf(it.tradeType).isSecurityTrade && it.symbol.isNotBlank() }
             .distinctBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
-            .map { transaction ->
+            .associate { transaction ->
                 val market = Market.fromString(transaction.market) ?: Market.CASH
 
                 positionKey(transaction.symbol, market) to ResolvedSecurity(
@@ -2513,7 +2532,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     name = position.name,
                     code = position.symbol,
                     market = position.market,
-                    quantityLabel = if (position.quantity < 0) "空仓 ${-position.quantity} 股" else "${position.quantity} 股",
+                    quantityLabel = "${position.quantity} 股",
                     costLabel = "成本 ${formatMarketAmount(position.averageCost, position.market)}",
                     priceLabel = currentPrice?.let { formatMarketAmount(it, position.market) } ?: "--",
                     changeLabel = dayPercent?.let(::formatSignedPercent) ?: "价格暂不可用",
@@ -2715,7 +2734,6 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             ?.let(::parseTradeTimeOrNull)
             ?: if (draftDate == LocalDate.now()) LocalTime.now() else LocalTime.MAX
         return transactionSnapshot.value
-            .asSequence()
             .filterNot { transaction -> transaction.id == editingSession?.transactionId }
             .mapNotNull { transaction ->
                 val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
@@ -2898,21 +2916,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val externalReference: String?,
     )
 
-    private data class ResolvedSecurity(
-        val symbol: String,
-        val name: String,
-        val market: Market,
-    )
 
-    private data class PositionComputation(
-        val symbol: String,
-        val name: String,
-        val market: Market,
-        val quantity: Int,
-        val averageCost: Double,
-        val remainingCost: Double,
-        val realizedProfit: Double,
-    )
 
     private data class PortfolioComputation(
         val holdings: List<HoldingUiModel>,
@@ -3119,201 +3123,178 @@ private data class RefreshMeta(
             .apply()
     }
 
-    fun importZhuoruiStatementPdfs(uris: List<Uri>) {
-        when (zhuoruiPdfImportMode.value) {
-            ZhuoruiPdfImportMode.REGEX -> importZhuoruiStatementPdfsViaRegex(uris)
-            ZhuoruiPdfImportMode.VISION -> importZhuoruiStatementPdfsViaVision(uris)
-            ZhuoruiPdfImportMode.TEXT_MODEL -> importZhuoruiStatementPdfsViaTextModel(uris)
+    fun importStatementPdfs(uris: List<Uri>, platform: BrokerPlatform) {
+        failedPdfUris.value = emptyList()
+        pdfImportProgressFraction.value = null
+        val password = zhuoruiStatementPdfPassword.value
+        if (password.isBlank()) {
+            pdfImportStatusMessage.value = "请先输入PDF结单密码"
+            return
+        }
+
+        when (pdfImportMode.value) {
+            PdfImportMode.REGEX -> importStatementPdfsViaRegex(uris, platform, password)
+            PdfImportMode.TEXT_MODEL -> importStatementPdfsViaTextModel(uris, platform, password)
         }
     }
 
-    private fun importZhuoruiStatementPdfsViaRegex(uris: List<Uri>) {
+    fun retryFailedPdfImport(platform: BrokerPlatform) {
+        val uris = failedPdfUris.value
+        if (uris.isEmpty()) return
+        failedPdfUris.value = emptyList()
+        pdfImportProgressFraction.value = null
         val password = zhuoruiStatementPdfPassword.value
         if (password.isBlank()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
+            pdfImportStatusMessage.value = "请先输入PDF结单密码"
             return
         }
+
+        when (pdfImportMode.value) {
+            PdfImportMode.REGEX -> importStatementPdfsViaRegex(uris, platform, password)
+            PdfImportMode.TEXT_MODEL -> importStatementPdfsViaTextModel(uris, platform, password)
+        }
+    }
+
+    private fun importStatementPdfsViaRegex(uris: List<Uri>, platform: BrokerPlatform, password: String) {
         if (uris.isEmpty()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请选择要导入的PDF文件"
+            pdfImportStatusMessage.value = "请选择要导入的PDF文件"
             return
         }
 
         viewModelScope.launch {
-            zhuoruiStatementPdfImportStatusMessage.value = "正在导入${uris.size}个PDF文件..."
+            pdfImportStatusMessage.value = "正在导入${uris.size}个PDF文件..."
+            pdfImportProgressFraction.value = 0f
             var totalImported = 0
             var totalDuplicate = 0
             var totalFailed = 0
+            var totalSkipped = 0
 
-            for (uri in uris) {
+            uris.forEachIndexed { index, uri ->
                 runCatching {
                     val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
                     inputStream?.use { stream ->
+                        // NOTE: ZhuoruiStatementPdfParser might currently only parse Zhuorui format.
+                        // We will let it try anyway.
                         val results = repository.importZhuoruiStatementPdf(stream, password)
-                        for (result in results) {
-                            when (result.outcome) {
-                                com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
-                                else -> totalFailed++
+                        if (results.isEmpty()) {
+                            totalSkipped++
+                        } else {
+                            for (result in results) {
+                                when (result.outcome) {
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                    else -> totalFailed++
+                                }
                             }
                         }
                     }
                 }.onFailure { error ->
                     totalFailed++
-                    android.util.Log.e("LedgerViewModel", "PDF导入失败: ${error.message}", error)
+                    val fileName = getFileName(uri)
+                    android.util.Log.e("LedgerViewModel", "PDF导入失败 [$fileName]: ${error.message}", error)
                 }
+                pdfImportProgressFraction.value = (index + 1) / uris.size.toFloat()
             }
 
             val message = buildString {
                 append("导入完成：")
                 if (totalImported > 0) append("新增 $totalImported 条 ")
                 if (totalDuplicate > 0) append("重复 $totalDuplicate 条 ")
+                if (totalSkipped > 0) append("$totalSkipped 个文件无记录 ")
                 if (totalFailed > 0) append("失败 $totalFailed 个文件")
-                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0) {
+                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0 && totalSkipped == 0) {
                     append("未找到可导入的交易记录")
                 }
             }
-            zhuoruiStatementPdfImportStatusMessage.value = message
+            pdfImportStatusMessage.value = message
+            pdfImportProgressFraction.value = null
         }
     }
 
-    private fun importZhuoruiStatementPdfsViaVision(uris: List<Uri>) {
-        val apiKey = alibabaBailianApiKey.value
-        val password = zhuoruiStatementPdfPassword.value
-        if (apiKey.isBlank()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请先设置 API Key"
-            return
-        }
-        if (password.isBlank()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
-            return
-        }
-        if (uris.isEmpty()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请选择要导入的PDF文件"
-            return
-        }
-
+    private fun importStatementPdfsViaTextModel(
+        uris: List<Uri>,
+        platform: com.recoder.stockledger.data.BrokerPlatform,
+        password: String
+    ) {
         viewModelScope.launch {
-            zhuoruiStatementPdfImportStatusMessage.value = "正在识图解析${uris.size}个PDF文件..."
+            val apiKey = alibabaBailianApiKey.value
+            if (apiKey.isBlank()) {
+                pdfImportStatusMessage.value = "请先在设置中配置API Key"
+                return@launch
+            }
+
+            pdfImportStatusMessage.value = "正在解析${uris.size}个PDF文件..."
+            pdfImportProgressFraction.value = 0f
             var totalImported = 0
             var totalDuplicate = 0
             var totalFailed = 0
+            var totalSkipped = 0
+            var lastErrorMessage: String? = null
+            val failedUris = mutableListOf<Uri>()
 
-            val model = visionImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-vl-max"
-            val baseUrl = visionApiBaseUrl.value.takeIf { it.isNotBlank() }
-                ?: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-            val client = com.recoder.stockledger.data.importer.vision.OpenAiVisionClient(
+            val model = textImportModel.value.takeIf { it.isNotBlank() } ?: "deepseek-chat"
+            val baseUrl = llmApiBaseUrl.value.takeIf { it.isNotBlank() }
+                ?: "https://api.deepseek.com/v1"
+
+            val client = com.recoder.stockledger.data.importer.llm.OpenAiTradeExtractionClient(
                 apiKey = apiKey,
                 model = model,
                 baseUrl = baseUrl,
             )
-            val importer = com.recoder.stockledger.data.importer.vision.VisionPdfImporter(
-                context = getApplication(),
+            val importer = com.recoder.stockledger.data.importer.llm.TextPdfImporter(
                 apiClient = client,
             )
 
-            for (uri in uris) {
+            uris.forEachIndexed { index, uri ->
+                val fileName = getFileName(uri)
                 runCatching {
                     val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
                     inputStream?.use { stream ->
-                        val trades = importer.importStatement(stream, password)
-                        val results = repository.importParsedTrades(trades)
-                        for (result in results) {
-                            when (result.outcome) {
-                                com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
-                                else -> totalFailed++
-                            }
-                        }
+                        // 重新打开流以进行实际导入（或者直接传 text 给 importer，但目前 importer 是内部处理流的）
+                        // 为了简单，我们这里再次调用原逻辑，或者您可以直接看上面的日志
+                        val trades = importer.importStatement(getApplication<Application>().contentResolver.openInputStream(uri)!!, password)
                         if (trades.isEmpty()) {
-                            totalFailed++
+                            totalSkipped++
+                        } else {
+                            val results = repository.importParsedTrades(trades, platform)
+                            for (result in results) {
+                                when (result.outcome) {
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                    else -> totalFailed++
+                                }
+                            }
                         }
                     }
                 }.onFailure { error ->
                     totalFailed++
-                    android.util.Log.e("LedgerViewModel", "Vision导入失败: ${error.message}", error)
+                    failedUris.add(uri)
+                    val fileName = getFileName(uri)
+                    lastErrorMessage = "文件 $fileName: ${error.message}"
+                    android.util.Log.e("LedgerViewModel", "文本导入失败 [$fileName]: ${error.message}", error)
                 }
+                pdfImportProgressFraction.value = (index + 1) / uris.size.toFloat()
             }
 
-            val message = buildString {
-                append("识图导入完成：")
-                if (totalImported > 0) append("新增 $totalImported 条 ")
-                if (totalDuplicate > 0) append("重复 $totalDuplicate 条 ")
-                if (totalFailed > 0) append("失败 $totalFailed 个文件")
-                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0) {
-                    append("未找到可导入的交易记录")
-                }
-            }
-            zhuoruiStatementPdfImportStatusMessage.value = message
-        }
-    }
-
-    private fun importZhuoruiStatementPdfsViaTextModel(uris: List<Uri>) {
-        val apiKey = alibabaBailianApiKey.value
-        val password = zhuoruiStatementPdfPassword.value
-        if (apiKey.isBlank()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请先设置 API Key"
-            return
-        }
-        if (password.isBlank()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请先输入PDF结单密码"
-            return
-        }
-        if (uris.isEmpty()) {
-            zhuoruiStatementPdfImportStatusMessage.value = "请选择要导入的PDF文件"
-            return
-        }
-
-        viewModelScope.launch {
-            zhuoruiStatementPdfImportStatusMessage.value = "正在文本解析${uris.size}个PDF文件..."
-            var totalImported = 0
-            var totalDuplicate = 0
-            var totalFailed = 0
-
-            val model = textImportModel.value.takeIf { it.isNotBlank() } ?: "qwen-max"
-            val baseUrl = visionApiBaseUrl.value.takeIf { it.isNotBlank() }
-                ?: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-            val client = com.recoder.stockledger.data.importer.vision.OpenAiVisionClient(
-                apiKey = apiKey,
-                model = model,
-                baseUrl = baseUrl,
-            )
-            val importer = com.recoder.stockledger.data.importer.vision.TextPdfImporter(
-                apiClient = client,
-            )
-
-            for (uri in uris) {
-                runCatching {
-                    val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
-                    inputStream?.use { stream ->
-                        val trades = importer.importStatement(stream, password)
-                        val results = repository.importParsedTrades(trades)
-                        for (result in results) {
-                            when (result.outcome) {
-                                com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
-                                else -> totalFailed++
-                            }
-                        }
-                        if (trades.isEmpty()) {
-                            totalFailed++
-                        }
-                    }
-                }.onFailure { error ->
-                    totalFailed++
-                    android.util.Log.e("LedgerViewModel", "文本导入失败: ${error.message}", error)
-                }
-            }
+            failedPdfUris.value = failedUris
 
             val message = buildString {
                 append("文本导入完成：")
                 if (totalImported > 0) append("新增 $totalImported 条 ")
                 if (totalDuplicate > 0) append("重复 $totalDuplicate 条 ")
-                if (totalFailed > 0) append("失败 $totalFailed 个文件")
-                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0) {
+                if (totalSkipped > 0) append("$totalSkipped 个文件无记录 ")
+                if (totalFailed > 0) {
+                    append("失败 $totalFailed 个文件")
+                    if (lastErrorMessage != null) {
+                        append(" (原因: $lastErrorMessage)")
+                    }
+                }
+                if (totalImported == 0 && totalDuplicate == 0 && totalFailed == 0 && totalSkipped == 0) {
                     append("未找到可导入的交易记录")
                 }
             }
-            zhuoruiStatementPdfImportStatusMessage.value = message
+            pdfImportStatusMessage.value = message
+            pdfImportProgressFraction.value = null
         }
     }
 
@@ -3324,17 +3305,10 @@ private data class RefreshMeta(
             .apply()
     }
 
-    fun updateZhuoruiPdfImportMode(mode: ZhuoruiPdfImportMode) {
-        zhuoruiPdfImportMode.value = mode
+    fun updatePdfImportMode(mode: PdfImportMode) {
+        pdfImportMode.value = mode
         preferences.edit()
             .putString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, mode.name)
-            .apply()
-    }
-
-    fun updateVisionImportModel(model: String) {
-        visionImportModel.value = model
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, model)
             .apply()
     }
 
@@ -3345,39 +3319,37 @@ private data class RefreshMeta(
             .apply()
     }
 
-    fun updateVisionApiBaseUrl(url: String) {
-        visionApiBaseUrl.value = url
+    fun updateLlmApiBaseUrl(url: String) {
+        llmApiBaseUrl.value = url
         preferences.edit()
             .putString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, url)
             .apply()
     }
 
-    fun clearZhuoruiPdfImportStatus() {
-        zhuoruiStatementPdfImportStatusMessage.value = null
+    fun clearPdfImportStatus() {
+        pdfImportStatusMessage.value = null
+        pdfImportProgressFraction.value = null
+        failedPdfUris.value = emptyList()
     }
 
     private fun loadAlibabaBailianApiKey(): String {
         return preferences.getString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, "").orEmpty()
     }
 
-    private fun loadZhuoruiPdfImportMode(): ZhuoruiPdfImportMode {
-        val name = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, ZhuoruiPdfImportMode.REGEX.name)
+    private fun loadPdfImportMode(): PdfImportMode {
+        val name = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, PdfImportMode.REGEX.name)
         return try {
-            ZhuoruiPdfImportMode.valueOf(name ?: ZhuoruiPdfImportMode.REGEX.name)
+            PdfImportMode.valueOf(name ?: PdfImportMode.REGEX.name)
         } catch (_: Exception) {
-            ZhuoruiPdfImportMode.REGEX
+            PdfImportMode.REGEX
         }
-    }
-
-    private fun loadVisionImportModel(): String {
-        return preferences.getString(StockLedgerPreferences.KEY_VISION_IMPORT_MODEL, "").orEmpty()
     }
 
     private fun loadTextImportModel(): String {
         return preferences.getString(StockLedgerPreferences.KEY_TEXT_IMPORT_MODEL, "").orEmpty()
     }
 
-    private fun loadVisionApiBaseUrl(): String {
+    private fun loadLlmApiBaseUrl(): String {
         return preferences.getString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, "").orEmpty()
     }
 
@@ -3389,6 +3361,31 @@ private data class RefreshMeta(
         } else {
             ZhuoruiEmailSyncWorker.cancel(getApplication())
         }
+    }
+
+    private fun getFileName(uri: Uri): String {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor = getApplication<Application>().contentResolver.query(uri, null, null, null, null)
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (index != -1) {
+                        result = cursor.getString(index)
+                    }
+                }
+            } finally {
+                cursor?.close()
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/') ?: -1
+            if (cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result ?: "unknown"
     }
 
     private companion object {

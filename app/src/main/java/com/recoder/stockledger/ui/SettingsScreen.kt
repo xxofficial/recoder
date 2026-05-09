@@ -34,7 +34,7 @@ import androidx.compose.ui.unit.sp
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.PlatformFeePlanUiModel
 import com.recoder.stockledger.data.ZhuoruiPromoConfig
-import com.recoder.stockledger.data.ZhuoruiPdfImportMode
+import com.recoder.stockledger.data.PdfImportMode
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -53,15 +53,13 @@ fun SettingsRoute(
     onZhuoruiPromoChange: (ZhuoruiPromoConfig) -> Unit,
     onSaveZhuoruiPromo: () -> Unit,
     alibabaBailianApiKey: String,
-    zhuoruiPdfImportMode: ZhuoruiPdfImportMode,
-    visionImportModel: String,
+    pdfImportMode: PdfImportMode,
     textImportModel: String,
-    visionApiBaseUrl: String,
+    llmApiBaseUrl: String,
     onAlibabaBailianApiKeyChange: (String) -> Unit,
-    onZhuoruiPdfImportModeChange: (ZhuoruiPdfImportMode) -> Unit,
-    onVisionImportModelChange: (String) -> Unit,
+    onPdfImportModeChange: (PdfImportMode) -> Unit,
     onTextImportModelChange: (String) -> Unit,
-    onVisionApiBaseUrlChange: (String) -> Unit,
+    onLlmApiBaseUrlChange: (String) -> Unit,
     onPlatformClick: () -> Unit,
     onBackClick: () -> Unit,
 ) {
@@ -245,15 +243,15 @@ fun SettingsRoute(
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
-                        
+
                         FilterChipWrapRow(
-                            options = ZhuoruiPdfImportMode.entries,
-                            selected = zhuoruiPdfImportMode,
+                            options = PdfImportMode.entries,
+                            selected = pdfImportMode,
                             label = { it.label },
-                            onSelected = onZhuoruiPdfImportModeChange,
+                            onSelected = onPdfImportModeChange,
                         )
 
-                        if (zhuoruiPdfImportMode != ZhuoruiPdfImportMode.REGEX) {
+                        if (pdfImportMode != PdfImportMode.REGEX) {
                             InputFieldBlock(
                                 label = "API Key",
                                 value = alibabaBailianApiKey,
@@ -261,29 +259,20 @@ fun SettingsRoute(
                                 isPassword = true,
                                 onValueChange = onAlibabaBailianApiKeyChange,
                             )
-                            
-                            if (zhuoruiPdfImportMode == ZhuoruiPdfImportMode.VISION) {
-                                InputFieldBlock(
-                                    label = "识图模型名称",
-                                    value = visionImportModel,
-                                    placeholder = "默认 qwen-vl-max",
-                                    onValueChange = onVisionImportModelChange,
-                                )
-                            } else if (zhuoruiPdfImportMode == ZhuoruiPdfImportMode.TEXT_MODEL) {
-                                InputFieldBlock(
-                                    label = "文本模型名称",
-                                    value = textImportModel,
-                                    placeholder = "默认 qwen-max",
-                                    onValueChange = onTextImportModelChange,
-                                )
-                            }
-                            
+
+                            InputFieldBlock(
+                                label = "文本模型名称",
+                                value = textImportModel,
+                                placeholder = "默认 deepseek-chat",
+                                onValueChange = onTextImportModelChange,
+                            )
+
                             InputFieldBlock(
                                 label = "API Base URL",
-                                value = visionApiBaseUrl,
-                                placeholder = "默认 阿里云百炼 URL",
+                                value = llmApiBaseUrl,
+                                placeholder = "默认 https://api.deepseek.com/v1",
                                 supportingText = "OpenAI接口协议",
-                                onValueChange = onVisionApiBaseUrlChange,
+                                onValueChange = onLlmApiBaseUrlChange,
                             )
                         }
                     }
@@ -347,17 +336,15 @@ private fun SettingsRoutePreview() {
             onZhuoruiPromoChange = {},
             onSaveZhuoruiPromo = {},
             alibabaBailianApiKey = "",
-            zhuoruiPdfImportMode = ZhuoruiPdfImportMode.REGEX,
-            visionImportModel = "",
+            pdfImportMode = PdfImportMode.REGEX,
             textImportModel = "",
-            visionApiBaseUrl = "",
             onAlibabaBailianApiKeyChange = {},
-            onZhuoruiPdfImportModeChange = {},
-            onVisionImportModelChange = {},
+            onPdfImportModeChange = {},
             onTextImportModelChange = {},
-            onVisionApiBaseUrlChange = {},
             onPlatformClick = {},
             onBackClick = {},
+            llmApiBaseUrl = "",
+            onLlmApiBaseUrlChange = {},
         )
     }
 }

@@ -313,10 +313,13 @@ fun OperationsRoute(
     onSyncZhuoruiMailboxNow: () -> Unit,
     onEnableZhuoruiEmailAutoImport: () -> Unit,
     onDisableZhuoruiEmailAutoImport: () -> Unit,
-    zhuoruiStatementPdfPassword: String,
-    zhuoruiStatementPdfImportStatusMessage: String?,
-    onZhuoruiStatementPdfPasswordChange: (String) -> Unit,
-    onImportZhuoruiStatementPdfs: () -> Unit,
+    pdfImportPassword: String,
+    pdfImportStatusMessage: String?,
+    pdfImportProgressFraction: Float?,
+    hasFailedPdfImports: Boolean,
+    onPdfImportPasswordChange: (String) -> Unit,
+    onImportPdfStatements: (BrokerPlatform) -> Unit,
+    onRetryFailedPdfImport: (BrokerPlatform) -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
@@ -591,8 +594,10 @@ fun OperationsRoute(
                             )
                         }
                     }
+                }
 
-                    // PDF Statement Import Section
+                // PDF Statement Import Section - Available for Configurable Platforms
+                if (selectedPlatform != BrokerPlatform.UNSPECIFIED && selectedPlatform?.isConfigurable == true) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -605,30 +610,43 @@ fun OperationsRoute(
                     ) {
                         Text("电子结单导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "支持导入卓锐证券的日结单（PDF格式），可同时选择多个文件批量导入。",
+                            "支持导入${selectedPlatform.label}的日结单（PDF格式），可同时选择多个文件批量导入。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
                         InputFieldBlock(
                             label = "PDF结单密码",
-                            value = zhuoruiStatementPdfPassword,
+                            value = pdfImportPassword,
                             placeholder = "请输入PDF文件密码",
                             isPassword = true,
                             keyboardType = KeyboardType.Password,
                             supportingText = "密码在结单PDF文件名中或由券商提供",
-                            onValueChange = onZhuoruiStatementPdfPasswordChange,
+                            onValueChange = onPdfImportPasswordChange,
                         )
                         FilledActionButton(
                             text = "选择PDF文件导入",
-                            onClick = onImportZhuoruiStatementPdfs,
+                            onClick = { onImportPdfStatements(selectedPlatform) },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        zhuoruiStatementPdfImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                        pdfImportProgressFraction?.let { fraction ->
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { fraction },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            )
+                        }
+                        pdfImportStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
                             Text(
                                 text = message,
                                 color = ForegroundMuted,
                                 fontSize = 12.sp,
                             )
+                            if (hasFailedPdfImports) {
+                                OutlineActionButton(
+                                    text = "重试失败文件",
+                                    onClick = { onRetryFailedPdfImport(selectedPlatform) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
@@ -1506,10 +1524,13 @@ private fun OperationsRoutePreview() {
             onSyncZhuoruiMailboxNow = {},
             onEnableZhuoruiEmailAutoImport = {},
             onDisableZhuoruiEmailAutoImport = {},
-            zhuoruiStatementPdfPassword = "",
-            zhuoruiStatementPdfImportStatusMessage = null,
-            onZhuoruiStatementPdfPasswordChange = {},
-            onImportZhuoruiStatementPdfs = {},
+            pdfImportPassword = "",
+            pdfImportStatusMessage = null,
+            pdfImportProgressFraction = null,
+            hasFailedPdfImports = false,
+            onPdfImportPasswordChange = {},
+            onImportPdfStatements = {},
+            onRetryFailedPdfImport = {},
             onDestinationSelected = {},
         )
     }

@@ -567,6 +567,7 @@ class DefaultLedgerRepository(
                 tradeDate = parsed.tradeDate.toString(),
                 tradeType = parsed.tradeType.name,
                 quantity = parsed.quantity,
+                price = parsed.price,
             )
             if (duplicate != null) {
                 results.add(
@@ -642,12 +643,14 @@ class DefaultLedgerRepository(
 
     suspend fun importParsedTrades(
         parsedTrades: List<com.recoder.stockledger.data.importer.ParsedStatementTrade>,
+        platform: BrokerPlatform = BrokerPlatform.ZHUORUI,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
+        val refPrefix = if (platform == BrokerPlatform.ZHUORUI) "ZR-STMT-" else "PDF-STMT-"
         val results = mutableListOf<TradeImportResult>()
         for (parsed in parsedTrades) {
-            val externalReference = "ZR-STMT-${parsed.tradeRef}"
+            val externalReference = "${refPrefix}${parsed.tradeRef}"
             val existing = dao.findTransactionByExternalReference(
-                platform = BrokerPlatform.ZHUORUI.name,
+                platform = platform.name,
                 externalReference = externalReference,
             )
             if (existing != null) {
@@ -662,12 +665,13 @@ class DefaultLedgerRepository(
             }
 
             val duplicate = dao.findDuplicateTransaction(
-                platform = BrokerPlatform.ZHUORUI.name,
+                platform = platform.name,
                 symbol = parsed.symbol,
                 market = parsed.market.name,
                 tradeDate = parsed.tradeDate.toString(),
                 tradeType = parsed.tradeType.name,
                 quantity = parsed.quantity,
+                price = parsed.price,
             )
             if (duplicate != null) {
                 results.add(
@@ -684,7 +688,7 @@ class DefaultLedgerRepository(
             val feeEstimate = if (!hasParsedFees) {
                 estimateImportedTradeFees(
                     tradeType = parsed.tradeType,
-                    platform = BrokerPlatform.ZHUORUI,
+                    platform = platform,
                     market = parsed.market,
                     price = parsed.price,
                     quantity = parsed.quantity,
@@ -704,7 +708,7 @@ class DefaultLedgerRepository(
             addTrade(
                 TradeDraftInput(
                     tradeType = parsed.tradeType,
-                    platform = BrokerPlatform.ZHUORUI,
+                    platform = platform,
                     sourceChannel = parsed.sourceChannel,
                     externalReference = externalReference,
                     market = parsed.market,

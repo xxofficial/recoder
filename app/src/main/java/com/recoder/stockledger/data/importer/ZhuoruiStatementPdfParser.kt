@@ -28,6 +28,7 @@ data class ParsedStatementTrade(
     val tax: Double? = null,
     val tradeRef: String,
     val rawLine: String,
+    val createdAt: Long? = null,
 )
 
 object ZhuoruiStatementPdfParser {
@@ -304,12 +305,13 @@ object ZhuoruiStatementPdfParser {
         val clearingBalance = numbers[2]
         val amount = kotlin.math.abs(clearingBalance)
 
+        val priceStr = String.format("%.4f", price)
         val symbol = resolveSymbol(stockCode, market)
-        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${quantity}"
+        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${quantity}-${priceStr}"
 
         Log.d(TAG, "格式A 解析成功: $direction $symbol($stockName) x$quantity @$price amount=$amount $currencyCode")
         return ParsedStatementTrade(
-            sourceChannel = ImportSourceChannel.ZHUORUI_STATEMENT,
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
             tradeType = direction,
             market = market,
             symbol = symbol,
@@ -466,12 +468,13 @@ object ZhuoruiStatementPdfParser {
         val stockCode = codeAndNameTokens[0]
         val stockName = codeAndNameTokens.drop(1).joinToString(" ")
 
+        val priceStr = String.format("%.4f", price)
         val symbol = resolveSymbol(stockCode, defaultMarket)
-        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${quantity}-$ref"
+        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${quantity}-${priceStr}-$ref"
 
         Log.d(TAG, "格式B 解析成功: $direction $symbol($stockName) x$quantity @$price")
         return ParsedStatementTrade(
-            sourceChannel = ImportSourceChannel.ZHUORUI_STATEMENT,
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
             tradeType = direction,
             market = defaultMarket,
             symbol = symbol,

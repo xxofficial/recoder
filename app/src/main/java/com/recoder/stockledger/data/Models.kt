@@ -93,10 +93,9 @@ enum class MarketFilter(
     CASH("现金", Market.CASH),
 }
 
-enum class ZhuoruiPdfImportMode(val label: String) {
+enum class PdfImportMode(val label: String) {
     REGEX("正则匹配 (本地)"),
-    VISION("视觉大模型 (识图)"),
-    TEXT_MODEL("文本大模型 (文本提取)")
+    TEXT_MODEL("大模型解析 (文本提取)")
 }
 
 enum class BrokerPlatform(
@@ -144,6 +143,7 @@ enum class ImportSourceChannel(val label: String) {
     HSBC_EMAIL("汇丰邮件"),
     ZHUORUI_EMAIL("卓锐邮件"),
     ZHUORUI_STATEMENT("卓锐结单"),
+    PDF_STATEMENT("电子结单"),
 }
 
 data class PortfolioSummary(
