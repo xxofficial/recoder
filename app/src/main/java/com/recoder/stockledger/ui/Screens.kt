@@ -1,4 +1,4 @@
-﻿package com.recoder.stockledger.ui
+package com.recoder.stockledger.ui
 
 import android.app.DatePickerDialog
 import androidx.compose.foundation.background
@@ -45,6 +45,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -207,23 +210,18 @@ fun HoldingsRoute(
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                         ) {
                             SummaryMetric(
-                                label = "佣金/平台费",
-                                value = summary.commissionTotal,
-                                hint = "累计",
+                                label = "总手续费",
+                                value = summary.totalFee,
+                                hint = summary.totalFeeHint,
                                 modifier = Modifier.weight(1f),
                             )
                             SummaryMetric(
-                                label = "税费",
-                                value = summary.taxTotal,
-                                hint = "累计",
+                                label = "交易次数",
+                                value = summary.tradeCount,
+                                hint = summary.tradeCountHint,
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        SummaryMetric(
-                            label = "交易次数",
-                            value = summary.tradeCount,
-                            hint = "证券买入/卖出",
-                        )
                     }
                 }
 
@@ -1006,6 +1004,44 @@ fun TradeEntryRoute(
     onDeleteTradeClick: (() -> Unit)? = null,
     onSubmit: () -> Unit,
 ) {
+    var symbolValue by remember { mutableStateOf(TextFieldValue(state.symbolOrName, TextRange(state.symbolOrName.length))) }
+    var priceValue by remember { mutableStateOf(TextFieldValue(state.priceLabel, TextRange(state.priceLabel.length))) }
+    var quantityValue by remember { mutableStateOf(TextFieldValue(state.quantityLabel, TextRange(state.quantityLabel.length))) }
+    var commissionValue by remember { mutableStateOf(TextFieldValue(state.commissionLabel, TextRange(state.commissionLabel.length))) }
+    var taxValue by remember { mutableStateOf(TextFieldValue(state.taxLabel, TextRange(state.taxLabel.length))) }
+    var noteValue by remember { mutableStateOf(TextFieldValue(state.note, TextRange(state.note.length))) }
+
+    LaunchedEffect(state.symbolOrName) {
+        if (symbolValue.text != state.symbolOrName) {
+            symbolValue = TextFieldValue(state.symbolOrName, TextRange(state.symbolOrName.length))
+        }
+    }
+    LaunchedEffect(state.priceLabel) {
+        if (priceValue.text != state.priceLabel) {
+            priceValue = TextFieldValue(state.priceLabel, TextRange(state.priceLabel.length))
+        }
+    }
+    LaunchedEffect(state.quantityLabel) {
+        if (quantityValue.text != state.quantityLabel) {
+            quantityValue = TextFieldValue(state.quantityLabel, TextRange(state.quantityLabel.length))
+        }
+    }
+    LaunchedEffect(state.commissionLabel) {
+        if (commissionValue.text != state.commissionLabel) {
+            commissionValue = TextFieldValue(state.commissionLabel, TextRange(state.commissionLabel.length))
+        }
+    }
+    LaunchedEffect(state.taxLabel) {
+        if (taxValue.text != state.taxLabel) {
+            taxValue = TextFieldValue(state.taxLabel, TextRange(state.taxLabel.length))
+        }
+    }
+    LaunchedEffect(state.note) {
+        if (noteValue.text != state.note) {
+            noteValue = TextFieldValue(state.note, TextRange(state.note.length))
+        }
+    }
+
     val isSecurityTrade = state.selectedType.isSecurityTrade
     val isSellTrade = state.selectedType == TradeType.SELL
     val (tradeTypeBadgeBackground, tradeTypeBadgeForeground) = tradeTypeColors(state.selectedType)
@@ -1093,14 +1129,17 @@ fun TradeEntryRoute(
                 if (isSecurityTrade) {
                     InputFieldBlock(
                         label = "证券代码 / 名称",
-                        value = state.symbolOrName,
+                        value = symbolValue,
                         supportingText = symbolLookup.message,
                         supportingColor = when (symbolLookup.state) {
                             SymbolLookupState.INVALID -> MarketDown
                             SymbolLookupState.RESOLVED -> MarketUp
                             else -> ForegroundMuted
                         },
-                        onValueChange = onSymbolChange,
+                        onValueChange = {
+                            symbolValue = it
+                            onSymbolChange(it.text)
+                        },
                     )
                     if (symbolSuggestions.isNotEmpty()) {
                         SymbolSuggestionSection(
@@ -1122,17 +1161,23 @@ fun TradeEntryRoute(
                     ) {
                         InputFieldBlock(
                             label = "成交价格",
-                            value = state.priceLabel,
+                            value = priceValue,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Decimal,
-                            onValueChange = onPriceChange,
+                            onValueChange = {
+                                priceValue = it
+                                onPriceChange(it.text)
+                            },
                         )
                         InputFieldBlock(
                             label = "成交数量",
-                            value = state.quantityLabel,
+                            value = quantityValue,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Number,
-                            onValueChange = onQuantityChange,
+                            onValueChange = {
+                                quantityValue = it
+                                onQuantityChange(it.text)
+                            },
                         )
                     }
                 } else {
@@ -1158,30 +1203,42 @@ fun TradeEntryRoute(
                         } else {
                             "出金金额 ($cashCurrencyCode)"
                         },
-                        value = state.priceLabel,
+                        value = priceValue,
                         supportingText = "当前按${cashCurrencyLabel}录入，保存后会自动折算到资产汇总。",
                         keyboardType = KeyboardType.Decimal,
-                        onValueChange = onPriceChange,
+                        onValueChange = {
+                            priceValue = it
+                            onPriceChange(it.text)
+                        },
                     )
                 }
 
                 if (isSecurityTrade) {
                     TradeEntryFeeCard(
-                        commission = state.commissionLabel,
-                        tax = state.taxLabel,
+                        commission = commissionValue,
+                        tax = taxValue,
                         feeEstimateStatus = state.feeEstimateStatus,
                         feeEstimateSummary = state.feeEstimateSummary,
                         feeEstimateDetail = state.feeEstimateDetail,
                         canAutoEstimateFees = state.canAutoEstimateFees,
-                        onCommissionChange = onCommissionChange,
-                        onTaxChange = onTaxChange,
+                        onCommissionChange = {
+                            commissionValue = it
+                            onCommissionChange(it.text)
+                        },
+                        onTaxChange = {
+                            taxValue = it
+                            onTaxChange(it.text)
+                        },
                         onRecalculateFees = onRecalculateFees,
                     )
                 }
 
                 TradeEntryNoteField(
-                    note = state.note,
-                    onValueChange = onNoteChange,
+                    note = noteValue,
+                    onValueChange = {
+                        noteValue = it
+                        onNoteChange(it.text)
+                    },
                 )
             }
 

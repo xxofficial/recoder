@@ -1,4 +1,4 @@
-﻿package com.recoder.stockledger.ui
+package com.recoder.stockledger.ui
 
 import android.app.DatePickerDialog
 import androidx.compose.foundation.Image
@@ -43,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,10 +55,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -888,6 +891,64 @@ fun BottomPillNavigation(
 @Composable
 fun InputFieldBlock(
     label: String,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    trailingIcon: ImageVector? = null,
+    supportingText: String? = null,
+    supportingColor: Color = ForegroundMuted,
+    placeholder: String = "请输入",
+    isPassword: Boolean = false,
+    modifier: Modifier = Modifier,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    singleLine: Boolean = true,
+) {
+    Column(modifier = modifier) {
+        if (label.isNotBlank()) {
+            Text(label, color = ForegroundSecondary, fontSize = 14.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(SurfaceSecondary)
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            EditableField(
+                value = value,
+                onValueChange = onValueChange,
+                placeholder = placeholder,
+                isPassword = isPassword,
+                keyboardType = keyboardType,
+                singleLine = singleLine,
+                modifier = Modifier.weight(1f),
+            )
+            if (trailingIcon != null) {
+                Spacer(modifier = Modifier.width(12.dp))
+                Icon(
+                    imageVector = trailingIcon,
+                    contentDescription = null,
+                    tint = ForegroundSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        if (supportingText != null) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = supportingText,
+                color = supportingColor,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+fun InputFieldBlock(
+    label: String,
     value: String,
     trailingIcon: ImageVector? = null,
     supportingText: String? = null,
@@ -934,11 +995,16 @@ fun InputFieldBlock(
                 )
             }
             if (trailingIcon != null) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(trailingIcon, contentDescription = null, tint = ForegroundMuted, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(12.dp))
+                Icon(
+                    imageVector = trailingIcon,
+                    contentDescription = null,
+                    tint = ForegroundSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
-        if (!supportingText.isNullOrBlank()) {
+        if (supportingText != null) {
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = supportingText,
@@ -961,6 +1027,82 @@ fun TradeEntryMarketSelector(
         SelectableBlock("A股", selected == Market.A_SHARE, Modifier.weight(1f)) { onSelected(Market.A_SHARE) }
         SelectableBlock("港股", selected == Market.HK, Modifier.weight(1f)) { onSelected(Market.HK) }
         SelectableBlock("美股", selected == Market.US, Modifier.weight(1f)) { onSelected(Market.US) }
+    }
+}
+
+@Composable
+fun TradeEntryFeeCard(
+    commission: TextFieldValue,
+    tax: TextFieldValue,
+    feeEstimateStatus: FeeEstimateStatus,
+    feeEstimateSummary: String?,
+    feeEstimateDetail: String?,
+    canAutoEstimateFees: Boolean,
+    onCommissionChange: (TextFieldValue) -> Unit,
+    onTaxChange: (TextFieldValue) -> Unit,
+    onRecalculateFees: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(SurfaceMuted)
+            .border(1.dp, Color(0xFFECEEF2), RoundedCornerShape(16.dp))
+            .padding(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("手续费 / 税费", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            if (canAutoEstimateFees) {
+                Text(
+                    text = if (feeEstimateStatus == FeeEstimateStatus.MANUAL_OVERRIDE) "恢复自动" else "重新计算",
+                    color = ForegroundMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.clickable(onClick = onRecalculateFees),
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            InputFieldBlock(
+                label = "佣金",
+                value = commission,
+                onValueChange = onCommissionChange,
+                keyboardType = KeyboardType.Decimal,
+                modifier = Modifier.weight(1f),
+            )
+            InputFieldBlock(
+                label = "税费",
+                value = tax,
+                onValueChange = onTaxChange,
+                keyboardType = KeyboardType.Decimal,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        feeEstimateSummary?.takeIf { it.isNotBlank() }?.let { summary ->
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = summary,
+                color = if (feeEstimateStatus == FeeEstimateStatus.MANUAL_OVERRIDE) ForegroundSecondary else ForegroundMuted,
+                fontSize = 12.sp,
+                fontWeight = if (feeEstimateStatus == FeeEstimateStatus.MANUAL_OVERRIDE) FontWeight.Medium else FontWeight.Normal,
+            )
+        }
+        feeEstimateDetail?.takeIf { it.isNotBlank() }?.let { detail ->
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = detail,
+                color = ForegroundMuted,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+        }
     }
 }
 
@@ -1042,6 +1184,31 @@ fun TradeEntryFeeCard(
 
 @Composable
 fun TradeEntryNoteField(
+    note: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+) {
+    Column {
+        Text("备注", color = ForegroundSecondary, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(SurfaceSecondary)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            EditableField(
+                value = note,
+                onValueChange = onValueChange,
+                keyboardType = KeyboardType.Text,
+                singleLine = false,
+            )
+        }
+    }
+}
+
+@Composable
+fun TradeEntryNoteField(
     note: String,
     onValueChange: (String) -> Unit,
 ) {
@@ -1094,8 +1261,8 @@ fun TradeEntryDateField(
 
 @Composable
 private fun EditableField(
-    value: String,
-    onValueChange: (String) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     placeholder: String = "请输入",
     isPassword: Boolean = false,
     keyboardType: KeyboardType,
@@ -1119,11 +1286,50 @@ private fun EditableField(
             keyboardType = keyboardType,
         ),
         decorationBox = { innerTextField ->
-            if (value.isEmpty()) {
+            if (value.text.isEmpty()) {
                 Text(placeholder, color = ForegroundMuted, fontSize = 16.sp)
             }
             innerTextField()
         },
+    )
+}
+
+@Composable
+private fun EditableField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String = "请输入",
+    isPassword: Boolean = false,
+    keyboardType: KeyboardType,
+    singleLine: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var textFieldValue by remember(value == "") { 
+        mutableStateOf(TextFieldValue(value, TextRange(value.length))) 
+    }
+
+    LaunchedEffect(value) {
+        if (textFieldValue.text != value) {
+            textFieldValue = textFieldValue.copy(
+                text = value,
+                selection = TextRange(value.length)
+            )
+        }
+    }
+
+    EditableField(
+        value = textFieldValue,
+        onValueChange = {
+            textFieldValue = it
+            if (value != it.text) {
+                onValueChange(it.text)
+            }
+        },
+        placeholder = placeholder,
+        isPassword = isPassword,
+        keyboardType = keyboardType,
+        singleLine = singleLine,
+        modifier = modifier,
     )
 }
 

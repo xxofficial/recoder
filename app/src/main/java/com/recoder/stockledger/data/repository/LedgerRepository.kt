@@ -216,13 +216,29 @@ class DefaultLedgerRepository(
     private suspend fun resolveConsistentName(symbol: String, market: Market, providedName: String): String {
         if (symbol.isBlank()) return providedName
         
-        // 1. Try to find from existing transactions
+        // 1. Try to find from existing transactions to maintain ledger-wide consistency
         val existingName = dao.findStockNameFromTransactions(symbol, market.name)
-        if (existingName != null && existingName.isNotBlank()) return existingName
+        if (existingName != null && existingName.isNotBlank() && existingName != symbol) return existingName
         
-        // 2. Try to find from quotes
+        // 2. If provided name is "good" (not blank, not same as symbol), use it
+        val isSuspicious = providedName.isBlank() || providedName == symbol
+        if (!isSuspicious) return providedName
+
+        // 3. Remote lookup fallback (searchSecurities / Suggest API)
+        // Prioritize this over quotes as it usually provides better/more consistent names for search
+        val lookup = lookupSecurity(symbol, market)
+        if (lookup != null && lookup.name.isNotBlank() && lookup.name != lookup.symbol) {
+            return lookup.name
+        }
+
+        // 4. Try to find from local quote snapshots (populated by refreshQuotes) as fallback
         val quoteName = dao.findStockNameFromQuotes(symbol, market.name)
-        if (quoteName != null && quoteName.isNotBlank()) return quoteName
+        if (quoteName != null && quoteName.isNotBlank() && quoteName != symbol) return quoteName
+        
+        // 5. If we had a lookup result but it was just the symbol, return it instead of the suspicious provided name
+        if (lookup != null && lookup.name.isNotBlank()) {
+            return lookup.name
+        }
         
         return providedName
     }
@@ -428,12 +444,7 @@ class DefaultLedgerRepository(
             tradeDate = receivedAt.toLocalDate().toString(),
             tradeTime = receivedAt.toLocalTime().format(timeFormatter),
         )
-        // Resolve stock name: if parsed name is same as symbol, look up from quote snapshots
-        val resolvedName = if (parsed.name == parsed.symbol || parsed.name.isBlank()) {
-            dao.findStockNameFromQuotes(parsed.symbol, parsed.market.name) ?: parsed.name
-        } else {
-            parsed.name
-        }
+        val resolvedName = resolveConsistentName(parsed.symbol, parsed.market, parsed.name)
 
         addTrade(
             TradeDraftInput(
@@ -750,29 +761,41 @@ class DefaultLedgerRepository(
     }
 
     suspend fun lookupSecurity(rawInput: String, market: Market): SecurityLookupResult? {
-        val normalizedSymbol = normalizeLookupSymbol(rawInput, market) ?: return null
-        val quote = quoteDataSource.refreshQuotes(
-            listOf(
-                QuoteRequest(
-                    symbol = normalizedSymbol,
-                    name = normalizedSymbol,
-                    market = market,
-                ),
-            ),
-        ).firstOrNull() ?: return null
+        if (market == Market.CASH) return null
+        val raw = rawInput.trim()
+        if (raw.isBlank()) return null
 
-        return SecurityLookupResult(
-            symbol = quote.symbol,
-            name = quote.name.ifBlank { normalizedSymbol },
-            market = market,
-        )
+        return runCatching {
+            searchSecurities(raw, market, limit = 1).firstOrNull()
+        }.getOrNull()
     }
 
     suspend fun searchSecurities(
         rawInput: String,
         market: Market,
         limit: Int = 6,
-    ): List<SecurityLookupResult> = quoteDataSource.searchSecurities(rawInput, market, limit)
+    ): List<SecurityLookupResult> {
+        val suggestions = quoteDataSource.searchSecurities(rawInput, market, limit)
+        val suspicious = suggestions.filter { it.name == it.symbol || it.name.isBlank() }
+        
+        if (suspicious.isNotEmpty()) {
+            val requests = suspicious.map { QuoteRequest(it.symbol, it.market) }.distinct()
+            val quotes = runCatching { quoteDataSource.refreshQuotes(requests) }.getOrDefault(emptyList())
+            
+            if (quotes.isNotEmpty()) {
+                return suggestions.map { suggestion ->
+                    if (suggestion.name == suggestion.symbol || suggestion.name.isBlank()) {
+                        val improved = quotes.find { it.symbol == suggestion.symbol && it.market == suggestion.market }
+                        if (improved != null && improved.name.isNotBlank() && improved.name != suggestion.symbol) {
+                            return@map suggestion.copy(name = improved.name)
+                        }
+                    }
+                    suggestion
+                }
+            }
+        }
+        return suggestions
+    }
 
     suspend fun refreshQuotes(requests: List<QuoteRequest>): Long {
         val deduped = requests.distinctBy { "${it.market.name}:${it.symbol}" }
@@ -826,6 +849,25 @@ class DefaultLedgerRepository(
         }.getOrElse { emptyList() }
 
         return refreshQuotes(requests)
+    }
+
+    suspend fun repairSuspiciousStockNames(): Int {
+        val suspicious = dao.getAllTransactions().filter { (it.name.isBlank() || it.name == it.symbol) && it.symbol.isNotBlank() }
+        if (suspicious.isEmpty()) return 0
+
+        var fixedCount = 0
+        suspicious.groupBy { it.market to it.symbol }.forEach { (key, txns) ->
+            val (marketName, symbol) = key
+            val market = Market.fromString(marketName) ?: return@forEach
+            val resolvedName = resolveConsistentName(symbol, market, symbol)
+            if (resolvedName != symbol) {
+                txns.forEach { txn ->
+                    dao.updateTransaction(txn.copy(name = resolvedName))
+                    fixedCount++
+                }
+            }
+        }
+        return fixedCount
     }
 
     suspend fun refreshExchangeRates(): ExchangeRateRefreshResult {

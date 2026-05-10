@@ -15,6 +15,9 @@ interface LedgerDao {
     @Query("SELECT * FROM transactions ORDER BY tradeDate DESC, tradeTime DESC, id DESC")
     fun observeTransactions(): Flow<List<TransactionEntity>>
 
+    @Query("SELECT * FROM transactions")
+    suspend fun getAllTransactions(): List<TransactionEntity>
+
     @Query("SELECT * FROM quote_snapshots")
     fun observeQuotes(): Flow<List<QuoteSnapshotEntity>>
 

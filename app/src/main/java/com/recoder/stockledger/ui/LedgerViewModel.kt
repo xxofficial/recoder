@@ -104,9 +104,10 @@ data class LedgerUiState(
         totalProfitHint = "折算收益率 +0.00%",
         dayProfit = "+¥0.00 (+0.00%)",
         holdingsValue = "¥0.00",
-        commissionTotal = "¥0.00",
-        taxTotal = "¥0.00",
+        totalFee = "¥0.00",
+        totalFeeHint = "佣金 ¥0.00 · 税费 ¥0.00",
         tradeCount = "0 笔",
+        tradeCountHint = "买入 0 笔 · 卖出 0 笔",
         refreshState = RefreshState.IDLE,
         refreshMessage = DEFAULT_REFRESH_MESSAGE,
         refreshTimeLabel = null,
@@ -877,6 +878,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onSymbolInputChanged(value: String) {
+        android.util.Log.d("LedgerViewModel", "onSymbolInputChanged: $value")
         draft.update { current ->
             applyDraftRules(current.copy(symbolOrName = value))
         }
@@ -959,6 +961,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         showPullRefreshTime.value = true
         viewModelScope.launch {
             refreshQuotes(trigger = RefreshTrigger.MANUAL_PULL)
+        }
+    }
+
+    fun repairTransactionNames() {
+        viewModelScope.launch {
+            val repaired = repository.repairSuspiciousStockNames()
+            if (repaired > 0) {
+                refreshNote.value = "已校正 $repaired 条交易记录的证券名称"
+            } else {
+                refreshNote.value = "未发现需要校正的证券名称"
+            }
         }
     }
 
@@ -1153,6 +1166,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     refreshNote.value = "备份已导入，但当前没有交易记录"
                     lastRefreshTimestamp.value = 0L
                 } else {
+                    val repaired = repository.repairSuspiciousStockNames()
+                    if (repaired > 0) {
+                        backupStatusMessage.value = "备份已导入，并自动修复了 $repaired 条记录名称"
+                    } else {
+                        backupStatusMessage.value = "备份已导入"
+                    }
                     refreshQuotes(trigger = RefreshTrigger.BACKUP_IMPORT)
                 }
             }.onFailure { error ->
@@ -1701,9 +1720,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             totalProfitHint = "按现价估算收益率 ${formatSignedPercent(portfolio.unrealizedProfitPercent)}",
             dayProfit = "${formatSignedDisplayAmount(portfolio.dayProfitCny, displayCurrency, exchangeRates)} (${formatSignedPercent(portfolio.dayProfitPercent)})",
             holdingsValue = formatDisplayAmount(portfolio.holdingsValueCny, displayCurrency, exchangeRates),
-            commissionTotal = formatDisplayAmount(portfolio.totalCommissionCny, displayCurrency, exchangeRates),
-            taxTotal = formatDisplayAmount(portfolio.totalTaxCny, displayCurrency, exchangeRates),
+            totalFee = formatUnsignedDisplayAmount(portfolio.totalCommissionCny + portfolio.totalTaxCny, displayCurrency, exchangeRates),
+            totalFeeHint = "佣金 ${formatUnsignedDisplayAmount(portfolio.totalCommissionCny, displayCurrency, exchangeRates)} · 税费 ${formatUnsignedDisplayAmount(portfolio.totalTaxCny, displayCurrency, exchangeRates)}",
             tradeCount = "${portfolio.securityTradeCount} 笔",
+            tradeCountHint = "买入 ${portfolio.buyTradeCount} 笔 · 卖出 ${portfolio.sellTradeCount} 笔",
             refreshState = refresh,
             refreshMessage = when (refresh) {
                 RefreshState.IDLE -> refreshNote.ifBlank { DEFAULT_REFRESH_MESSAGE }
@@ -2372,6 +2392,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         var totalCommissionCny = 0.0
         var totalTaxCny = 0.0
         var securityTradeCount = 0
+        var buyTradeCount = 0
+        var sellTradeCount = 0
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({
                 val m = Market.fromString(it.market) ?: Market.CASH
@@ -2398,6 +2420,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     totalCommissionCny += convertToCny(transaction.commission, market, exchangeRates)
                     totalTaxCny += convertToCny(transaction.tax, market, exchangeRates)
                     securityTradeCount += 1
+                    if (tradeType == TradeType.BUY) buyTradeCount++ else sellTradeCount++
                     val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
                         ?: PositionComputation(
@@ -2608,6 +2631,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             totalCommissionCny = totalCommissionCny,
             totalTaxCny = totalTaxCny,
             securityTradeCount = securityTradeCount,
+            buyTradeCount = buyTradeCount,
+            sellTradeCount = sellTradeCount,
         )
     }
 
@@ -2626,6 +2651,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         exchangeRates: ExchangeRates,
     ): String {
         val amount = convertFromCny(valueCny, currency, exchangeRates)
+        val prefix = if (amount < 0) "-" else ""
+        return "$prefix${currency.symbol}${numberFormatter.format(amount.absoluteValue)}"
+    }
+
+    private fun formatUnsignedDisplayAmount(
+        valueCny: Double,
+        currency: DisplayCurrency,
+        exchangeRates: ExchangeRates,
+    ): String {
+        val amount = convertFromCny(valueCny, currency, exchangeRates)
         return "${currency.symbol}${numberFormatter.format(amount.absoluteValue)}"
     }
 
@@ -2635,15 +2670,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         exchangeRates: ExchangeRates,
     ): String {
         val sign = if (valueCny >= 0) "+" else "-"
-        return "$sign${formatDisplayAmount(valueCny, currency, exchangeRates)}"
+        return "$sign${formatUnsignedDisplayAmount(valueCny, currency, exchangeRates)}"
     }
 
-    private fun formatMarketAmount(value: Double, market: Market): String =
-        "${market.currencySymbol}${numberFormatter.format(value.absoluteValue)}"
+    private fun formatMarketAmount(value: Double, market: Market): String {
+        val prefix = if (value < 0) "-" else ""
+        return "$prefix${market.currencySymbol}${numberFormatter.format(value.absoluteValue)}"
+    }
 
     private fun formatSignedMarketAmount(value: Double, market: Market): String {
         val sign = if (value >= 0) "+" else "-"
-        return "$sign${formatMarketAmount(value, market)}"
+        return "$sign${market.currencySymbol}${numberFormatter.format(value.absoluteValue)}"
     }
 
     private fun formatSignedPercent(value: Double): String {
@@ -2935,6 +2972,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val totalCommissionCny: Double,
         val totalTaxCny: Double,
         val securityTradeCount: Int,
+        val buyTradeCount: Int,
+        val sellTradeCount: Int,
     )
 
     private data class PortfolioContext(
@@ -2998,6 +3037,8 @@ private data class RefreshMeta(
         totalCommissionCny = 0.0,
         totalTaxCny = 0.0,
         securityTradeCount = 0,
+        buyTradeCount = 0,
+        sellTradeCount = 0,
     )
 
     private fun loadSavedDisplayCurrency(): DisplayCurrency {
