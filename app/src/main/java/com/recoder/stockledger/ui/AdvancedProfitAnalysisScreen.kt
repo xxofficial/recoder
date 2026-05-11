@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -114,6 +115,7 @@ private enum class AdvancedProfitRange(val label: String) {
 private enum class AdvancedChartMetric(val label: String) {
     RETURN("收益率走势"),
     ASSET("总资产趋势"),
+    TRADE_COUNT("交易次数"),
 }
 
 private enum class AdvancedCalendarMode(val label: String) {
@@ -516,6 +518,7 @@ private fun AdvancedChartSection(
                     text = when (metric) {
                         AdvancedChartMetric.RETURN -> "收益率 ${advancedFormatSignedPercent(point.cumulativeReturnPercent)}"
                         AdvancedChartMetric.ASSET -> "总资产 ${advancedFormatUnsignedAmount(point.totalAssetsCny, displayCurrency, exchangeRates)}"
+                        AdvancedChartMetric.TRADE_COUNT -> "成交 ${point.dailySecurityTradeCount} 笔"
                     },
                     color = ForegroundSecondary,
                     fontSize = 13.sp,
@@ -525,31 +528,72 @@ private fun AdvancedChartSection(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     AnalysisStatCard(
-                        title = if (metric == AdvancedChartMetric.RETURN) "当天收益率" else "当天收益",
-                        value = if (metric == AdvancedChartMetric.RETURN) {
-                            advancedFormatSignedPercent(point.dailyReturnPercent)
-                        } else {
-                            advancedFormatSignedAmount(point.dailyProfitCny, displayCurrency, exchangeRates)
+                        title = when (metric) {
+                            AdvancedChartMetric.RETURN -> "当天收益率"
+                            AdvancedChartMetric.ASSET -> "当天收益"
+                            AdvancedChartMetric.TRADE_COUNT -> "买入/卖出"
+                        },
+                        value = when (metric) {
+                            AdvancedChartMetric.RETURN -> advancedFormatSignedPercent(point.dailyReturnPercent)
+                            AdvancedChartMetric.ASSET -> advancedFormatSignedAmount(point.dailyProfitCny, displayCurrency, exchangeRates)
+                            AdvancedChartMetric.TRADE_COUNT -> "${point.dailyBuyCount}/${point.dailySellCount} 笔"
                         },
                         valueColor = advancedTrendColor(
-                            if (metric == AdvancedChartMetric.RETURN) point.dailyReturnPercent else point.dailyProfitCny,
+                            when (metric) {
+                                AdvancedChartMetric.RETURN -> point.dailyReturnPercent
+                                AdvancedChartMetric.ASSET -> point.dailyProfitCny
+                                AdvancedChartMetric.TRADE_COUNT -> 0.0
+                            },
                         ),
                         background = BackgroundPrimary,
                         modifier = Modifier.weight(1f),
                     )
                     AnalysisStatCard(
-                        title = if (metric == AdvancedChartMetric.RETURN) "累计收益率" else "累计收益",
-                        value = if (metric == AdvancedChartMetric.RETURN) {
-                            advancedFormatSignedPercent(point.cumulativeReturnPercent)
-                        } else {
-                            advancedFormatSignedAmount(point.cumulativeProfitCny, displayCurrency, exchangeRates)
+                        title = when (metric) {
+                            AdvancedChartMetric.RETURN -> "累计收益率"
+                            AdvancedChartMetric.ASSET -> "累计收益"
+                            AdvancedChartMetric.TRADE_COUNT -> "费用合计"
+                        },
+                        value = when (metric) {
+                            AdvancedChartMetric.RETURN -> advancedFormatSignedPercent(point.cumulativeReturnPercent)
+                            AdvancedChartMetric.ASSET -> advancedFormatSignedAmount(point.cumulativeProfitCny, displayCurrency, exchangeRates)
+                            AdvancedChartMetric.TRADE_COUNT -> advancedFormatUnsignedAmount(
+                                point.dailyCommissionCny + point.dailyTaxCny,
+                                displayCurrency,
+                                exchangeRates,
+                            )
                         },
                         valueColor = advancedTrendColor(
-                            if (metric == AdvancedChartMetric.RETURN) point.cumulativeReturnPercent else point.cumulativeProfitCny,
+                            when (metric) {
+                                AdvancedChartMetric.RETURN -> point.cumulativeReturnPercent
+                                AdvancedChartMetric.ASSET -> point.cumulativeProfitCny
+                                AdvancedChartMetric.TRADE_COUNT -> 0.0
+                            },
                         ),
                         background = BackgroundPrimary,
                         modifier = Modifier.weight(1f),
                     )
+                }
+                if (metric == AdvancedChartMetric.TRADE_COUNT) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        AnalysisStatCard(
+                            title = "佣金/平台费",
+                            value = advancedFormatUnsignedAmount(point.dailyCommissionCny, displayCurrency, exchangeRates),
+                            valueColor = ForegroundPrimary,
+                            background = BackgroundPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        AnalysisStatCard(
+                            title = "税费",
+                            value = advancedFormatUnsignedAmount(point.dailyTaxCny, displayCurrency, exchangeRates),
+                            valueColor = ForegroundPrimary,
+                            background = BackgroundPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -604,6 +648,7 @@ private fun AdvancedTrendChart(
             when (metric) {
                 AdvancedChartMetric.RETURN -> point.cumulativeReturnPercent
                 AdvancedChartMetric.ASSET -> advancedConvertFromCny(point.totalAssetsCny, displayCurrency, exchangeRates)
+                AdvancedChartMetric.TRADE_COUNT -> point.dailySecurityTradeCount.toDouble()
             }
         }
     }
@@ -648,8 +693,8 @@ private fun AdvancedTrendChart(
                 modifier = Modifier
                     .weight(1f)
                     .height(180.dp)
-                    .pointerInput(chartPoints, metric) {
-                        detectTapGestures { offset ->
+                    .pointerInput(chartPoints, metric, rangeStart, totalDays) {
+                        fun selectNearest(offset: Offset) {
                             val horizontalPadding = 8.dp.toPx()
                             val contentStart = horizontalPadding
                             val contentEnd = size.width - horizontalPadding
@@ -663,6 +708,29 @@ private fun AdvancedTrendChart(
                             }
                             selectedPoint?.let { onSelectedDate(it.date.toString()) }
                         }
+                        detectTapGestures { offset ->
+                            selectNearest(offset)
+                        }
+                    }
+                    .pointerInput(chartPoints, metric, rangeStart, totalDays) {
+                        fun selectNearest(offset: Offset) {
+                            val horizontalPadding = 8.dp.toPx()
+                            val contentStart = horizontalPadding
+                            val contentEnd = size.width - horizontalPadding
+                            val contentWidth = (contentEnd - contentStart).coerceAtLeast(1f)
+                            val selectedPoint = chartPoints.minByOrNull { point ->
+                                val dayOffset = ChronoUnit.DAYS.between(rangeStart, point.date)
+                                    .coerceIn(0, totalDays)
+                                    .toFloat()
+                                val pointX = contentStart + dayOffset / totalDays.toFloat() * contentWidth
+                                (pointX - offset.x).absoluteValue
+                            }
+                            selectedPoint?.let { onSelectedDate(it.date.toString()) }
+                        }
+                        detectDragGestures(
+                            onDragStart = { offset -> selectNearest(offset) },
+                            onDrag = { change, _ -> selectNearest(change.position) },
+                        )
                     },
             ) {
                 val horizontalPadding = 8.dp.toPx()
@@ -693,6 +761,7 @@ private fun AdvancedTrendChart(
                     val value = when (metric) {
                         AdvancedChartMetric.RETURN -> point.cumulativeReturnPercent
                         AdvancedChartMetric.ASSET -> advancedConvertFromCny(point.totalAssetsCny, displayCurrency, exchangeRates)
+                        AdvancedChartMetric.TRADE_COUNT -> point.dailySecurityTradeCount.toDouble()
                     }
                     val dayOffset = ChronoUnit.DAYS.between(rangeStart, point.date)
                         .coerceIn(0, totalDays)
@@ -1125,14 +1194,16 @@ private fun AdvancedCalendarDayCell(
 ) {
     val amount = point?.dailyProfitCny ?: 0.0
     val percent = advancedAmountToPercent(amount, netInflowCny)
+    val hasPoint = point != null
     val isFutureDate = isCurrentMonth && date.isAfter(latestDate)
     val isWeekendClosedDay = isCurrentMonth &&
         !isFutureDate &&
-        amount == 0.0 &&
+        !hasPoint &&
         date.dayOfWeek in setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)
     val valueText = when {
         !isCurrentMonth || isFutureDate -> ""
         isWeekendClosedDay -> "休市"
+        !hasPoint -> ""
         else -> advancedFormatCompactValue(
             value = if (unit == AdvancedValueUnit.AMOUNT) amount else percent,
             unit = unit,
@@ -1148,13 +1219,14 @@ private fun AdvancedCalendarDayCell(
     }
     val background = when {
         !isCurrentMonth -> Color.Transparent
-        amount > 0 -> MarketUpSoft
-        amount < 0 -> MarketDownSoft
+        hasPoint && amount > 0 -> MarketUpSoft
+        hasPoint && amount < 0 -> MarketDownSoft
         else -> BackgroundPrimary
     }
     val valueColor = when {
         !isCurrentMonth || isFutureDate -> Color.Transparent
         isWeekendClosedDay -> ForegroundMuted
+        !hasPoint -> Color.Transparent
         amount > 0 -> MarketUp
         amount < 0 -> MarketDown
         else -> ForegroundMuted
@@ -1166,7 +1238,7 @@ private fun AdvancedCalendarDayCell(
             .clip(RoundedCornerShape(8.dp))
             .background(background)
             .border(
-                width = if (isCurrentMonth && amount == 0.0) 1.dp else 0.dp,
+                width = if (isCurrentMonth && (!hasPoint || amount == 0.0)) 1.dp else 0.dp,
                 color = BorderSubtle,
                 shape = RoundedCornerShape(8.dp),
             ),
@@ -1179,7 +1251,7 @@ private fun AdvancedCalendarDayCell(
             ) {
                 Text(
                     text = "%02d".format(date.dayOfMonth),
-                    color = if (amount == 0.0) ForegroundPrimary else valueColor,
+                    color = if (!hasPoint || amount == 0.0) ForegroundPrimary else valueColor,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -1585,6 +1657,7 @@ private fun formatAdvancedAxisValue(
         val rounded = value.roundToInt()
         "${currency.symbol}${rounded}"
     }
+    AdvancedChartMetric.TRADE_COUNT -> "${value.roundToInt()}笔"
 }
 
 private fun advancedFormatCompactValue(

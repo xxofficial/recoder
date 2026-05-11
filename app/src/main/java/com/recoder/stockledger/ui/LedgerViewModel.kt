@@ -53,6 +53,7 @@ import com.recoder.stockledger.data.repository.SecurityLookupResult
 import com.recoder.stockledger.data.repository.StockLedgerRepository
 import com.recoder.stockledger.data.repository.TradeDraftInput
 import com.recoder.stockledger.data.settings.StockLedgerSettingsStore
+import com.recoder.stockledger.domain.market.MarketTradingSessions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -93,6 +94,25 @@ private data class PositionComputation(
     val remainingCost: Double,
     val realizedProfit: Double,
 )
+
+private data class DailyTradeStats(
+    val securityTradeCount: Int = 0,
+    val buyCount: Int = 0,
+    val sellCount: Int = 0,
+    val commissionCny: Double = 0.0,
+    val taxCny: Double = 0.0,
+) {
+    fun plus(transaction: TransactionEntity, tradeType: TradeType, market: Market, exchangeRates: ExchangeRates): DailyTradeStats {
+        if (!tradeType.isSecurityTrade) return this
+        return copy(
+            securityTradeCount = securityTradeCount + 1,
+            buyCount = buyCount + if (tradeType == TradeType.BUY) 1 else 0,
+            sellCount = sellCount + if (tradeType == TradeType.SELL) 1 else 0,
+            commissionCny = commissionCny + transaction.commission * exchangeRates.rateToCny(market),
+            taxCny = taxCny + transaction.tax * exchangeRates.rateToCny(market),
+        )
+    }
+}
 
 data class LedgerUiState(
     val summary: PortfolioSummary = PortfolioSummary(
@@ -1900,18 +1920,24 @@ class LedgerViewModel(
             date to transaction
         }
         val transactionMap = datedTransactions.groupBy({ it.first }, { it.second })
+        val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
         val historyByDate = historicalCloses
             .groupBy { it.date }
             .mapValues { (_, values) -> values.sortedBy { it.symbol } }
+        val realtimeDate = currentRealtimeTradeDate(portfolio)
         val firstDate = datedTransactions.minOfOrNull { it.first }
             ?: historicalCloses.minOfOrNull { it.date }
+            ?: realtimeDate
             ?: LocalDate.now()
         val latestHistoryDate = historicalCloses.maxOfOrNull { it.date }
-        val latestDate = maxOf(
-            LocalDate.now(),
-            datedTransactions.maxOfOrNull { it.first } ?: LocalDate.now(),
-            latestHistoryDate ?: LocalDate.now(),
-        )
+        val latestDate = listOfNotNull(
+            datedTransactions.maxOfOrNull { it.first },
+            latestHistoryDate,
+            realtimeDate,
+        ).maxOrNull() ?: firstDate
+        val eventDates = (transactionMap.keys + historyByDate.keys + listOfNotNull(realtimeDate))
+            .filter { !it.isBefore(firstDate) && !it.isAfter(latestDate) }
+            .sorted()
 
         val positions = linkedMapOf<String, PositionComputation>()
         val latestCloseByPosition = mutableMapOf<String, Double>()
@@ -1921,12 +1947,11 @@ class LedgerViewModel(
         val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
         val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
         val previousSecurityProfit = mutableMapOf<String, Double>()
-        var cursor = firstDate
         var previousCumulativeProfit = 0.0
         var previousTotalAssets = 0.0
         var cumulativeNav = 1.0
         var hasPreviousPoint = false
-        while (!cursor.isAfter(latestDate)) {
+        eventDates.forEach { cursor ->
             var dailyNetFlowCny = 0.0
             transactionMap[cursor].orEmpty().forEach { transaction ->
                 val market = Market.fromString(transaction.market) ?: Market.CASH
@@ -1946,6 +1971,9 @@ class LedgerViewModel(
                     }
 
                     TradeType.BUY, TradeType.SELL -> {
+                        tradeStatsByDate[cursor] = tradeStatsByDate
+                            .getOrDefault(cursor, DailyTradeStats())
+                            .plus(transaction, tradeType, market, exchangeRates)
                         val key = positionKey(transaction.symbol, market)
                         val current = positions[key]
                             ?: PositionComputation(
@@ -2046,6 +2074,13 @@ class LedgerViewModel(
             historyByDate[cursor].orEmpty().forEach { closePoint ->
                 latestCloseByPosition[positionKey(closePoint.symbol, closePoint.market)] = closePoint.closePrice
             }
+            if (cursor == realtimeDate) {
+                quotes.forEach { quote ->
+                    val market = Market.fromString(quote.market) ?: return@forEach
+                    val currentPrice = quote.currentPrice ?: return@forEach
+                    latestCloseByPosition[positionKey(quote.symbol, market)] = currentPrice
+                }
+            }
 
             val holdingsValueCny = positions.values.sumOf { position ->
                 if (position.quantity == 0) return@sumOf 0.0
@@ -2071,6 +2106,7 @@ class LedgerViewModel(
             } else {
                 1.0
             }
+            val tradeStats = tradeStatsByDate[cursor] ?: DailyTradeStats()
             dailyPoints += ProfitAnalysisPointUiModel(
                 date = cursor,
                 dailyProfitCny = dailyProfit,
@@ -2079,6 +2115,11 @@ class LedgerViewModel(
                 netInflowCny = netInflowCny,
                 dailyReturnPercent = dailyReturnPercent,
                 cumulativeReturnPercent = (cumulativeNav - 1.0) * 100.0,
+                dailySecurityTradeCount = tradeStats.securityTradeCount,
+                dailyBuyCount = tradeStats.buyCount,
+                dailySellCount = tradeStats.sellCount,
+                dailyCommissionCny = tradeStats.commissionCny,
+                dailyTaxCny = tradeStats.taxCny,
             )
             securityMeta.forEach { (key, security) ->
                 val position = positions[key]
@@ -2104,20 +2145,14 @@ class LedgerViewModel(
             previousCumulativeProfit = cumulativeProfit
             previousTotalAssets = totalAssetsCny
             hasPreviousPoint = true
-            cursor = cursor.plusDays(1)
         }
 
-        // Unify today's P&L with Holdings screen (live mark-to-market)
-        val today = LocalDate.now()
-        if (dailyPoints.isNotEmpty() && dailyPoints.last().date == today) {
-            val lastIdx = dailyPoints.lastIndex
-            val previousCumulative = if (lastIdx > 0) dailyPoints[lastIdx - 1].cumulativeProfitCny else 0.0
-            val liveDailyProfit = portfolio.dayProfitCny
-            dailyPoints[lastIdx] = dailyPoints[lastIdx].copy(
-                dailyProfitCny = liveDailyProfit,
-                cumulativeProfitCny = previousCumulative + liveDailyProfit,
-            )
-        }
+        applyRealtimePoint(
+            dailyPoints = dailyPoints,
+            realtimeDate = realtimeDate,
+            portfolio = portfolio,
+            tradeStatsByDate = tradeStatsByDate,
+        )
 
         return ProfitAnalysisUiModel(
             dailyPoints = dailyPoints,
@@ -2152,13 +2187,19 @@ class LedgerViewModel(
         val dailyProfitByDate = linkedMapOf<LocalDate, Double>()
         val netFlowByDate = linkedMapOf<LocalDate, Double>()
         val securityProfitByDate = mutableMapOf<String, MutableMap<LocalDate, Double>>()
+        val activityDates = linkedSetOf<LocalDate>()
+        val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
 
         ordered.forEach { transaction ->
             val market = Market.fromString(transaction.market) ?: return@forEach
             val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
+            activityDates += date
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
                 TradeType.BUY -> {
+                    tradeStatsByDate[date] = tradeStatsByDate
+                        .getOrDefault(date, DailyTradeStats())
+                        .plus(transaction, tradeType, market, exchangeRates)
                     val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
                         ?: PositionComputation(
@@ -2213,6 +2254,9 @@ class LedgerViewModel(
                 }
 
                 TradeType.SELL -> {
+                    tradeStatsByDate[date] = tradeStatsByDate
+                        .getOrDefault(date, DailyTradeStats())
+                        .plus(transaction, tradeType, market, exchangeRates)
                     val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
                         ?: PositionComputation(
@@ -2280,37 +2324,39 @@ class LedgerViewModel(
             }
         }
 
-        val lastTransactionDate = ordered.mapNotNull { parseTradeDateOrNull(it.tradeDate) }.maxOrNull()
-        val latestDate = maxOf(LocalDate.now(), lastTransactionDate ?: LocalDate.now())
-        val realizedTotalCny = dailyProfitByDate.values.sum()
-        val openProfitAdjustmentCny = portfolio.totalProfitCny - realizedTotalCny
-        dailyProfitByDate[latestDate] = dailyProfitByDate.getOrDefault(latestDate, 0.0) + openProfitAdjustmentCny
-        positions.values.forEach { position ->
-            if (position.quantity == 0) return@forEach
-            val key = positionKey(position.symbol, position.market)
-            val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
-            val unrealizedCny = convertToCny(
-                (currentPrice - position.averageCost) * position.quantity,
-                position.market,
-                exchangeRates,
-            )
-            val seriesForSecurity = securityProfitByDate.getOrPut(key) { linkedMapOf() }
-            seriesForSecurity[latestDate] = seriesForSecurity.getOrDefault(latestDate, 0.0) + unrealizedCny
+        val realtimeDate = currentRealtimeTradeDate(portfolio)
+        if (realtimeDate != null) {
+            activityDates += realtimeDate
+            positions.values.forEach { position ->
+                if (position.quantity == 0) return@forEach
+                val key = positionKey(position.symbol, position.market)
+                val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
+                val unrealizedCny = convertToCny(
+                    (currentPrice - position.averageCost) * position.quantity,
+                    position.market,
+                    exchangeRates,
+                )
+                val seriesForSecurity = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                seriesForSecurity[realtimeDate] = seriesForSecurity.getOrDefault(realtimeDate, 0.0) + unrealizedCny
+            }
         }
 
-        val firstDate = listOf(
-            dailyProfitByDate.keys.minOrNull(),
-            netFlowByDate.keys.minOrNull(),
-        ).filterNotNull().minOrNull() ?: latestDate
+        val eventDates = (
+            activityDates +
+                dailyProfitByDate.keys +
+                netFlowByDate.keys +
+                securityProfitByDate.values.flatMap { it.keys } +
+                listOfNotNull(realtimeDate)
+            ).sorted()
+        val latestDate = eventDates.maxOrNull() ?: LocalDate.now()
         val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
         val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
-        var cursor = firstDate
         var cumulativeProfit = 0.0
         var cumulativeNetInflow = 0.0
         var previousTotalAssets = 0.0
         var cumulativeNav = 1.0
         var hasPreviousPoint = false
-        while (!cursor.isAfter(latestDate)) {
+        eventDates.forEach { cursor ->
             val dailyProfit = dailyProfitByDate.getOrDefault(cursor, 0.0)
             val dailyNetFlow = netFlowByDate.getOrDefault(cursor, 0.0)
             cumulativeProfit += dailyProfit
@@ -2326,6 +2372,7 @@ class LedgerViewModel(
             } else {
                 1.0
             }
+            val tradeStats = tradeStatsByDate[cursor] ?: DailyTradeStats()
             dailyPoints += ProfitAnalysisPointUiModel(
                 date = cursor,
                 dailyProfitCny = dailyProfit,
@@ -2334,6 +2381,11 @@ class LedgerViewModel(
                 netInflowCny = cumulativeNetInflow,
                 dailyReturnPercent = dailyReturnPercent,
                 cumulativeReturnPercent = (cumulativeNav - 1.0) * 100.0,
+                dailySecurityTradeCount = tradeStats.securityTradeCount,
+                dailyBuyCount = tradeStats.buyCount,
+                dailySellCount = tradeStats.sellCount,
+                dailyCommissionCny = tradeStats.commissionCny,
+                dailyTaxCny = tradeStats.taxCny,
             )
             securityMeta.forEach { (key, security) ->
                 val seriesMap = securityProfitByDate[key].orEmpty()
@@ -2348,20 +2400,14 @@ class LedgerViewModel(
             }
             previousTotalAssets = totalAssetsCny
             hasPreviousPoint = true
-            cursor = cursor.plusDays(1)
         }
 
-        // Unify today's P&L with Holdings screen (live mark-to-market)
-        val today = LocalDate.now()
-        if (dailyPoints.isNotEmpty() && dailyPoints.last().date == today) {
-            val lastIdx = dailyPoints.lastIndex
-            val previousCumulative = if (lastIdx > 0) dailyPoints[lastIdx - 1].cumulativeProfitCny else 0.0
-            val liveDailyProfit = portfolio.dayProfitCny
-            dailyPoints[lastIdx] = dailyPoints[lastIdx].copy(
-                dailyProfitCny = liveDailyProfit,
-                cumulativeProfitCny = previousCumulative + liveDailyProfit,
-            )
-        }
+        applyRealtimePoint(
+            dailyPoints = dailyPoints,
+            realtimeDate = realtimeDate,
+            portfolio = portfolio,
+            tradeStatsByDate = tradeStatsByDate,
+        )
 
         return ProfitAnalysisUiModel(
             dailyPoints = dailyPoints,
@@ -2380,6 +2426,63 @@ class LedgerViewModel(
             securityTradeCount = portfolio.securityTradeCount,
             transactions = transactions,
         )
+    }
+
+    private fun currentRealtimeTradeDate(portfolio: PortfolioComputation): LocalDate? {
+        val now = Instant.now()
+        return portfolio.positions.values
+            .mapNotNull { position -> MarketTradingSessions.realtimeTradeDateFor(position.market, now) }
+            .maxOrNull()
+    }
+
+    private fun applyRealtimePoint(
+        dailyPoints: MutableList<ProfitAnalysisPointUiModel>,
+        realtimeDate: LocalDate?,
+        portfolio: PortfolioComputation,
+        tradeStatsByDate: Map<LocalDate, DailyTradeStats>,
+    ) {
+        if (realtimeDate == null) return
+        val currentIndex = dailyPoints.indexOfFirst { it.date == realtimeDate }
+        val previousPoint = dailyPoints
+            .filter { it.date.isBefore(realtimeDate) }
+            .maxByOrNull { it.date }
+        val existingPoint = currentIndex.takeIf { it >= 0 }?.let(dailyPoints::get)
+        val previousCumulative = previousPoint?.cumulativeProfitCny ?: 0.0
+        val previousAssets = previousPoint?.totalAssetsCny ?: 0.0
+        val previousReturn = previousPoint?.cumulativeReturnPercent ?: 0.0
+        val currentNetInflow = portfolio.netInflowCny
+        val dailyNetFlow = currentNetInflow - (previousPoint?.netInflowCny ?: 0.0)
+        val dailyReturnPercent = if (previousAssets > 0.0) {
+            ((portfolio.totalAssetsCny - dailyNetFlow - previousAssets) / previousAssets) * 100.0
+        } else {
+            0.0
+        }
+        val cumulativeReturnPercent = if (previousPoint != null) {
+            ((1 + previousReturn / 100.0) * (1 + dailyReturnPercent / 100.0) - 1) * 100.0
+        } else {
+            0.0
+        }
+        val tradeStats = tradeStatsByDate[realtimeDate] ?: DailyTradeStats()
+        val realtimePoint = ProfitAnalysisPointUiModel(
+            date = realtimeDate,
+            dailyProfitCny = portfolio.totalProfitCny - previousCumulative,
+            cumulativeProfitCny = portfolio.totalProfitCny,
+            totalAssetsCny = portfolio.totalAssetsCny,
+            netInflowCny = currentNetInflow,
+            dailyReturnPercent = dailyReturnPercent,
+            cumulativeReturnPercent = cumulativeReturnPercent,
+            dailySecurityTradeCount = existingPoint?.dailySecurityTradeCount ?: tradeStats.securityTradeCount,
+            dailyBuyCount = existingPoint?.dailyBuyCount ?: tradeStats.buyCount,
+            dailySellCount = existingPoint?.dailySellCount ?: tradeStats.sellCount,
+            dailyCommissionCny = existingPoint?.dailyCommissionCny ?: tradeStats.commissionCny,
+            dailyTaxCny = existingPoint?.dailyTaxCny ?: tradeStats.taxCny,
+        )
+        if (currentIndex >= 0) {
+            dailyPoints[currentIndex] = realtimePoint
+        } else {
+            dailyPoints += realtimePoint
+            dailyPoints.sortBy { it.date }
+        }
     }
 
     private fun computePortfolio(

@@ -32,6 +32,11 @@ data class ProfitAnalysisPointUiModel(
     val netInflowCny: Double = 0.0,
     val dailyReturnPercent: Double = 0.0,
     val cumulativeReturnPercent: Double = 0.0,
+    val dailySecurityTradeCount: Int = 0,
+    val dailyBuyCount: Int = 0,
+    val dailySellCount: Int = 0,
+    val dailyCommissionCny: Double = 0.0,
+    val dailyTaxCny: Double = 0.0,
 )
 
 data class SecurityProfitAnalysisUiModel(
