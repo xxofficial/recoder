@@ -132,38 +132,104 @@ interface QuoteDataSource {
     ): List<SecurityLookupResult>
 }
 
+interface LedgerRepository {
+    val transactions: Flow<List<TransactionEntity>>
+    val quotes: Flow<List<QuoteSnapshotEntity>>
+
+    suspend fun seedIfEmpty()
+    suspend fun purgeLegacySeedData()
+    suspend fun addTrade(input: TradeDraftInput)
+    suspend fun updateTrade(transactionId: Long, input: TradeDraftInput)
+    suspend fun deleteTrade(transactionId: Long): Int
+    suspend fun deleteTransactionsByIds(ids: List<Long>): Int
+    suspend fun replaceTransactions(transactions: List<TransactionEntity>)
+    suspend fun exportBackup(
+        outputStream: OutputStream,
+        displayCurrencyName: String,
+        enabledPlatforms: List<BrokerPlatform>,
+        selectedPlatform: BrokerPlatform?,
+    )
+    suspend fun importBackup(inputStream: InputStream): ImportedBackup
+    suspend fun deleteHolding(symbol: String, market: Market): Int
+}
+
+interface MarketDataRepository {
+    val historicalCloses: StateFlow<List<HistoricalClosePoint>>
+    val exchangeRates: StateFlow<ExchangeRates>
+    val isUsingRealtimeQuotes: Boolean
+    val quoteProviderLabel: String
+
+    suspend fun lookupSecurity(rawInput: String, market: Market): SecurityLookupResult?
+    suspend fun searchSecurities(rawInput: String, market: Market, limit: Int = 6): List<SecurityLookupResult>
+    suspend fun refreshQuotes(requests: List<QuoteRequest>): Long
+    suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long
+    suspend fun repairSuspiciousStockNames(): Int
+    suspend fun refreshExchangeRates(): ExchangeRateRefreshResult
+}
+
+interface ImportRepository {
+    suspend fun importSharedTradeText(
+        rawText: String,
+        receivedAtMillis: Long = System.currentTimeMillis(),
+    ): TradeImportResult
+
+    suspend fun importHsbcNotificationText(
+        rawText: String,
+        receivedAtMillis: Long = System.currentTimeMillis(),
+    ): TradeImportResult
+
+    suspend fun importZhuoruiStatementPdf(
+        inputStream: InputStream,
+        password: String,
+    ): List<TradeImportResult>
+
+    suspend fun importParsedTrades(
+        parsedTrades: List<com.recoder.stockledger.data.importer.ParsedStatementTrade>,
+        platform: BrokerPlatform = BrokerPlatform.ZHUORUI,
+    ): List<TradeImportResult>
+
+    suspend fun syncZhuoruiMailbox(
+        config: ZhuoruiEmailSyncConfig,
+        lastSyncAtMillis: Long,
+        fetchCount: Int = 200,
+        earliestReceivedAtMillis: Long? = null,
+    ): ZhuoruiMailboxSyncResult
+}
+
+interface StockLedgerRepository : LedgerRepository, MarketDataRepository, ImportRepository
+
 class DefaultLedgerRepository(
     private val context: Context,
     private val dao: LedgerDao,
     private val quoteDataSource: QuoteDataSource,
     private val exchangeRateDataSource: FrankfurterExchangeRateDataSource,
     private val platformFeePlanSelectionProvider: () -> Map<BrokerPlatform, String> = { emptyMap() },
-) {
-    val transactions: Flow<List<TransactionEntity>> = dao.observeTransactions()
-    val quotes: Flow<List<QuoteSnapshotEntity>> = dao.observeQuotes()
+) : StockLedgerRepository {
+    override val transactions: Flow<List<TransactionEntity>> = dao.observeTransactions()
+    override val quotes: Flow<List<QuoteSnapshotEntity>> = dao.observeQuotes()
     private val _historicalCloses = MutableStateFlow<List<HistoricalClosePoint>>(emptyList())
-    val historicalCloses: StateFlow<List<HistoricalClosePoint>> = _historicalCloses
+    override val historicalCloses: StateFlow<List<HistoricalClosePoint>> = _historicalCloses
     private val _exchangeRates = MutableStateFlow(exchangeRateDataSource.currentRates())
-    val exchangeRates: StateFlow<ExchangeRates> = _exchangeRates
+    override val exchangeRates: StateFlow<ExchangeRates> = _exchangeRates
 
-    val isUsingRealtimeQuotes: Boolean
+    override val isUsingRealtimeQuotes: Boolean
         get() = quoteDataSource.isConfigured
 
-    val quoteProviderLabel: String
+    override val quoteProviderLabel: String
         get() = quoteDataSource.providerLabel
 
-    suspend fun seedIfEmpty() {
+    override suspend fun seedIfEmpty() {
         // Intentionally empty. The app should not ship with sample ledger data.
     }
 
-    suspend fun purgeLegacySeedData() {
+    override suspend fun purgeLegacySeedData() {
         dao.deleteLegacySeedTransactions()
         if (dao.transactionCount() == 0) {
             dao.clearQuotes()
         }
     }
 
-    suspend fun addTrade(input: TradeDraftInput) {
+    override suspend fun addTrade(input: TradeDraftInput) {
         val resolvedName = resolveConsistentName(input.symbol, input.market, input.name)
         dao.insertTransaction(
             TransactionEntity(
@@ -186,7 +252,7 @@ class DefaultLedgerRepository(
         )
     }
 
-    suspend fun updateTrade(
+    override suspend fun updateTrade(
         transactionId: Long,
         input: TradeDraftInput,
     ) {
@@ -243,15 +309,15 @@ class DefaultLedgerRepository(
         return providedName
     }
 
-    suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
+    override suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
 
-    suspend fun deleteTransactionsByIds(ids: List<Long>): Int = dao.deleteTransactionsByIds(ids)
+    override suspend fun deleteTransactionsByIds(ids: List<Long>): Int = dao.deleteTransactionsByIds(ids)
 
-    suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
+    override suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
         dao.replaceTransactions(transactions)
     }
 
-    suspend fun exportBackup(
+    override suspend fun exportBackup(
         outputStream: OutputStream,
         displayCurrencyName: String,
         enabledPlatforms: List<BrokerPlatform>,
@@ -294,7 +360,7 @@ class DefaultLedgerRepository(
         outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload.toString(2)) }
     }
 
-    suspend fun importBackup(inputStream: InputStream): ImportedBackup = withContext(Dispatchers.IO) {
+    override suspend fun importBackup(inputStream: InputStream): ImportedBackup = withContext(Dispatchers.IO) {
         val json = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         val payload = JSONObject(json)
         val transactionsArray = payload.optJSONArray("transactions") ?: org.json.JSONArray()
@@ -371,9 +437,9 @@ class DefaultLedgerRepository(
         )
     }
 
-    suspend fun importSharedTradeText(
+    override suspend fun importSharedTradeText(
         rawText: String,
-        receivedAtMillis: Long = System.currentTimeMillis(),
+        receivedAtMillis: Long,
     ): TradeImportResult {
         HsbcNotificationParser.parse(rawText)?.let { parsed ->
             return importParsedHsbcNotification(parsed, receivedAtMillis)
@@ -389,9 +455,9 @@ class DefaultLedgerRepository(
         )
     }
 
-    suspend fun importHsbcNotificationText(
+    override suspend fun importHsbcNotificationText(
         rawText: String,
-        receivedAtMillis: Long = System.currentTimeMillis(),
+        receivedAtMillis: Long,
     ): TradeImportResult {
         val parsed = HsbcNotificationParser.parse(rawText)
             ?: return TradeImportResult(
@@ -536,8 +602,8 @@ class DefaultLedgerRepository(
         )
     }
 
-    suspend fun importZhuoruiStatementPdf(
-        inputStream: java.io.InputStream,
+    override suspend fun importZhuoruiStatementPdf(
+        inputStream: InputStream,
         password: String,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
         Log.d(TAG, "开始导入PDF结单, password长度=${password.length}")
@@ -652,9 +718,9 @@ class DefaultLedgerRepository(
         results
     }
 
-    suspend fun importParsedTrades(
+    override suspend fun importParsedTrades(
         parsedTrades: List<com.recoder.stockledger.data.importer.ParsedStatementTrade>,
-        platform: BrokerPlatform = BrokerPlatform.ZHUORUI,
+        platform: BrokerPlatform,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
         val refPrefix = if (platform == BrokerPlatform.ZHUORUI) "ZR-STMT-" else "PDF-STMT-"
         val results = mutableListOf<TradeImportResult>()
@@ -756,11 +822,11 @@ class DefaultLedgerRepository(
         results
     }
 
-    suspend fun deleteHolding(symbol: String, market: Market): Int {
+    override suspend fun deleteHolding(symbol: String, market: Market): Int {
         return dao.deleteHolding(symbol = symbol, market = market.name)
     }
 
-    suspend fun lookupSecurity(rawInput: String, market: Market): SecurityLookupResult? {
+    override suspend fun lookupSecurity(rawInput: String, market: Market): SecurityLookupResult? {
         if (market == Market.CASH) return null
         val raw = rawInput.trim()
         if (raw.isBlank()) return null
@@ -770,22 +836,31 @@ class DefaultLedgerRepository(
         }.getOrNull()
     }
 
-    suspend fun searchSecurities(
+    override suspend fun searchSecurities(
         rawInput: String,
         market: Market,
-        limit: Int = 6,
+        limit: Int,
     ): List<SecurityLookupResult> {
         val suggestions = quoteDataSource.searchSecurities(rawInput, market, limit)
         val suspicious = suggestions.filter { it.name == it.symbol || it.name.isBlank() }
         
         if (suspicious.isNotEmpty()) {
-            val requests = suspicious.map { QuoteRequest(it.symbol, it.market) }.distinct()
+            val requests = suspicious.map {
+                QuoteRequest(
+                    symbol = it.symbol,
+                    name = it.name,
+                    market = it.market,
+                )
+            }.distinct()
             val quotes = runCatching { quoteDataSource.refreshQuotes(requests) }.getOrDefault(emptyList())
             
             if (quotes.isNotEmpty()) {
                 return suggestions.map { suggestion ->
                     if (suggestion.name == suggestion.symbol || suggestion.name.isBlank()) {
-                        val improved = quotes.find { it.symbol == suggestion.symbol && it.market == suggestion.market }
+                        val improved = quotes.find {
+                            it.symbol == suggestion.symbol &&
+                                Market.fromString(it.market) == suggestion.market
+                        }
                         if (improved != null && improved.name.isNotBlank() && improved.name != suggestion.symbol) {
                             return@map suggestion.copy(name = improved.name)
                         }
@@ -797,7 +872,7 @@ class DefaultLedgerRepository(
         return suggestions
     }
 
-    suspend fun refreshQuotes(requests: List<QuoteRequest>): Long {
+    override suspend fun refreshQuotes(requests: List<QuoteRequest>): Long {
         val deduped = requests.distinctBy { "${it.market.name}:${it.symbol}" }
         val refreshed = quoteDataSource.refreshQuotes(deduped)
         if (deduped.isNotEmpty() && refreshed.isEmpty()) {
@@ -809,7 +884,7 @@ class DefaultLedgerRepository(
         return dao.latestQuoteRefreshTimestamp() ?: System.currentTimeMillis()
     }
 
-    suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long {
+    override suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long {
         val securityTransactions = transactions
             .filter { transaction ->
                 val tradeType = TradeType.valueOf(transaction.tradeType)
@@ -851,7 +926,7 @@ class DefaultLedgerRepository(
         return refreshQuotes(requests)
     }
 
-    suspend fun repairSuspiciousStockNames(): Int {
+    override suspend fun repairSuspiciousStockNames(): Int {
         val suspicious = dao.getAllTransactions().filter { (it.name.isBlank() || it.name == it.symbol) && it.symbol.isNotBlank() }
         if (suspicious.isEmpty()) return 0
 
@@ -870,7 +945,7 @@ class DefaultLedgerRepository(
         return fixedCount
     }
 
-    suspend fun refreshExchangeRates(): ExchangeRateRefreshResult {
+    override suspend fun refreshExchangeRates(): ExchangeRateRefreshResult {
         val result = exchangeRateDataSource.refreshRates()
         _exchangeRates.value = result.rates
         return result
@@ -1018,11 +1093,11 @@ class DefaultLedgerRepository(
         }
     }
 
-    suspend fun syncZhuoruiMailbox(
+    override suspend fun syncZhuoruiMailbox(
         config: ZhuoruiEmailSyncConfig,
         lastSyncAtMillis: Long,
-        fetchCount: Int = DEFAULT_MAIL_FETCH_BATCH_SIZE,
-        earliestReceivedAtMillis: Long? = null,
+        fetchCount: Int,
+        earliestReceivedAtMillis: Long?,
     ): ZhuoruiMailboxSyncResult = withContext(Dispatchers.IO) {
         require(config.isComplete()) { "邮箱配置不完整" }
 

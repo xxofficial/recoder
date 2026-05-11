@@ -7,10 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
-import com.recoder.stockledger.data.repository.TradeImportOutcome
 import com.recoder.stockledger.ui.StockLedgerApp
 import com.recoder.stockledger.ui.theme.StockLedgerTheme
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -38,14 +36,9 @@ class MainActivity : ComponentActivity() {
         incomingIntent?.removeExtra(Intent.EXTRA_TEXT)
         incomingIntent?.removeExtra(Intent.EXTRA_SUBJECT)
 
-        val repository = (application as StockLedgerApplication).repository
+        val importCoordinator = (application as StockLedgerApplication).container.importCoordinator
         lifecycleScope.launch {
-            val result = repository.importSharedTradeText(sharedText)
-            if (result.outcome == TradeImportOutcome.IMPORTED) {
-                runCatching {
-                    repository.refreshQuotesForPortfolio(repository.transactions.first())
-                }
-            }
+            val result = importCoordinator.importSharedTradeText(sharedText)
             Toast.makeText(this@MainActivity, result.message, Toast.LENGTH_LONG).show()
         }
     }

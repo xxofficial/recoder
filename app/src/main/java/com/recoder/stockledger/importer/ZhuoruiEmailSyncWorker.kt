@@ -9,7 +9,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.recoder.stockledger.StockLedgerApplication
-import com.recoder.stockledger.StockLedgerPreferences
 import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
 import java.util.concurrent.TimeUnit
 
@@ -18,24 +17,15 @@ class ZhuoruiEmailSyncWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
-        val preferences = applicationContext.getSharedPreferences(
-            StockLedgerPreferences.PREFERENCES_NAME,
-            Context.MODE_PRIVATE,
-        )
-        val config = ZhuoruiEmailSyncConfig(
-            imapHost = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_HOST, "").orEmpty(),
-            imapPort = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_PORT, "993").orEmpty(),
-            account = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, "").orEmpty(),
-            password = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, "").orEmpty(),
-            folder = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, "INBOX").orEmpty().ifBlank { "INBOX" },
-        )
+        val application = applicationContext as? StockLedgerApplication ?: return Result.failure()
+        val settingsStore = application.container.settingsStore
+        val config = settingsStore.loadZhuoruiEmailSyncConfig()
         if (!config.isComplete()) return Result.success()
 
-        val application = applicationContext as? StockLedgerApplication ?: return Result.failure()
         return runCatching {
-            val result = application.repository.syncZhuoruiMailbox(
+            val result = application.container.importRepository.syncZhuoruiMailbox(
                 config = config,
-                lastSyncAtMillis = preferences.getLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, 0L),
+                lastSyncAtMillis = settingsStore.loadZhuoruiEmailLastSyncAt(),
             )
             val syncAt = result.latestSeenMessageAt ?: System.currentTimeMillis()
             val message = when {
@@ -46,18 +36,13 @@ class ZhuoruiEmailSyncWorker(
                 else ->
                     "自动同步完成：未发现可导入的新邮件"
             }
-            preferences.edit()
-                .putLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, syncAt)
-                .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
-                .apply()
+            settingsStore.saveZhuoruiEmailLastSyncAt(syncAt)
+            settingsStore.saveZhuoruiEmailSyncStatusMessage(message)
             Result.success()
         }.getOrElse { error ->
-            preferences.edit()
-                .putString(
-                    StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE,
-                    "自动同步失败：${error.message ?: "请检查 IMAP 配置"}",
-                )
-                .apply()
+            settingsStore.saveZhuoruiEmailSyncStatusMessage(
+                "自动同步失败：${error.message ?: "请检查 IMAP 配置"}",
+            )
             Result.retry()
         }
     }

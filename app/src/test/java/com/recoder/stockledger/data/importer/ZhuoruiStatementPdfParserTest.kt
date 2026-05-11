@@ -128,7 +128,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals(380.0, trade.price, 0.01)
             assertEquals(381.39, trade.amount, 0.01)
             assertEquals(LocalDate.of(2026, 2, 9), trade.tradeDate)
-            assertEquals("20260209-MU-BUY-1", trade.tradeRef)
+            assertEquals("20260209-MU-BUY-1-380.0000", trade.tradeRef)
         }
 
         trades[1].let { trade ->
@@ -141,7 +141,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals(94.02, trade.price, 0.01)
             assertEquals(374.68, trade.amount, 0.01)
             assertEquals(LocalDate.of(2026, 2, 9), trade.tradeDate)
-            assertEquals("20260209-IAU-SELL-4", trade.tradeRef)
+            assertEquals("20260209-IAU-SELL-4-94.0200", trade.tradeRef)
         }
     }
 
@@ -161,7 +161,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals(176.0, trade.price, 0.01)
             assertEquals(177.39, trade.amount, 0.01)
             assertEquals(LocalDate.of(2026, 1, 16), trade.tradeDate)
-            assertEquals("20260116-FUTU-BUY-1-42548480", trade.tradeRef)
+            assertEquals("20260116-FUTU-BUY-1-176.0000-42548480", trade.tradeRef)
         }
     }
 
@@ -218,8 +218,8 @@ class ZhuoruiStatementPdfParserTest {
         assertEquals(10.0, trade27?.price ?: 0.0, 0.01)
 
         // 验证 tradeRef 因数量不同而区分
-        assertEquals("20260206-RDW-BUY-3", trade3?.tradeRef)
-        assertEquals("20260207-RDW-BUY-27", trade27?.tradeRef)
+        assertEquals("20260206-RDW-BUY-3-89.0250", trade3?.tradeRef)
+        assertEquals("20260207-RDW-BUY-27-10.0000", trade27?.tradeRef)
     }
 
     @Test

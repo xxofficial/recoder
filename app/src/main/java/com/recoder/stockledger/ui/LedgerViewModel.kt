@@ -1,12 +1,12 @@
 package com.recoder.stockledger.ui
 
 import android.app.Application
-import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.recoder.stockledger.StockLedgerApplication
-import com.recoder.stockledger.StockLedgerPreferences
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.ExchangeRateOrigin
@@ -47,11 +47,12 @@ import com.recoder.stockledger.data.rateToCny
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
 import com.recoder.stockledger.importer.ZhuoruiEmailSyncWorker
-import com.recoder.stockledger.data.repository.DefaultLedgerRepository
 import com.recoder.stockledger.data.repository.HistoricalClosePoint
 import com.recoder.stockledger.data.repository.ImportedBackup
 import com.recoder.stockledger.data.repository.SecurityLookupResult
+import com.recoder.stockledger.data.repository.StockLedgerRepository
 import com.recoder.stockledger.data.repository.TradeDraftInput
+import com.recoder.stockledger.data.settings.StockLedgerSettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -155,13 +156,34 @@ data class LedgerUiState(
     val selectedTransactionIds: Set<Long> = emptySet(),
 )
 
-class LedgerViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository: DefaultLedgerRepository =
-        (application as StockLedgerApplication).repository
-    private val preferences = application.getSharedPreferences(
-        StockLedgerPreferences.PREFERENCES_NAME,
-        Context.MODE_PRIVATE,
+class LedgerViewModel(
+    application: Application,
+    private val repository: StockLedgerRepository,
+    private val settingsStore: StockLedgerSettingsStore,
+) : AndroidViewModel(application) {
+    constructor(application: Application) : this(
+        application = application,
+        repository = (application as StockLedgerApplication).container.repository,
+        settingsStore = application.container.settingsStore,
     )
+
+    class Factory(
+        private val application: Application,
+        private val repository: StockLedgerRepository,
+        private val settingsStore: StockLedgerSettingsStore,
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(LedgerViewModel::class.java)) {
+                return LedgerViewModel(
+                    application = application,
+                    repository = repository,
+                    settingsStore = settingsStore,
+                ) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+        }
+    }
 
     private val tradeFilter = MutableStateFlow(TransactionFilter.ALL)
     private val marketFilter = MutableStateFlow(MarketFilter.ALL)
@@ -732,18 +754,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun saveZhuoruiEmailSyncConfig() {
         val config = zhuoruiEmailSyncConfig.value
         val validationMessage = config.validationMessage()
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_HOST, config.imapHost)
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_PORT, config.imapPort)
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, config.account)
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, config.password)
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, config.folder)
-            .apply()
+        settingsStore.saveZhuoruiEmailSyncConfig(config)
         val message = validationMessage?.let { "邮箱配置已保存，但$it" } ?: "邮箱配置已保存"
         zhuoruiEmailSyncStatusMessage.value = message
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
-            .apply()
+        settingsStore.saveZhuoruiEmailSyncStatusMessage(message)
         reconcileZhuoruiEmailAutoSync()
     }
 
@@ -757,21 +771,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (enabled && validationMessage != null) {
             val message = "请先完成邮箱配置并保存，再开启自动同步：$validationMessage"
             zhuoruiEmailSyncStatusMessage.value = message
-            preferences.edit()
-                .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
-                .apply()
+            settingsStore.saveZhuoruiEmailSyncStatusMessage(message)
             return
         }
-        preferences.edit()
-            .putBoolean(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_AUTO_IMPORT_ENABLED, enabled)
-            .apply()
+        settingsStore.saveZhuoruiEmailAutoImportEnabled(enabled)
         zhuoruiEmailAutoImportEnabled.value = enabled
         reconcileZhuoruiEmailAutoSync()
         val message = if (enabled) "已开启邮箱自动同步" else "已关闭邮箱自动同步"
         zhuoruiEmailSyncStatusMessage.value = message
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
-            .apply()
+        settingsStore.saveZhuoruiEmailSyncStatusMessage(message)
     }
 
     fun syncZhuoruiMailboxNow() {
@@ -798,9 +806,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }.onSuccess { result ->
                 val syncAt = result.latestSeenMessageAt ?: System.currentTimeMillis()
-                preferences.edit()
-                    .putLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, syncAt)
-                    .apply()
+                settingsStore.saveZhuoruiEmailLastSyncAt(syncAt)
                 val message = when {
                     result.importedCount > 0 ->
                         "同步完成：新增 ${result.importedCount} 条，重复 ${result.duplicateCount} 条"
@@ -810,15 +816,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         "同步完成：未发现可导入的新邮件"
                 }
                 zhuoruiEmailSyncStatusMessage.value = message
-                preferences.edit()
-                    .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
-                    .apply()
+                settingsStore.saveZhuoruiEmailSyncStatusMessage(message)
             }.onFailure { error ->
                 val message = "邮箱同步失败：${error.message ?: "请检查 IMAP 配置"}"
                 zhuoruiEmailSyncStatusMessage.value = message
-                preferences.edit()
-                    .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, message)
-                    .apply()
+                settingsStore.saveZhuoruiEmailSyncStatusMessage(message)
             }
         }
     }
@@ -3041,127 +3043,59 @@ private data class RefreshMeta(
         sellTradeCount = 0,
     )
 
-    private fun loadSavedDisplayCurrency(): DisplayCurrency {
-        val savedName = preferences.getString(
-            StockLedgerPreferences.KEY_DISPLAY_CURRENCY,
-            DisplayCurrency.CNY.name,
-        )
-        return DisplayCurrency.entries.firstOrNull { it.name == savedName } ?: DisplayCurrency.CNY
-    }
+    private fun loadSavedDisplayCurrency(): DisplayCurrency =
+        settingsStore.loadDisplayCurrency()
 
     private fun saveDisplayCurrency(currency: DisplayCurrency) {
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_DISPLAY_CURRENCY, currency.name)
-            .apply()
+        settingsStore.saveDisplayCurrency(currency)
     }
 
-    private fun loadSavedSelectedPlatform(): BrokerPlatform? {
-        val savedName = preferences.getString(StockLedgerPreferences.KEY_SELECTED_PLATFORM, null).orEmpty()
-        return BrokerPlatform.entries.firstOrNull { it.name == savedName && it.isConfigurable }
-    }
+    private fun loadSavedSelectedPlatform(): BrokerPlatform? =
+        settingsStore.loadSelectedPlatform()
 
-    private fun loadEnabledPlatforms(): List<BrokerPlatform> {
-        val saved = preferences.getStringSet(StockLedgerPreferences.KEY_ENABLED_PLATFORMS, null)
-            ?.mapNotNull { name -> BrokerPlatform.entries.firstOrNull { it.name == name && it.isConfigurable } }
-            .orEmpty()
-        return if (saved.isEmpty()) {
-            BrokerPlatform.configurableEntries
-        } else {
-            BrokerPlatform.configurableEntries.filter { it in saved }
-        }
-    }
+    private fun loadEnabledPlatforms(): List<BrokerPlatform> =
+        settingsStore.loadEnabledPlatforms()
 
-    private fun loadPlatformFeePlanSelections(): Map<BrokerPlatform, String> {
-        val serialized = preferences.getString(
-            StockLedgerPreferences.KEY_PLATFORM_FEE_PLAN_SELECTIONS,
-            null,
-        ).orEmpty()
-        if (serialized.isBlank()) return emptyMap()
-        return serialized.split("|")
-            .mapNotNull { entry ->
-                val separatorIndex = entry.indexOf('=')
-                if (separatorIndex <= 0 || separatorIndex >= entry.lastIndex) {
-                    return@mapNotNull null
-                }
-                val platform = BrokerPlatform.entries.firstOrNull { it.name == entry.substring(0, separatorIndex) }
-                    ?: return@mapNotNull null
-                val planId = entry.substring(separatorIndex + 1)
-                val resolvedPlanId = TradeFeeEstimator.resolvePlanId(platform, planId)
-                if (resolvedPlanId.isBlank()) {
-                    null
-                } else {
-                    platform to resolvedPlanId
-                }
-            }
-            .toMap()
-    }
+    private fun loadPlatformFeePlanSelections(): Map<BrokerPlatform, String> =
+        settingsStore.loadPlatformFeePlanSelections()
 
-    private fun loadZhuoruiPromoConfig(): ZhuoruiPromoConfig {
-        val startDate = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PROMO_START_DATE, null).orEmpty()
-        val durationDays = preferences.getInt(StockLedgerPreferences.KEY_ZHUORUI_PROMO_DURATION_DAYS, 100)
-        return ZhuoruiPromoConfig(startDate = startDate, durationDays = durationDays)
-    }
+    private fun loadZhuoruiPromoConfig(): ZhuoruiPromoConfig =
+        settingsStore.loadZhuoruiPromoConfig()
 
     private fun saveZhuoruiPromoConfigToPrefs(config: ZhuoruiPromoConfig) {
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_PROMO_START_DATE, config.startDate)
-            .putInt(StockLedgerPreferences.KEY_ZHUORUI_PROMO_DURATION_DAYS, config.durationDays)
-            .apply()
+        settingsStore.saveZhuoruiPromoConfig(config)
     }
 
     private fun saveEnabledPlatforms(platforms: List<BrokerPlatform>) {
-        preferences.edit()
-            .putStringSet(
-                StockLedgerPreferences.KEY_ENABLED_PLATFORMS,
-                platforms.map { it.name }.toSet(),
-            )
-            .apply()
+        settingsStore.saveEnabledPlatforms(platforms)
     }
 
     private fun savePlatformFeePlanSelections(selections: Map<BrokerPlatform, String>) {
-        val serialized = selections.entries
-            .sortedBy { it.key.name }
-            .joinToString("|") { (platform, planId) -> "${platform.name}=$planId" }
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_PLATFORM_FEE_PLAN_SELECTIONS, serialized.ifBlank { null })
-            .apply()
+        settingsStore.savePlatformFeePlanSelections(selections)
     }
 
     private fun saveSelectedPlatform(platform: BrokerPlatform?) {
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_SELECTED_PLATFORM, platform?.name)
-            .apply()
+        settingsStore.saveSelectedPlatform(platform)
     }
 
-    private fun loadZhuoruiEmailSyncConfig(): ZhuoruiEmailSyncConfig = ZhuoruiEmailSyncConfig(
-        imapHost = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_HOST, "").orEmpty(),
-        imapPort = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_IMAP_PORT, "993").orEmpty(),
-        account = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, "").orEmpty(),
-        password = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, "").orEmpty(),
-        folder = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, "INBOX").orEmpty().ifBlank { "INBOX" },
-    )
+    private fun loadZhuoruiEmailSyncConfig(): ZhuoruiEmailSyncConfig =
+        settingsStore.loadZhuoruiEmailSyncConfig()
 
-    private fun loadZhuoruiEmailAutoImportEnabled(): Boolean {
-        return preferences.getBoolean(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_AUTO_IMPORT_ENABLED, false)
-    }
+    private fun loadZhuoruiEmailAutoImportEnabled(): Boolean =
+        settingsStore.loadZhuoruiEmailAutoImportEnabled()
 
-    private fun loadZhuoruiEmailSyncStatusMessage(): String? {
-        return preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_MESSAGE, null)
-    }
+    private fun loadZhuoruiEmailSyncStatusMessage(): String? =
+        settingsStore.loadZhuoruiEmailSyncStatusMessage()
 
-    private fun loadZhuoruiEmailLastSyncAt(): Long {
-        return preferences.getLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_LAST_SYNC_AT, 0L)
-    }
+    private fun loadZhuoruiEmailLastSyncAt(): Long =
+        settingsStore.loadZhuoruiEmailLastSyncAt()
 
-    private fun loadZhuoruiStatementPdfPassword(): String {
-        return preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, "").orEmpty()
-    }
+    private fun loadZhuoruiStatementPdfPassword(): String =
+        settingsStore.loadZhuoruiStatementPdfPassword()
 
     fun updateZhuoruiStatementPdfPassword(password: String) {
         zhuoruiStatementPdfPassword.value = password
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, password)
-            .apply()
+        settingsStore.saveZhuoruiStatementPdfPassword(password)
     }
 
     fun importStatementPdfs(uris: List<Uri>, platform: BrokerPlatform) {
@@ -3341,30 +3275,22 @@ private data class RefreshMeta(
 
     fun updateAlibabaBailianApiKey(key: String) {
         alibabaBailianApiKey.value = key
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, key)
-            .apply()
+        settingsStore.saveAlibabaBailianApiKey(key)
     }
 
     fun updatePdfImportMode(mode: PdfImportMode) {
         pdfImportMode.value = mode
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, mode.name)
-            .apply()
+        settingsStore.savePdfImportMode(mode)
     }
 
     fun updateTextImportModel(model: String) {
         textImportModel.value = model
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_TEXT_IMPORT_MODEL, model)
-            .apply()
+        settingsStore.saveTextImportModel(model)
     }
 
     fun updateLlmApiBaseUrl(url: String) {
         llmApiBaseUrl.value = url
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, url)
-            .apply()
+        settingsStore.saveLlmApiBaseUrl(url)
     }
 
     fun clearPdfImportStatus() {
@@ -3373,26 +3299,17 @@ private data class RefreshMeta(
         failedPdfUris.value = emptyList()
     }
 
-    private fun loadAlibabaBailianApiKey(): String {
-        return preferences.getString(StockLedgerPreferences.KEY_ALIBABA_BAILIAN_API_KEY, "").orEmpty()
-    }
+    private fun loadAlibabaBailianApiKey(): String =
+        settingsStore.loadAlibabaBailianApiKey()
 
-    private fun loadPdfImportMode(): PdfImportMode {
-        val name = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, PdfImportMode.REGEX.name)
-        return try {
-            PdfImportMode.valueOf(name ?: PdfImportMode.REGEX.name)
-        } catch (_: Exception) {
-            PdfImportMode.REGEX
-        }
-    }
+    private fun loadPdfImportMode(): PdfImportMode =
+        settingsStore.loadPdfImportMode()
 
-    private fun loadTextImportModel(): String {
-        return preferences.getString(StockLedgerPreferences.KEY_TEXT_IMPORT_MODEL, "").orEmpty()
-    }
+    private fun loadTextImportModel(): String =
+        settingsStore.loadTextImportModel()
 
-    private fun loadLlmApiBaseUrl(): String {
-        return preferences.getString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, "").orEmpty()
-    }
+    private fun loadLlmApiBaseUrl(): String =
+        settingsStore.loadLlmApiBaseUrl()
 
     private fun reconcileZhuoruiEmailAutoSync() {
         val enabled = zhuoruiEmailAutoImportEnabled.value

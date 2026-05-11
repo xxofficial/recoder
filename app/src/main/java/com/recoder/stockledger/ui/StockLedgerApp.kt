@@ -35,10 +35,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.recoder.stockledger.StockLedgerApplication
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -78,7 +80,11 @@ private object Routes {
 @Composable
 fun StockLedgerApp(
     modifier: Modifier = Modifier,
-    ledgerViewModel: LedgerViewModel = viewModel(),
+    ledgerViewModel: LedgerViewModel = viewModel(
+        factory = (LocalContext.current.applicationContext as StockLedgerApplication)
+            .container
+            .ledgerViewModelFactory,
+    ),
 ) {
     val navController = rememberNavController()
     val uiState by ledgerViewModel.uiState.collectAsStateWithLifecycle()
