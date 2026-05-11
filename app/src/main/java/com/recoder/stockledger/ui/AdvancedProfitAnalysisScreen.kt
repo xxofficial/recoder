@@ -598,24 +598,26 @@ private fun AdvancedChartSection(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            AnalysisStatCard(
-                title = "最佳单日",
-                value = advancedFormatSignedAmount(stats.bestDayProfitCny, displayCurrency, exchangeRates),
-                valueColor = advancedTrendColor(stats.bestDayProfitCny),
-                background = BackgroundPrimary,
-                modifier = Modifier.weight(1f),
-            )
-            AnalysisStatCard(
-                title = "最大回撤",
-                value = advancedFormatDrawdown(stats.maxDrawdownPercent),
-                valueColor = MarketUp,
-                background = BackgroundPrimary,
-                modifier = Modifier.weight(1f),
-            )
+        if (metric != AdvancedChartMetric.TRADE_COUNT) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AnalysisStatCard(
+                    title = "最佳单日",
+                    value = advancedFormatSignedAmount(stats.bestDayProfitCny, displayCurrency, exchangeRates),
+                    valueColor = advancedTrendColor(stats.bestDayProfitCny),
+                    background = BackgroundPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+                AnalysisStatCard(
+                    title = "最大回撤",
+                    value = advancedFormatDrawdown(stats.maxDrawdownPercent),
+                    valueColor = MarketUp,
+                    background = BackgroundPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
@@ -652,7 +654,7 @@ private fun AdvancedTrendChart(
             }
         }
     }
-    val axisValues = remember(values) { buildAdvancedAxisValues(values) }
+    val axisValues = remember(values, metric) { buildAdvancedAxisValues(values, metric) }
     val topAxisValue = axisValues.first()
     val bottomAxisValue = axisValues.last()
     val axisRange = (topAxisValue - bottomAxisValue).takeIf { it > 0.0 } ?: 1.0
@@ -1510,7 +1512,14 @@ private fun resolveAdvancedRangeWindow(
     }
 }
 
-private fun buildAdvancedAxisValues(values: List<Double>): List<Double> {
+private fun buildAdvancedAxisValues(
+    values: List<Double>,
+    metric: AdvancedChartMetric,
+): List<Double> {
+    if (metric == AdvancedChartMetric.TRADE_COUNT) {
+        val top = max(3.0, values.maxOrNull()?.coerceAtLeast(0.0) ?: 0.0)
+        return listOf(top, top * 2.0 / 3.0, top / 3.0, 0.0)
+    }
     val minValue = values.minOrNull() ?: 0.0
     val maxValue = values.maxOrNull() ?: 0.0
     if ((maxValue - minValue).absoluteValue < 1e-6) {

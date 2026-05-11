@@ -2448,15 +2448,10 @@ class LedgerViewModel(
             .maxByOrNull { it.date }
         val existingPoint = currentIndex.takeIf { it >= 0 }?.let(dailyPoints::get)
         val previousCumulative = previousPoint?.cumulativeProfitCny ?: 0.0
-        val previousAssets = previousPoint?.totalAssetsCny ?: 0.0
         val previousReturn = previousPoint?.cumulativeReturnPercent ?: 0.0
         val currentNetInflow = portfolio.netInflowCny
-        val dailyNetFlow = currentNetInflow - (previousPoint?.netInflowCny ?: 0.0)
-        val dailyReturnPercent = if (previousAssets > 0.0) {
-            ((portfolio.totalAssetsCny - dailyNetFlow - previousAssets) / previousAssets) * 100.0
-        } else {
-            0.0
-        }
+        val liveDailyProfit = portfolio.dayProfitCny
+        val dailyReturnPercent = portfolio.dayProfitPercent
         val cumulativeReturnPercent = if (previousPoint != null) {
             ((1 + previousReturn / 100.0) * (1 + dailyReturnPercent / 100.0) - 1) * 100.0
         } else {
@@ -2465,8 +2460,8 @@ class LedgerViewModel(
         val tradeStats = tradeStatsByDate[realtimeDate] ?: DailyTradeStats()
         val realtimePoint = ProfitAnalysisPointUiModel(
             date = realtimeDate,
-            dailyProfitCny = portfolio.totalProfitCny - previousCumulative,
-            cumulativeProfitCny = portfolio.totalProfitCny,
+            dailyProfitCny = liveDailyProfit,
+            cumulativeProfitCny = previousCumulative + liveDailyProfit,
             totalAssetsCny = portfolio.totalAssetsCny,
             netInflowCny = currentNetInflow,
             dailyReturnPercent = dailyReturnPercent,
