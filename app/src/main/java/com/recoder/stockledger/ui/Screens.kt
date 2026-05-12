@@ -311,11 +311,9 @@ fun OperationsRoute(
     onSyncZhuoruiMailboxNow: () -> Unit,
     onEnableZhuoruiEmailAutoImport: () -> Unit,
     onDisableZhuoruiEmailAutoImport: () -> Unit,
-    pdfImportPassword: String,
     pdfImportStatusMessage: String?,
     pdfImportProgressFraction: Float?,
     hasFailedPdfImports: Boolean,
-    onPdfImportPasswordChange: (String) -> Unit,
     onImportPdfStatements: (BrokerPlatform) -> Unit,
     onRetryFailedPdfImport: (BrokerPlatform) -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
@@ -608,18 +606,9 @@ fun OperationsRoute(
                     ) {
                         Text("电子结单导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "支持导入${selectedPlatform.label}的日结单（PDF格式），可同时选择多个文件批量导入。",
+                            "支持导入${selectedPlatform.label}的日结单（PDF格式），结单密码和解析方式在设置中维护。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
-                        )
-                        InputFieldBlock(
-                            label = "PDF结单密码",
-                            value = pdfImportPassword,
-                            placeholder = "如无密码可留空",
-                            isPassword = true,
-                            keyboardType = KeyboardType.Password,
-                            supportingText = "按当前交易平台分别保存",
-                            onValueChange = onPdfImportPasswordChange,
                         )
                         FilledActionButton(
                             text = "选择PDF文件导入",
@@ -1606,11 +1595,9 @@ private fun OperationsRoutePreview() {
             onSyncZhuoruiMailboxNow = {},
             onEnableZhuoruiEmailAutoImport = {},
             onDisableZhuoruiEmailAutoImport = {},
-            pdfImportPassword = "",
             pdfImportStatusMessage = null,
             pdfImportProgressFraction = null,
             hasFailedPdfImports = false,
-            onPdfImportPasswordChange = {},
             onImportPdfStatements = {},
             onRetryFailedPdfImport = {},
             onDestinationSelected = {},

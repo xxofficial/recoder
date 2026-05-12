@@ -47,6 +47,8 @@ object TradeFeeEstimator {
     private const val PLAN_WEBULL_PUBLIC_PROMO = "webull_public_promo"
     private const val PLAN_ZHUORUI_NEW_CUSTOMER = "zhuorui_new_customer"
     private const val PLAN_ZHUORUI_LEGACY_CUSTOMER = "zhuorui_legacy_customer"
+    private const val PLAN_CHIEF_ONLINE_STANDARD = "chief_online_standard"
+    private const val PLAN_SCHWAB_US_ONLINE = "schwab_us_online"
     private const val TRADE25_MONTHLY_TURNOVER_LIMIT_HKD = 250_000.0
 
     private val eastMoneyPlans = listOf(
@@ -99,6 +101,22 @@ object TradeFeeEstimator {
         ),
     )
 
+    private val chiefPlans = listOf(
+        TradeFeePlanOption(
+            id = PLAN_CHIEF_ONLINE_STANDARD,
+            label = "网上交易公开价",
+            description = "按致富官网当前公开网上交易费率估算，港股无平台费，美股免佣但收平台费。",
+        ),
+    )
+
+    private val schwabPlans = listOf(
+        TradeFeePlanOption(
+            id = PLAN_SCHWAB_US_ONLINE,
+            label = "美股线上交易",
+            description = "按 Charles Schwab International 当前公开的线上美股上市股票/ETF 0 佣金口径估算；行业规费另计。",
+        ),
+    )
+
     fun availablePlans(platform: BrokerPlatform): List<TradeFeePlanOption> = when (platform) {
         BrokerPlatform.ALIPAY, BrokerPlatform.UNSPECIFIED -> emptyList()
         BrokerPlatform.EAST_MONEY -> eastMoneyPlans
@@ -106,6 +124,8 @@ object TradeFeeEstimator {
         BrokerPlatform.HSBC -> hsbcPlans
         BrokerPlatform.WEBULL -> webullPlans
         BrokerPlatform.ZHUORUI -> zhuoruiPlans
+        BrokerPlatform.CHIEF -> chiefPlans
+        BrokerPlatform.SCHWAB -> schwabPlans
     }
 
     fun defaultPlanId(platform: BrokerPlatform): String =
@@ -299,6 +319,45 @@ object TradeFeeEstimator {
                 )
             }
 
+            BrokerPlatform.CHIEF -> when (market) {
+                Market.HK -> TradeFeeProfile(
+                    coverage = FeeEstimateCoverage.PARTIAL,
+                    planId = resolvedPlan.id,
+                    planLabel = resolvedPlan.label,
+                    note = "按致富官网当前网上港股公开价估算：佣金 0.0668%，最低 HK$20，无平台费；已计入公开可确认的港股法定收费和股份交收费。",
+                )
+
+                Market.US -> TradeFeeProfile(
+                    coverage = FeeEstimateCoverage.PARTIAL,
+                    planId = resolvedPlan.id,
+                    planLabel = resolvedPlan.label,
+                    note = "按致富官网当前网上美股公开价估算：佣金 0，平台费每股 US$0.008，最低 US$0.99，上限为成交额 3%；已计入 FINRA 卖出规费和结算费。",
+                )
+
+                else -> TradeFeeProfile(
+                    coverage = FeeEstimateCoverage.UNSUPPORTED,
+                    planId = resolvedPlan.id,
+                    planLabel = resolvedPlan.label,
+                    note = "致富证券当前仅内置港股和美股自动费率。",
+                )
+            }
+
+            BrokerPlatform.SCHWAB -> when (market) {
+                Market.US -> TradeFeeProfile(
+                    coverage = FeeEstimateCoverage.PARTIAL,
+                    planId = resolvedPlan.id,
+                    planLabel = resolvedPlan.label,
+                    note = "按 Charles Schwab International（international.schwab.com）当前线上美股上市股票/ETF 公开价估算：佣金 0；已计入卖出侧 SEC/FINRA 行业规费，OTC、期权、ADR、经纪协助交易等特殊费用需人工复核。",
+                )
+
+                else -> TradeFeeProfile(
+                    coverage = FeeEstimateCoverage.UNSUPPORTED,
+                    planId = resolvedPlan.id,
+                    planLabel = resolvedPlan.label,
+                    note = "嘉信国际当前仅内置美股线上交易自动费率。",
+                )
+            }
+
             BrokerPlatform.UNSPECIFIED -> TradeFeeProfile(
                 coverage = FeeEstimateCoverage.UNSUPPORTED,
                 planId = resolvedPlan.id,
@@ -330,6 +389,8 @@ object TradeFeeEstimator {
             BrokerPlatform.HSBC -> estimateHsbc(market, tradeType, price, quantity, profile, context)
             BrokerPlatform.WEBULL -> estimateWebull(market, tradeType, price, quantity, profile)
             BrokerPlatform.ZHUORUI -> estimateZhuorui(market, tradeType, price, quantity, profile, context)
+            BrokerPlatform.CHIEF -> estimateChief(market, tradeType, price, quantity, profile)
+            BrokerPlatform.SCHWAB -> estimateSchwab(market, tradeType, price, quantity, profile)
             else -> unsupportedEstimate(profile.note)
         }
     }
@@ -616,6 +677,77 @@ object TradeFeeEstimator {
         return !tradeDate.isAfter(endDate)
     }
 
+    private fun estimateChief(
+        market: Market,
+        tradeType: TradeType,
+        price: Double,
+        quantity: Int,
+        profile: TradeFeeProfile,
+    ): TradeFeeEstimate = when (market) {
+        Market.HK -> {
+            val amount = amount(price, quantity)
+            val commission = max(amount * bd("0.000668"), bd(20))
+            val charges = hkMarketCharges(amount, settlementRule = HkSettlementRule.CHIEF)
+            buildEstimate(
+                coverage = profile.coverage,
+                market = market,
+                planLabel = profile.planLabel,
+                commissionComponents = listOf("佣金" to commission, "平台费" to bd(0)),
+                taxComponents = charges,
+                note = profile.note,
+            )
+        }
+
+        Market.US -> {
+            val amount = amount(price, quantity)
+            val shareCount = bd(quantity)
+            val platformFee = max(min(shareCount * bd("0.008"), amount * bd("0.03")), bd("0.99"))
+            val settlementFee = max(min(shareCount * bd("0.003"), amount * bd("0.03")), bd("0.01"))
+            val charges = mutableListOf("结算费" to settlementFee)
+            if (tradeType == TradeType.SELL) {
+                charges += usFinraTaf(shareCount)
+            }
+            buildEstimate(
+                coverage = profile.coverage,
+                market = market,
+                planLabel = profile.planLabel,
+                commissionComponents = listOf("佣金" to bd(0), "平台费" to platformFee),
+                taxComponents = charges,
+                note = profile.note,
+            )
+        }
+
+        else -> unsupportedEstimate(profile.note)
+    }
+
+    private fun estimateSchwab(
+        market: Market,
+        tradeType: TradeType,
+        price: Double,
+        quantity: Int,
+        profile: TradeFeeProfile,
+    ): TradeFeeEstimate = when (market) {
+        Market.US -> {
+            val amount = amount(price, quantity)
+            val shareCount = bd(quantity)
+            val charges = mutableListOf<Pair<String, BigDecimal>>()
+            if (tradeType == TradeType.SELL) {
+                charges += usSection31Fee(amount)
+                charges += usFinraTaf(shareCount)
+            }
+            buildEstimate(
+                coverage = profile.coverage,
+                market = market,
+                planLabel = profile.planLabel,
+                commissionComponents = listOf("佣金" to bd(0)),
+                taxComponents = charges,
+                note = profile.note,
+            )
+        }
+
+        else -> unsupportedEstimate(profile.note)
+    }
+
     private fun hsbcTrade25CommissionHk(
         standardCommission: BigDecimal,
         monthlyTurnoverHkdBeforeTrade: Double?,
@@ -662,6 +794,10 @@ object TradeFeeEstimator {
         charges += "会财局征费" to max(amount * bd("0.0000015"), bd("0.01"))
         when (settlementRule) {
             HkSettlementRule.ZHUORUI -> charges += "交收费" to max(amount * bd("0.000052"), bd("0.01"))
+            HkSettlementRule.CHIEF -> {
+                val raw = amount * bd("0.00002")
+                charges += "股份交收费" to min(max(raw, bd(2)), bd(100)).setScale(2, RoundingMode.HALF_UP)
+            }
             HkSettlementRule.EAST_MONEY -> {
                 val raw = amount * bd("0.00005")
                 charges += "结算费" to min(max(raw, bd("5.50")).toDouble(), 200.0).toBigDecimal().setScale(2, RoundingMode.HALF_UP)
@@ -775,6 +911,9 @@ object TradeFeeEstimator {
     private fun max(left: BigDecimal, right: BigDecimal): BigDecimal =
         if (left >= right) left else right
 
+    private fun min(left: BigDecimal, right: BigDecimal): BigDecimal =
+        if (left <= right) left else right
+
     private fun bd(value: Double): BigDecimal = BigDecimal.valueOf(value)
 
     private fun bd(value: Int): BigDecimal = BigDecimal.valueOf(value.toLong())
@@ -785,5 +924,6 @@ object TradeFeeEstimator {
         NONE,
         ZHUORUI,
         EAST_MONEY,
+        CHIEF,
     }
 }

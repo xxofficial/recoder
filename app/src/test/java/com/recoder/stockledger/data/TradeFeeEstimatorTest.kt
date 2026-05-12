@@ -119,4 +119,48 @@ class TradeFeeEstimatorTest {
         assertEquals(3.00, estimate.commission, 0.0001)
         assertTrue(estimate.detail.contains("未自动加入老客户差异化平台费"))
     }
+
+    @Test
+    fun `chief hk buy uses online commission minimum and no platform fee`() {
+        val estimate = TradeFeeEstimator.estimate(
+            platform = BrokerPlatform.CHIEF,
+            market = Market.HK,
+            tradeType = TradeType.BUY,
+            price = 20.0,
+            quantity = 1000,
+        )
+
+        assertEquals(20.00, estimate.commission, 0.0001)
+        assertEquals(23.70, estimate.tax, 0.0001)
+        assertTrue(estimate.detail.contains("平台费 HK$0.00"))
+    }
+
+    @Test
+    fun `chief us buy applies platform and clearing fees`() {
+        val estimate = TradeFeeEstimator.estimate(
+            platform = BrokerPlatform.CHIEF,
+            market = Market.US,
+            tradeType = TradeType.BUY,
+            price = 10.0,
+            quantity = 100,
+        )
+
+        assertEquals(0.99, estimate.commission, 0.0001)
+        assertEquals(0.30, estimate.tax, 0.0001)
+    }
+
+    @Test
+    fun `schwab us sell keeps zero commission and includes industry fees`() {
+        val estimate = TradeFeeEstimator.estimate(
+            platform = BrokerPlatform.SCHWAB,
+            market = Market.US,
+            tradeType = TradeType.SELL,
+            price = 50.0,
+            quantity = 10,
+        )
+
+        assertEquals(0.00, estimate.commission, 0.0001)
+        assertEquals(0.02, estimate.tax, 0.0001)
+        assertTrue(estimate.detail.contains("行业规费"))
+    }
 }

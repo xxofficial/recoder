@@ -110,6 +110,8 @@ enum class BrokerPlatform(
     HSBC("汇丰银行", "HS"),
     WEBULL("盈立证券", "盈立"),
     ZHUORUI("卓锐证券", "卓锐"),
+    CHIEF("致富证券", "致富"),
+    SCHWAB("嘉信国际", "嘉信"),
     ;
 
     companion object {

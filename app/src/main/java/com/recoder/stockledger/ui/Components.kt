@@ -1541,15 +1541,27 @@ fun PlatformLogoBadge(
             .padding(6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            painter = painterResource(platformLogoRes(platform)),
-            contentDescription = platform.label,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        val logoRes = platformLogoRes(platform)
+        if (logoRes != null) {
+            Image(
+                painter = painterResource(logoRes),
+                contentDescription = platform.label,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            Text(
+                text = platform.shortLabel,
+                color = ForegroundPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
-private fun platformLogoRes(platform: BrokerPlatform): Int = when (platform) {
+private fun platformLogoRes(platform: BrokerPlatform): Int? = when (platform) {
     BrokerPlatform.UNSPECIFIED -> R.drawable.platform_east_money
     BrokerPlatform.ALIPAY -> R.drawable.platform_alipay
     BrokerPlatform.EAST_MONEY -> R.drawable.platform_east_money
@@ -1557,7 +1569,8 @@ private fun platformLogoRes(platform: BrokerPlatform): Int = when (platform) {
     BrokerPlatform.HSBC -> R.drawable.platform_hsbc
     BrokerPlatform.WEBULL -> R.drawable.platform_webull
     BrokerPlatform.ZHUORUI -> R.drawable.platform_zhuorui
+    BrokerPlatform.CHIEF,
+    BrokerPlatform.SCHWAB -> null
 }
-
 
 

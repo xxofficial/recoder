@@ -66,7 +66,6 @@ fun StockDetailRoute(
     analysis: ProfitAnalysisUiModel,
     displayCurrency: DisplayCurrency,
     onBack: () -> Unit,
-    onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var selectedRange by rememberSaveable { mutableStateOf(DetailRange.ALL) }
     var customStartDate by rememberSaveable { mutableStateOf("") }
@@ -256,7 +255,7 @@ fun StockDetailRoute(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
-                    .padding(start = 20.dp, end = 20.dp, bottom = 120.dp),
+                    .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 // Section 1: 累计盈亏
@@ -384,11 +383,6 @@ fun StockDetailRoute(
             }
         }
 
-        BottomPillNavigation(
-            current = TopLevelDestination.ANALYSIS,
-            onDestinationSelected = onDestinationSelected,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
     }
 }
 
@@ -440,7 +434,6 @@ private fun StockDetailRoutePreview() {
             analysis = PreviewFixtures.profitAnalysis,
             displayCurrency = DisplayCurrency.USD,
             onBack = {},
-            onDestinationSelected = {},
         )
     }
 }

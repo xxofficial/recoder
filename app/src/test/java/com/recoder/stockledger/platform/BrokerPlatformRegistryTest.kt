@@ -16,4 +16,19 @@ class BrokerPlatformRegistryTest {
         assertTrue(ImportSourceChannel.ZHUORUI_EMAIL in adapter.supportedImportChannels)
         assertTrue(ImportSourceChannel.PDF_STATEMENT in adapter.supportedImportChannels)
     }
+
+    @Test
+    fun `registry exposes chief and schwab platform capabilities`() {
+        val chief = BrokerPlatformRegistry().adapterFor(BrokerPlatform.CHIEF)
+        val schwab = BrokerPlatformRegistry().adapterFor(BrokerPlatform.SCHWAB)
+
+        requireNotNull(chief)
+        assertTrue(Market.HK in chief.supportedMarkets)
+        assertTrue(Market.US in chief.supportedMarkets)
+        assertTrue(ImportSourceChannel.PDF_STATEMENT in chief.supportedImportChannels)
+
+        requireNotNull(schwab)
+        assertTrue(Market.US in schwab.supportedMarkets)
+        assertTrue(ImportSourceChannel.PDF_STATEMENT in schwab.supportedImportChannels)
+    }
 }

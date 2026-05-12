@@ -28,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,7 @@ import com.recoder.stockledger.StockLedgerApplication
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.recoder.stockledger.data.BrokerPlatform
@@ -89,6 +91,10 @@ fun StockLedgerApp(
 ) {
     val navController = rememberNavController()
     val uiState by ledgerViewModel.uiState.collectAsStateWithLifecycle()
+    val currentBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = currentBackStackEntry?.destination?.route
+    val drawerGesturesEnabled = currentRoute != Routes.FullRanking &&
+        currentRoute?.startsWith("${Routes.StockDetail}/") != true
     val coroutineScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -112,10 +118,15 @@ fun StockLedgerApp(
             }
         }
     }
+    LaunchedEffect(drawerGesturesEnabled) {
+        if (!drawerGesturesEnabled && drawerState.isOpen) {
+            drawerState.close()
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = true,
+        gesturesEnabled = drawerGesturesEnabled,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.fillMaxWidth(0.78f),
@@ -262,11 +273,9 @@ fun StockLedgerApp(
                         onSyncZhuoruiMailboxNow = ledgerViewModel::syncZhuoruiMailboxNow,
                         onEnableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(true) },
                         onDisableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(false) },
-                        pdfImportPassword = uiState.statementPdfPassword,
                         pdfImportStatusMessage = uiState.pdfImportStatusMessage,
                         pdfImportProgressFraction = uiState.pdfImportProgressFraction,
                         hasFailedPdfImports = uiState.hasFailedPdfImports,
-                        onPdfImportPasswordChange = ledgerViewModel::updateStatementPdfPassword,
                         onImportPdfStatements = { platform ->
                             // Clear status before launching picker
                             ledgerViewModel.clearPdfImportStatus()
@@ -446,26 +455,6 @@ fun StockLedgerApp(
                         onSecurityClick = { symbol, market ->
                             navController.navigate(Routes.stockDetail(symbol, market))
                         },
-                        onDestinationSelected = { destination ->
-                            when (destination) {
-                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                            }
-                        },
                     )
                 }
 
@@ -484,26 +473,6 @@ fun StockLedgerApp(
                         analysis = uiState.profitAnalysis,
                         displayCurrency = uiState.displayCurrency,
                         onBack = { navController.popBackStack() },
-                        onDestinationSelected = { destination ->
-                            when (destination) {
-                                TopLevelDestination.HOLDINGS -> navController.navigate(Routes.Holdings) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                                TopLevelDestination.ANALYSIS -> navController.navigate(Routes.Analysis) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                                TopLevelDestination.OPERATIONS -> navController.navigate(Routes.Operations) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                                TopLevelDestination.TRANSACTIONS -> navController.navigate(Routes.Transactions) {
-                                    launchSingleTop = true
-                                    popUpTo(Routes.Holdings) { saveState = true }
-                                }
-                            }
-                        },
                     )
                 }
             }

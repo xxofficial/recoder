@@ -1703,7 +1703,6 @@ fun FullRankingRoute(
     onCustomEndChange: (String) -> Unit = {},
     onBack: () -> Unit,
     onSecurityClick: (String, String) -> Unit,
-    onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
     var showProfit by rememberSaveable { mutableStateOf(true) }
     var sortAscending by rememberSaveable { mutableStateOf(false) }
@@ -1843,7 +1842,7 @@ fun FullRankingRoute(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
-                    .padding(start = 20.dp, end = 20.dp, bottom = 120.dp),
+                    .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 if (sorted.isEmpty()) {
@@ -1903,11 +1902,6 @@ fun FullRankingRoute(
             }
         }
 
-        BottomPillNavigation(
-            current = TopLevelDestination.ANALYSIS,
-            onDestinationSelected = onDestinationSelected,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
     }
 }
 
@@ -1938,7 +1932,6 @@ private fun FullRankingRoutePreview() {
             exchangeRates = PreviewFixtures.exchangeRates,
             onBack = {},
             onSecurityClick = { _, _ -> },
-            onDestinationSelected = {},
         )
     }
 }
