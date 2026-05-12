@@ -1536,7 +1536,8 @@ fun PlatformLogoBadge(
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(10.dp)
-    val fullBleedLogo = platformUsesFullBleedLogo(platform)
+    val logoRes = platformLogoRes(platform)
+    val fullBleedLogo = logoRes != null
     Box(
         modifier = modifier
             .clip(shape)
@@ -1552,7 +1553,6 @@ fun PlatformLogoBadge(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        val logoRes = platformLogoRes(platform)
         if (logoRes != null) {
             Image(
                 painter = painterResource(logoRes),
@@ -1583,9 +1583,4 @@ private fun platformLogoRes(platform: BrokerPlatform): Int? = when (platform) {
     BrokerPlatform.ZHUORUI -> R.drawable.platform_zhuorui
     BrokerPlatform.CHIEF -> R.drawable.platform_chief
     BrokerPlatform.SCHWAB -> R.drawable.platform_schwab
-}
-
-private fun platformUsesFullBleedLogo(platform: BrokerPlatform): Boolean = when (platform) {
-    BrokerPlatform.CHIEF -> true
-    else -> false
 }
