@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,6 +102,9 @@ fun StockLedgerApp(
         }
     }
     var pendingPdfImportPlatform by remember { mutableStateOf<BrokerPlatform?>(null) }
+    var analysisRange by rememberSaveable { mutableStateOf(AdvancedProfitRange.THIS_MONTH) }
+    var analysisCustomStart by rememberSaveable { mutableStateOf("") }
+    var analysisCustomEnd by rememberSaveable { mutableStateOf("") }
     val pdfImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
             pendingPdfImportPlatform?.let { platform ->
@@ -111,7 +115,7 @@ fun StockLedgerApp(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = false,
+        gesturesEnabled = true,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.fillMaxWidth(0.78f),
@@ -174,6 +178,12 @@ fun StockLedgerApp(
                         displayCurrency = uiState.displayCurrency,
                         exchangeRates = uiState.exchangeRates,
                         selectedPlatform = uiState.selectedPlatform,
+                        selectedRange = analysisRange,
+                        customStart = analysisCustomStart,
+                        customEnd = analysisCustomEnd,
+                        onSelectedRangeChange = { analysisRange = it },
+                        onCustomStartChange = { analysisCustomStart = it },
+                        onCustomEndChange = { analysisCustomEnd = it },
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onSettingsClick = { navController.navigate(Routes.Settings) },
                         onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
@@ -252,11 +262,11 @@ fun StockLedgerApp(
                         onSyncZhuoruiMailboxNow = ledgerViewModel::syncZhuoruiMailboxNow,
                         onEnableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(true) },
                         onDisableZhuoruiEmailAutoImport = { ledgerViewModel.setZhuoruiEmailAutoImportEnabled(false) },
-                        pdfImportPassword = uiState.zhuoruiStatementPdfPassword,
+                        pdfImportPassword = uiState.statementPdfPassword,
                         pdfImportStatusMessage = uiState.pdfImportStatusMessage,
                         pdfImportProgressFraction = uiState.pdfImportProgressFraction,
                         hasFailedPdfImports = uiState.hasFailedPdfImports,
-                        onPdfImportPasswordChange = ledgerViewModel::updateZhuoruiStatementPdfPassword,
+                        onPdfImportPasswordChange = ledgerViewModel::updateStatementPdfPassword,
                         onImportPdfStatements = { platform ->
                             // Clear status before launching picker
                             ledgerViewModel.clearPdfImportStatus()
@@ -360,6 +370,7 @@ fun StockLedgerApp(
                         onCashCurrencySelected = ledgerViewModel::selectCashCurrency,
                         onSymbolChange = ledgerViewModel::onSymbolInputChanged,
                         onDateChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(tradeDate = value) } },
+                        onTimeChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(tradeTime = value) } },
                         onPriceChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(priceLabel = value) } },
                         onQuantityChange = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(quantityLabel = value) } },
                         onCommissionChange = ledgerViewModel::updateTradeCommission,
@@ -406,10 +417,12 @@ fun StockLedgerApp(
                         onZhuoruiPromoChange = ledgerViewModel::updateZhuoruiPromoConfig,
                         onSaveZhuoruiPromo = ledgerViewModel::saveZhuoruiPromoConfig,
                         alibabaBailianApiKey = uiState.alibabaBailianApiKey,
+                        statementPdfPassword = uiState.statementPdfPassword,
                         pdfImportMode = uiState.pdfImportMode,
                         textImportModel = uiState.textImportModel,
                         llmApiBaseUrl = uiState.llmApiBaseUrl,
                         onAlibabaBailianApiKeyChange = ledgerViewModel::updateAlibabaBailianApiKey,
+                        onStatementPdfPasswordChange = ledgerViewModel::updateStatementPdfPassword,
                         onPdfImportModeChange = ledgerViewModel::updatePdfImportMode,
                         onTextImportModelChange = ledgerViewModel::updateTextImportModel,
                         onLlmApiBaseUrlChange = ledgerViewModel::updateLlmApiBaseUrl,
@@ -423,6 +436,12 @@ fun StockLedgerApp(
                         analysis = uiState.profitAnalysis,
                         displayCurrency = uiState.displayCurrency,
                         exchangeRates = uiState.exchangeRates,
+                        selectedRange = analysisRange,
+                        customStart = analysisCustomStart,
+                        customEnd = analysisCustomEnd,
+                        onSelectedRangeChange = { analysisRange = it },
+                        onCustomStartChange = { analysisCustomStart = it },
+                        onCustomEndChange = { analysisCustomEnd = it },
                         onBack = { navController.popBackStack() },
                         onSecurityClick = { symbol, market ->
                             navController.navigate(Routes.stockDetail(symbol, market))

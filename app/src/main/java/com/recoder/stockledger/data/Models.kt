@@ -230,6 +230,7 @@ data class TradeFormState(
     val market: Market,
     val symbolOrName: String,
     val tradeDate: String,
+    val tradeTime: String = "",
     val priceLabel: String,
     val quantityLabel: String,
     val commissionLabel: String,

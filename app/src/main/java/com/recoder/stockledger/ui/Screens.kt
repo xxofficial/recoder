@@ -615,10 +615,10 @@ fun OperationsRoute(
                         InputFieldBlock(
                             label = "PDF结单密码",
                             value = pdfImportPassword,
-                            placeholder = "请输入PDF文件密码",
+                            placeholder = "如无密码可留空",
                             isPassword = true,
                             keyboardType = KeyboardType.Password,
-                            supportingText = "密码在结单PDF文件名中或由券商提供",
+                            supportingText = "按当前交易平台分别保存",
                             onValueChange = onPdfImportPasswordChange,
                         )
                         FilledActionButton(
@@ -995,6 +995,7 @@ fun TradeEntryRoute(
     onCashCurrencySelected: (DisplayCurrency) -> Unit,
     onSymbolChange: (String) -> Unit,
     onDateChange: (String) -> Unit,
+    onTimeChange: (String) -> Unit,
     onPriceChange: (String) -> Unit,
     onQuantityChange: (String) -> Unit,
     onCommissionChange: (String) -> Unit,
@@ -1009,6 +1010,7 @@ fun TradeEntryRoute(
     var quantityValue by remember { mutableStateOf(TextFieldValue(state.quantityLabel, TextRange(state.quantityLabel.length))) }
     var commissionValue by remember { mutableStateOf(TextFieldValue(state.commissionLabel, TextRange(state.commissionLabel.length))) }
     var taxValue by remember { mutableStateOf(TextFieldValue(state.taxLabel, TextRange(state.taxLabel.length))) }
+    var timeValue by remember { mutableStateOf(TextFieldValue(state.tradeTime, TextRange(state.tradeTime.length))) }
     var noteValue by remember { mutableStateOf(TextFieldValue(state.note, TextRange(state.note.length))) }
 
     LaunchedEffect(state.symbolOrName) {
@@ -1034,6 +1036,11 @@ fun TradeEntryRoute(
     LaunchedEffect(state.taxLabel) {
         if (taxValue.text != state.taxLabel) {
             taxValue = TextFieldValue(state.taxLabel, TextRange(state.taxLabel.length))
+        }
+    }
+    LaunchedEffect(state.tradeTime) {
+        if (timeValue.text != state.tradeTime) {
+            timeValue = TextFieldValue(state.tradeTime, TextRange(state.tradeTime.length))
         }
     }
     LaunchedEffect(state.note) {
@@ -1149,10 +1156,28 @@ fun TradeEntryRoute(
                     }
                 }
 
-                TradeEntryDateField(
-                    value = state.tradeDate,
-                    onValueChange = onDateChange,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    TradeEntryDateField(
+                        value = state.tradeDate,
+                        onValueChange = onDateChange,
+                        modifier = Modifier.weight(1f),
+                    )
+                    InputFieldBlock(
+                        label = "交易时间",
+                        value = timeValue,
+                        placeholder = "HH:MM:SS",
+                        supportingText = "24小时制",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Text,
+                        onValueChange = {
+                            timeValue = it
+                            onTimeChange(it.text)
+                        },
+                    )
+                }
 
                 if (isSecurityTrade) {
                     Row(
@@ -1640,6 +1665,7 @@ private fun TradeEntryRoutePreview() {
             onCashCurrencySelected = {},
             onSymbolChange = {},
             onDateChange = {},
+            onTimeChange = {},
             onPriceChange = {},
             onQuantityChange = {},
             onCommissionChange = {},

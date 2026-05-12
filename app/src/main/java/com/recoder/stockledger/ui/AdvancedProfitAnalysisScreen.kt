@@ -103,7 +103,7 @@ private val advancedMonthTitleFormatter = DateTimeFormatter.ofPattern("yyyy年M�
 private val advancedYearFormatter = DateTimeFormatter.ofPattern("yyyy年")
 private val advancedWeekFields: WeekFields = WeekFields.of(DayOfWeek.SUNDAY, 1)
 
-private enum class AdvancedProfitRange(val label: String) {
+enum class AdvancedProfitRange(val label: String) {
     ALL("全部"),
     THIS_MONTH("本月"),
     ONE_MONTH("近1月"),
@@ -164,6 +164,12 @@ fun AdvancedProfitAnalysisRoute(
     displayCurrency: DisplayCurrency,
     exchangeRates: ExchangeRates,
     selectedPlatform: BrokerPlatform?,
+    selectedRange: AdvancedProfitRange = AdvancedProfitRange.THIS_MONTH,
+    customStart: String = "",
+    customEnd: String = "",
+    onSelectedRangeChange: (AdvancedProfitRange) -> Unit = {},
+    onCustomStartChange: (String) -> Unit = {},
+    onCustomEndChange: (String) -> Unit = {},
     onPlatformClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
@@ -171,7 +177,6 @@ fun AdvancedProfitAnalysisRoute(
     onSecurityClick: (String, String) -> Unit = { _, _ -> },
     onViewFullRanking: () -> Unit = {},
 ) {
-    var selectedRange by rememberSaveable { mutableStateOf(AdvancedProfitRange.THIS_MONTH) }
     var chartMetric by rememberSaveable { mutableStateOf(AdvancedChartMetric.RETURN) }
     var calendarMode by rememberSaveable { mutableStateOf(AdvancedCalendarMode.DAY) }
     var valueUnit by rememberSaveable { mutableStateOf(AdvancedValueUnit.AMOUNT) }
@@ -191,8 +196,6 @@ fun AdvancedProfitAnalysisRoute(
             }
     }
     val firstDate = allPoints.firstOrNull()?.date ?: analysis.latestDate
-    var customStart by rememberSaveable { mutableStateOf(firstDate.toString()) }
-    var customEnd by rememberSaveable { mutableStateOf(analysis.latestDate.toString()) }
     var selectedSecurityKey by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(calendarMode) {
@@ -202,10 +205,10 @@ fun AdvancedProfitAnalysisRoute(
         val currentStart = runCatching { LocalDate.parse(customStart) }.getOrNull()
         val currentEnd = runCatching { LocalDate.parse(customEnd) }.getOrNull()
         if (currentStart == null || currentStart.isBefore(firstDate) || currentStart.isAfter(analysis.latestDate)) {
-            customStart = firstDate.toString()
+            onCustomStartChange(firstDate.toString())
         }
         if (currentEnd == null || currentEnd.isBefore(firstDate) || currentEnd.isAfter(analysis.latestDate)) {
-            customEnd = analysis.latestDate.toString()
+            onCustomEndChange(analysis.latestDate.toString())
         }
     }
 
@@ -293,7 +296,7 @@ fun AdvancedProfitAnalysisRoute(
                     options = AdvancedProfitRange.entries,
                     selected = selectedRange,
                     label = { it.label },
-                    onSelected = { selectedRange = it },
+                    onSelected = onSelectedRangeChange,
                 )
 
                 if (selectedRange == AdvancedProfitRange.CUSTOM) {
@@ -305,13 +308,13 @@ fun AdvancedProfitAnalysisRoute(
                             label = "开始日期",
                             value = customStart,
                             modifier = Modifier.weight(1f),
-                            onValueChange = { customStart = it },
+                            onValueChange = onCustomStartChange,
                         )
                         AdvancedDateField(
                             label = "结束日期",
                             value = customEnd,
                             modifier = Modifier.weight(1f),
-                            onValueChange = { customEnd = it },
+                            onValueChange = onCustomEndChange,
                         )
                     }
                 }
@@ -1692,13 +1695,16 @@ fun FullRankingRoute(
     analysis: ProfitAnalysisUiModel,
     displayCurrency: DisplayCurrency,
     exchangeRates: ExchangeRates,
+    selectedRange: AdvancedProfitRange = AdvancedProfitRange.THIS_MONTH,
+    customStart: String = "",
+    customEnd: String = "",
+    onSelectedRangeChange: (AdvancedProfitRange) -> Unit = {},
+    onCustomStartChange: (String) -> Unit = {},
+    onCustomEndChange: (String) -> Unit = {},
     onBack: () -> Unit,
     onSecurityClick: (String, String) -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
 ) {
-    var selectedRange by rememberSaveable { mutableStateOf(AdvancedProfitRange.ALL) }
-    var customStart by rememberSaveable { mutableStateOf(analysis.dailyPoints.minOfOrNull { it.date }?.toString().orEmpty()) }
-    var customEnd by rememberSaveable { mutableStateOf(analysis.latestDate.toString()) }
     var showProfit by rememberSaveable { mutableStateOf(true) }
     var sortAscending by rememberSaveable { mutableStateOf(false) }
 
@@ -1708,6 +1714,16 @@ fun FullRankingRoute(
         }
     }
     val firstDate = allPoints.firstOrNull()?.date ?: analysis.latestDate
+    LaunchedEffect(firstDate, analysis.latestDate) {
+        val currentStart = runCatching { LocalDate.parse(customStart) }.getOrNull()
+        val currentEnd = runCatching { LocalDate.parse(customEnd) }.getOrNull()
+        if (currentStart == null || currentStart.isBefore(firstDate) || currentStart.isAfter(analysis.latestDate)) {
+            onCustomStartChange(firstDate.toString())
+        }
+        if (currentEnd == null || currentEnd.isBefore(firstDate) || currentEnd.isAfter(analysis.latestDate)) {
+            onCustomEndChange(analysis.latestDate.toString())
+        }
+    }
 
     val (rangeStart, rangeEnd) = remember(selectedRange, customStart, customEnd, firstDate, analysis.latestDate) {
         resolveAdvancedRangeWindow(
@@ -1736,7 +1752,7 @@ fun FullRankingRoute(
             .fillMaxSize()
             .background(BackgroundPrimary),
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             ScreenHeader(title = "盈亏排行", onBack = onBack)
 
             // Fixed: time range selector + tabs
@@ -1750,7 +1766,7 @@ fun FullRankingRoute(
                     options = AdvancedProfitRange.entries,
                     selected = selectedRange,
                     label = { it.label },
-                    onSelected = { selectedRange = it },
+                    onSelected = onSelectedRangeChange,
                 )
                 if (selectedRange == AdvancedProfitRange.CUSTOM) {
                     Row(
@@ -1761,13 +1777,13 @@ fun FullRankingRoute(
                             label = "开始日期",
                             value = customStart,
                             modifier = Modifier.weight(1f),
-                            onValueChange = { customStart = it },
+                            onValueChange = onCustomStartChange,
                         )
                         AdvancedDateField(
                             label = "结束日期",
                             value = customEnd,
                             modifier = Modifier.weight(1f),
-                            onValueChange = { customEnd = it },
+                            onValueChange = onCustomEndChange,
                         )
                     }
                 }

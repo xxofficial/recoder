@@ -164,7 +164,7 @@ data class LedgerUiState(
     val zhuoruiEmailAutoImportEnabled: Boolean = false,
     val zhuoruiEmailSyncStatusMessage: String? = null,
     val zhuoruiPromoConfig: ZhuoruiPromoConfig = ZhuoruiPromoConfig(),
-    val zhuoruiStatementPdfPassword: String = "",
+    val statementPdfPassword: String = "",
     val pdfImportStatusMessage: String? = null,
     val pdfImportProgressFraction: Float? = null,
     val hasFailedPdfImports: Boolean = false,
@@ -231,7 +231,7 @@ class LedgerViewModel(
     private val zhuoruiEmailManualSyncOptions = MutableStateFlow(ZhuoruiEmailManualSyncOptions())
     private val zhuoruiEmailAutoImportEnabled = MutableStateFlow(loadZhuoruiEmailAutoImportEnabled())
     private val zhuoruiEmailSyncStatusMessage = MutableStateFlow(loadZhuoruiEmailSyncStatusMessage())
-    private val zhuoruiStatementPdfPassword = MutableStateFlow(loadZhuoruiStatementPdfPassword())
+    private val statementPdfPasswords = MutableStateFlow(loadStatementPdfPasswords())
     private val pdfImportStatusMessage = MutableStateFlow<String?>(null)
     private val pdfImportProgressFraction = MutableStateFlow<Float?>(null)
     private val failedPdfUris = MutableStateFlow<List<Uri>>(emptyList())
@@ -497,8 +497,13 @@ class LedgerViewModel(
         state.copy(zhuoruiEmailSyncStatusMessage = message)
     }.combine(zhuoruiPromoConfig) { state, promo ->
         state.copy(zhuoruiPromoConfig = promo)
-    }.combine(zhuoruiStatementPdfPassword) { state, password ->
-        state.copy(zhuoruiStatementPdfPassword = password)
+    }.combine(statementPdfPasswords) { state, passwords ->
+        state.copy(
+            statementPdfPassword = state.selectedPlatform
+                ?.takeIf { it.isConfigurable }
+                ?.let { platform -> passwords[platform].orEmpty() }
+                .orEmpty(),
+        )
     }.combine(pdfImportStatusMessage) { state, message ->
         state.copy(pdfImportStatusMessage = message)
     }.combine(pdfImportProgressFraction) { state, fraction ->
@@ -614,6 +619,7 @@ class LedgerViewModel(
                         ""
                     },
                     tradeDate = transaction.tradeDate,
+                    tradeTime = normalizeTradeTimeLabel(transaction.tradeTime),
                     priceLabel = formatEditableAmount(transaction.price),
                     quantityLabel = if (tradeType.isSecurityTrade) transaction.quantity.toString() else "1",
                     commissionLabel = formatEditableAmount(transaction.commission),
@@ -1105,6 +1111,7 @@ class LedgerViewModel(
                 market = normalizeCashMarket(currentDraft.market),
             )
         }
+        val normalizedTradeTime = normalizeTradeTimeLabel(currentDraft.tradeTime)
         val input = TradeDraftInput(
             tradeType = currentDraft.selectedType,
             platform = currentDraft.platform,
@@ -1121,7 +1128,7 @@ class LedgerViewModel(
             commission = if (currentDraft.selectedType.isSecurityTrade) parseDecimal(currentDraft.commissionLabel) else 0.0,
             tax = if (currentDraft.selectedType.isSecurityTrade) parseDecimal(currentDraft.taxLabel) else 0.0,
             note = currentDraft.note.trim(),
-            tradeTime = currentEditingTrade?.tradeTime ?: LocalTime.now().format(timeFormatter),
+            tradeTime = normalizedTradeTime,
             createdAt = currentEditingTrade?.createdAt ?: System.currentTimeMillis(),
         )
 
@@ -1395,6 +1402,8 @@ class LedgerViewModel(
 
         if (draft.tradeDate.isBlank()) return "请选择交易日期"
         if (parseTradeDateOrNull(draft.tradeDate) == null) return "请选择有效的交易日期"
+        if (draft.tradeTime.isBlank()) return "请输入交易时间"
+        if (parseTradeTimeOrNull(draft.tradeTime) == null) return "请输入有效的交易时间（HH:MM:SS）"
 
         if (!draft.selectedType.isSecurityTrade) {
             val amount = parseDecimal(draft.priceLabel)
@@ -2819,8 +2828,13 @@ class LedgerViewModel(
     }
 
     private fun parseTradeTimeOrNull(value: String): LocalTime? = runCatching {
-        LocalTime.parse(value)
+        LocalTime.parse(value.trim())
     }.getOrNull()
+
+    private fun normalizeTradeTimeLabel(value: String): String =
+        parseTradeTimeOrNull(value)
+            ?.format(tradeTimeFormatter)
+            ?: LocalTime.now().format(tradeTimeFormatter)
 
     private fun resolveSelectedFeePlanId(platform: BrokerPlatform): String =
         TradeFeeEstimator.resolvePlanId(platform, platformFeePlanSelections.value[platform])
@@ -2867,8 +2881,7 @@ class LedgerViewModel(
     private fun calculateHsbcMonthlyTurnoverHkdBeforeTrade(draft: TradeFormState): Double {
         val draftDate = parseTradeDateOrNull(draft.tradeDate) ?: return 0.0
         val editingSession = editingTrade.value
-        val draftTime = editingSession?.tradeTime
-            ?.let(::parseTradeTimeOrNull)
+        val draftTime = parseTradeTimeOrNull(draft.tradeTime)
             ?: if (draftDate == LocalDate.now()) LocalTime.now() else LocalTime.MAX
         return transactionSnapshot.value
             .filterNot { transaction -> transaction.id == editingSession?.transactionId }
@@ -2969,6 +2982,7 @@ class LedgerViewModel(
             platform = preferredPlatform,
             market = if (type.isSecurityTrade) base.market else preferredCashMarket,
             tradeDate = current?.tradeDate ?: base.tradeDate,
+            tradeTime = current?.tradeTime ?: base.tradeTime,
             note = current?.note.orEmpty(),
             priceLabel = if (current?.selectedType == type) current.priceLabel else "",
         )
@@ -3188,22 +3202,44 @@ private data class RefreshMeta(
     private fun loadZhuoruiEmailLastSyncAt(): Long =
         settingsStore.loadZhuoruiEmailLastSyncAt()
 
-    private fun loadZhuoruiStatementPdfPassword(): String =
-        settingsStore.loadZhuoruiStatementPdfPassword()
+    private fun loadStatementPdfPasswords(): Map<BrokerPlatform, String> =
+        BrokerPlatform.configurableEntries
+            .associateWith { platform -> settingsStore.loadStatementPdfPassword(platform) }
+            .filterValues { it.isNotBlank() }
+
+    private fun selectedStatementPdfPlatform(): BrokerPlatform? =
+        selectedPlatform.value?.takeIf { it.isConfigurable }
+
+    private fun statementPdfPasswordFor(platform: BrokerPlatform): String =
+        statementPdfPasswords.value[platform].orEmpty()
+
+    fun updateStatementPdfPassword(password: String) {
+        val platform = selectedStatementPdfPlatform() ?: return
+        statementPdfPasswords.update { current ->
+            if (password.isBlank()) {
+                current - platform
+            } else {
+                current + (platform to password)
+            }
+        }
+        settingsStore.saveStatementPdfPassword(platform, password)
+    }
 
     fun updateZhuoruiStatementPdfPassword(password: String) {
-        zhuoruiStatementPdfPassword.value = password
+        statementPdfPasswords.update { current ->
+            if (password.isBlank()) {
+                current - BrokerPlatform.ZHUORUI
+            } else {
+                current + (BrokerPlatform.ZHUORUI to password)
+            }
+        }
         settingsStore.saveZhuoruiStatementPdfPassword(password)
     }
 
     fun importStatementPdfs(uris: List<Uri>, platform: BrokerPlatform) {
         failedPdfUris.value = emptyList()
         pdfImportProgressFraction.value = null
-        val password = zhuoruiStatementPdfPassword.value
-        if (password.isBlank()) {
-            pdfImportStatusMessage.value = "请先输入PDF结单密码"
-            return
-        }
+        val password = statementPdfPasswordFor(platform)
 
         when (pdfImportMode.value) {
             PdfImportMode.REGEX -> importStatementPdfsViaRegex(uris, platform, password)
@@ -3216,11 +3252,7 @@ private data class RefreshMeta(
         if (uris.isEmpty()) return
         failedPdfUris.value = emptyList()
         pdfImportProgressFraction.value = null
-        val password = zhuoruiStatementPdfPassword.value
-        if (password.isBlank()) {
-            pdfImportStatusMessage.value = "请先输入PDF结单密码"
-            return
-        }
+        val password = statementPdfPasswordFor(platform)
 
         when (pdfImportMode.value) {
             PdfImportMode.REGEX -> importStatementPdfsViaRegex(uris, platform, password)
@@ -3452,6 +3484,7 @@ private data class RefreshMeta(
         const val EPSILON = 1e-6
 
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+        val tradeTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
         val monthDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM/dd")
         val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd")
         val numberFormatter = DecimalFormat("#,##0.00")

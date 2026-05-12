@@ -1236,6 +1236,7 @@ fun TradeEntryNoteField(
 fun TradeEntryDateField(
     value: String,
     onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val selectedDate = remember(value) {
@@ -1244,6 +1245,7 @@ fun TradeEntryDateField(
     InputFieldBlock(
         label = "交易日期",
         value = value,
+        modifier = modifier,
         trailingIcon = Icons.Filled.DateRange,
         onClick = {
             DatePickerDialog(
@@ -1556,7 +1558,6 @@ private fun platformLogoRes(platform: BrokerPlatform): Int = when (platform) {
     BrokerPlatform.WEBULL -> R.drawable.platform_webull
     BrokerPlatform.ZHUORUI -> R.drawable.platform_zhuorui
 }
-
 
 
 

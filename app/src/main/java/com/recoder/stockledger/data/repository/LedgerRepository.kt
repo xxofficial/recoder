@@ -1049,7 +1049,7 @@ class DefaultLedgerRepository(
         tradeTime: String,
     ): Double {
         val draftDate = runCatching { LocalDate.parse(tradeDate) }.getOrNull() ?: return 0.0
-        val draftTime = runCatching { LocalTime.parse(tradeTime, timeFormatter) }.getOrNull() ?: LocalTime.MAX
+        val draftTime = parseTradeTimeOrNull(tradeTime) ?: LocalTime.MAX
         return transactions.first()
             .asSequence()
             .mapNotNull { transaction ->
@@ -1063,7 +1063,7 @@ class DefaultLedgerRepository(
                 if (existingDate.year != draftDate.year || existingDate.month != draftDate.month) {
                     return@mapNotNull null
                 }
-                val existingTime = runCatching { LocalTime.parse(transaction.tradeTime, timeFormatter) }.getOrNull() ?: LocalTime.MAX
+                val existingTime = parseTradeTimeOrNull(transaction.tradeTime) ?: LocalTime.MAX
                 val isBeforeDraft = existingDate.isBefore(draftDate) ||
                     (existingDate == draftDate && existingTime <= draftTime)
                 if (!isBeforeDraft) return@mapNotNull null
@@ -1263,6 +1263,10 @@ class DefaultLedgerRepository(
 
     private fun messageTimestampMillis(message: Message): Long? =
         message.receivedDate?.time ?: message.sentDate?.time
+
+    private fun parseTradeTimeOrNull(value: String): LocalTime? = runCatching {
+        LocalTime.parse(value.trim())
+    }.getOrNull()
 
     private companion object {
         const val TAG = "LedgerRepository"

@@ -17,10 +17,12 @@ object StockLedgerPreferences {
     const val KEY_ZHUORUI_PROMO_START_DATE = "zhuorui_promo_start_date"
     const val KEY_ZHUORUI_PROMO_DURATION_DAYS = "zhuorui_promo_duration_days"
     const val KEY_ZHUORUI_STATEMENT_PDF_PASSWORD = "zhuorui_statement_pdf_password"
+    const val KEY_STATEMENT_PDF_PASSWORD_PREFIX = "statement_pdf_password_"
     const val KEY_OPENAI_API_KEY = "openai_api_key"
     const val KEY_ALIBABA_BAILIAN_API_KEY = "alibaba_bailian_api_key"
     const val KEY_VISION_IMPORT_MODEL = "vision_import_model"
     const val KEY_VISION_API_BASE_URL = "vision_api_base_url"
+    const val KEY_PDF_IMPORT_MODE = "pdf_import_mode"
     const val KEY_ZHUORUI_PDF_IMPORT_MODE = "zhuorui_pdf_import_mode"
     const val KEY_TEXT_IMPORT_MODEL = "text_import_model"
 }

@@ -53,10 +53,12 @@ fun SettingsRoute(
     onZhuoruiPromoChange: (ZhuoruiPromoConfig) -> Unit,
     onSaveZhuoruiPromo: () -> Unit,
     alibabaBailianApiKey: String,
+    statementPdfPassword: String,
     pdfImportMode: PdfImportMode,
     textImportModel: String,
     llmApiBaseUrl: String,
     onAlibabaBailianApiKeyChange: (String) -> Unit,
+    onStatementPdfPasswordChange: (String) -> Unit,
     onPdfImportModeChange: (PdfImportMode) -> Unit,
     onTextImportModelChange: (String) -> Unit,
     onLlmApiBaseUrlChange: (String) -> Unit,
@@ -134,6 +136,39 @@ fun SettingsRoute(
                             feePlan.selectedPlanDescription,
                             color = ForegroundMuted,
                             fontSize = 12.sp,
+                        )
+                    }
+                }
+
+                if (selectedPlatform?.isConfigurable == true) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            "${selectedPlatform.label}电子结单设置",
+                            color = ForegroundPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "不同交易平台的结单密码会分别保存；没有密码的结单可留空。",
+                            color = ForegroundSecondary,
+                            fontSize = 13.sp,
+                        )
+                        InputFieldBlock(
+                            label = "PDF结单密码",
+                            value = statementPdfPassword,
+                            placeholder = "如无密码可留空",
+                            isPassword = true,
+                            keyboardType = KeyboardType.Password,
+                            onValueChange = onStatementPdfPasswordChange,
                         )
                     }
                 }
@@ -225,8 +260,7 @@ fun SettingsRoute(
                     }
                 }
 
-                // Zhuorui PDF Import settings
-                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
+                if (selectedPlatform?.isConfigurable == true) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -237,7 +271,7 @@ fun SettingsRoute(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text("卓锐结单PDF导入设置", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${selectedPlatform.label}结单解析设置", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
                             "选择解析PDF结单的方式。正则匹配在本地运行，大模型方式需要联网并消耗API额度。",
                             color = ForegroundSecondary,
@@ -336,9 +370,11 @@ private fun SettingsRoutePreview() {
             onZhuoruiPromoChange = {},
             onSaveZhuoruiPromo = {},
             alibabaBailianApiKey = "",
+            statementPdfPassword = "",
             pdfImportMode = PdfImportMode.REGEX,
             textImportModel = "",
             onAlibabaBailianApiKeyChange = {},
+            onStatementPdfPasswordChange = {},
             onPdfImportModeChange = {},
             onTextImportModelChange = {},
             onPlatformClick = {},

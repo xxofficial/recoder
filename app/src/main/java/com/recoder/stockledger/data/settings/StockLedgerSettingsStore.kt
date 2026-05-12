@@ -28,6 +28,8 @@ interface StockLedgerSettingsStore {
     fun saveZhuoruiEmailSyncStatusMessage(message: String?)
     fun loadZhuoruiEmailLastSyncAt(): Long
     fun saveZhuoruiEmailLastSyncAt(timestampMillis: Long)
+    fun loadStatementPdfPassword(platform: BrokerPlatform): String
+    fun saveStatementPdfPassword(platform: BrokerPlatform, password: String)
     fun loadZhuoruiStatementPdfPassword(): String
     fun saveZhuoruiStatementPdfPassword(password: String)
     fun loadAlibabaBailianApiKey(): String
@@ -180,13 +182,30 @@ class SharedPreferencesStockLedgerSettingsStore(
             .apply()
     }
 
+    override fun loadStatementPdfPassword(platform: BrokerPlatform): String {
+        val platformPassword = preferences.getString(statementPdfPasswordKey(platform), null)
+        if (platformPassword != null) return platformPassword
+        return if (platform == BrokerPlatform.ZHUORUI) {
+            preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, "").orEmpty()
+        } else {
+            ""
+        }
+    }
+
+    override fun saveStatementPdfPassword(platform: BrokerPlatform, password: String) {
+        val editor = preferences.edit()
+            .putString(statementPdfPasswordKey(platform), password)
+        if (platform == BrokerPlatform.ZHUORUI) {
+            editor.putString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, password)
+        }
+        editor.apply()
+    }
+
     override fun loadZhuoruiStatementPdfPassword(): String =
-        preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, "").orEmpty()
+        loadStatementPdfPassword(BrokerPlatform.ZHUORUI)
 
     override fun saveZhuoruiStatementPdfPassword(password: String) {
-        preferences.edit()
-            .putString(StockLedgerPreferences.KEY_ZHUORUI_STATEMENT_PDF_PASSWORD, password)
-            .apply()
+        saveStatementPdfPassword(BrokerPlatform.ZHUORUI, password)
     }
 
     override fun loadAlibabaBailianApiKey(): String =
@@ -199,12 +218,16 @@ class SharedPreferencesStockLedgerSettingsStore(
     }
 
     override fun loadPdfImportMode(): PdfImportMode {
-        val name = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, PdfImportMode.REGEX.name)
+        val name = preferences.getString(
+            StockLedgerPreferences.KEY_PDF_IMPORT_MODE,
+            preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, PdfImportMode.REGEX.name),
+        )
         return PdfImportMode.entries.firstOrNull { it.name == name } ?: PdfImportMode.REGEX
     }
 
     override fun savePdfImportMode(mode: PdfImportMode) {
         preferences.edit()
+            .putString(StockLedgerPreferences.KEY_PDF_IMPORT_MODE, mode.name)
             .putString(StockLedgerPreferences.KEY_ZHUORUI_PDF_IMPORT_MODE, mode.name)
             .apply()
     }
@@ -226,4 +249,7 @@ class SharedPreferencesStockLedgerSettingsStore(
             .putString(StockLedgerPreferences.KEY_VISION_API_BASE_URL, url)
             .apply()
     }
+
+    private fun statementPdfPasswordKey(platform: BrokerPlatform): String =
+        StockLedgerPreferences.KEY_STATEMENT_PDF_PASSWORD_PREFIX + platform.name
 }
