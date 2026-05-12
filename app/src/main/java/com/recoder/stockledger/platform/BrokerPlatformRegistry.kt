@@ -68,12 +68,12 @@ class BrokerPlatformRegistry(
             DefaultBrokerPlatformAdapter(
                 platform = BrokerPlatform.CHIEF,
                 supportedMarkets = setOf(Market.HK, Market.US),
-                supportedImportChannels = setOf(ImportSourceChannel.PDF_STATEMENT),
+                supportedImportChannels = emptySet(),
             ),
             DefaultBrokerPlatformAdapter(
                 platform = BrokerPlatform.SCHWAB,
                 supportedMarkets = setOf(Market.US),
-                supportedImportChannels = setOf(ImportSourceChannel.PDF_STATEMENT),
+                supportedImportChannels = emptySet(),
             ),
         )
     }

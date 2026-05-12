@@ -3,6 +3,7 @@ package com.recoder.stockledger.platform
 import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.ImportSourceChannel
 import com.recoder.stockledger.data.Market
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,10 +26,10 @@ class BrokerPlatformRegistryTest {
         requireNotNull(chief)
         assertTrue(Market.HK in chief.supportedMarkets)
         assertTrue(Market.US in chief.supportedMarkets)
-        assertTrue(ImportSourceChannel.PDF_STATEMENT in chief.supportedImportChannels)
+        assertFalse(ImportSourceChannel.PDF_STATEMENT in chief.supportedImportChannels)
 
         requireNotNull(schwab)
         assertTrue(Market.US in schwab.supportedMarkets)
-        assertTrue(ImportSourceChannel.PDF_STATEMENT in schwab.supportedImportChannels)
+        assertFalse(ImportSourceChannel.PDF_STATEMENT in schwab.supportedImportChannels)
     }
 }

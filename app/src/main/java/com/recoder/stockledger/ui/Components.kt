@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -52,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -1533,12 +1535,21 @@ fun PlatformLogoBadge(
     platform: BrokerPlatform,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(10.dp)
+    val fullBleedLogo = platformUsesFullBleedLogo(platform)
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(shape)
             .background(BackgroundPrimary)
-            .border(1.dp, BorderSubtle, RoundedCornerShape(10.dp))
-            .padding(6.dp),
+            .then(
+                if (fullBleedLogo) {
+                    Modifier
+                } else {
+                    Modifier
+                        .border(1.dp, BorderSubtle, shape)
+                        .padding(6.dp)
+                },
+            ),
         contentAlignment = Alignment.Center,
     ) {
         val logoRes = platformLogoRes(platform)
@@ -1546,7 +1557,8 @@ fun PlatformLogoBadge(
             Image(
                 painter = painterResource(logoRes),
                 contentDescription = platform.label,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = if (fullBleedLogo) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+                contentScale = if (fullBleedLogo) ContentScale.Crop else ContentScale.Fit,
             )
         } else {
             Text(
@@ -1569,8 +1581,11 @@ private fun platformLogoRes(platform: BrokerPlatform): Int? = when (platform) {
     BrokerPlatform.HSBC -> R.drawable.platform_hsbc
     BrokerPlatform.WEBULL -> R.drawable.platform_webull
     BrokerPlatform.ZHUORUI -> R.drawable.platform_zhuorui
-    BrokerPlatform.CHIEF,
-    BrokerPlatform.SCHWAB -> null
+    BrokerPlatform.CHIEF -> R.drawable.platform_chief
+    BrokerPlatform.SCHWAB -> R.drawable.platform_schwab
 }
 
-
+private fun platformUsesFullBleedLogo(platform: BrokerPlatform): Boolean = when (platform) {
+    BrokerPlatform.CHIEF -> true
+    else -> false
+}

@@ -95,7 +95,20 @@ enum class MarketFilter(
 
 enum class PdfImportMode(val label: String) {
     REGEX("正则匹配 (本地)"),
-    TEXT_MODEL("大模型解析 (文本提取)")
+    TEXT_MODEL("大模型解析 (文本提取)"),
+    ;
+
+    val shortLabel: String
+        get() = when (this) {
+            REGEX -> "本地解析"
+            TEXT_MODEL -> "大模型解析"
+        }
+
+    val description: String
+        get() = when (this) {
+            REGEX -> "正则匹配在本地运行，适合格式稳定且已验证的平台结单。"
+            TEXT_MODEL -> "大模型会先提取 PDF 文本再解析，需要联网并消耗 API 额度。"
+        }
 }
 
 enum class BrokerPlatform(

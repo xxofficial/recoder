@@ -140,7 +140,7 @@ fun SettingsRoute(
                     }
                 }
 
-                if (selectedPlatform?.isConfigurable == true) {
+                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -158,7 +158,7 @@ fun SettingsRoute(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            "不同交易平台的结单密码会分别保存；没有密码的结单可留空。",
+                            "仅用于卓锐日结单 PDF；没有密码的结单可留空。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
@@ -260,7 +260,7 @@ fun SettingsRoute(
                     }
                 }
 
-                if (selectedPlatform?.isConfigurable == true) {
+                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -281,8 +281,13 @@ fun SettingsRoute(
                         FilterChipWrapRow(
                             options = PdfImportMode.entries,
                             selected = pdfImportMode,
-                            label = { it.label },
+                            label = { it.shortLabel },
                             onSelected = onPdfImportModeChange,
+                        )
+                        Text(
+                            text = pdfImportMode.description,
+                            color = ForegroundMuted,
+                            fontSize = 12.sp,
                         )
 
                         if (pdfImportMode != PdfImportMode.REGEX) {

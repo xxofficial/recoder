@@ -592,8 +592,7 @@ fun OperationsRoute(
                     }
                 }
 
-                // PDF Statement Import Section - Available for Configurable Platforms
-                if (selectedPlatform != BrokerPlatform.UNSPECIFIED && selectedPlatform?.isConfigurable == true) {
+                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
