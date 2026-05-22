@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
     tableName = "transactions",
     indices = [
         androidx.room.Index(value = ["symbol", "market"]),
+        androidx.room.Index(value = ["ledgerId"]),
     ],
 )
 data class TransactionEntity(
@@ -26,5 +27,7 @@ data class TransactionEntity(
     val tax: Double,
     val note: String,
     val createdAt: Long,
+    val ledgerId: Long = 1L,
+    val investorName: String? = null,
 )
 

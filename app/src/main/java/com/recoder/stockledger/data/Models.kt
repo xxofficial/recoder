@@ -255,6 +255,7 @@ data class TradeFormState(
     val feeEstimateSummary: String? = null,
     val feeEstimateDetail: String? = null,
     val canAutoEstimateFees: Boolean = false,
+    val investorName: String? = null,
 )
 
 data class SymbolLookupUiModel(

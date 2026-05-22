@@ -143,6 +143,7 @@ class SharedPreferencesStockLedgerSettingsStore(
         account = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, "").orEmpty(),
         password = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, "").orEmpty(),
         folder = preferences.getString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, "INBOX").orEmpty().ifBlank { "INBOX" },
+        targetLedgerId = preferences.getLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_TARGET_LEDGER_ID, 1L),
     )
 
     override fun saveZhuoruiEmailSyncConfig(config: ZhuoruiEmailSyncConfig) {
@@ -152,6 +153,7 @@ class SharedPreferencesStockLedgerSettingsStore(
             .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_ACCOUNT, config.account)
             .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_PASSWORD, config.password)
             .putString(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_FOLDER, config.folder)
+            .putLong(StockLedgerPreferences.KEY_ZHUORUI_EMAIL_TARGET_LEDGER_ID, config.targetLedgerId)
             .apply()
     }
 

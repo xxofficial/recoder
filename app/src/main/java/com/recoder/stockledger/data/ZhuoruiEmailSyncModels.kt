@@ -11,6 +11,7 @@ data class ZhuoruiEmailSyncConfig(
     val account: String = "",
     val password: String = "",
     val folder: String = "INBOX",
+    val targetLedgerId: Long = 1L,
 ) {
     fun validationMessage(): String? = when {
         imapHost.isBlank() -> "请填写 IMAP 地址"

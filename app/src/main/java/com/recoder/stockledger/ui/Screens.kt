@@ -74,6 +74,7 @@ import com.recoder.stockledger.data.TransactionSection
 import com.recoder.stockledger.data.TransactionUiModel
 import com.recoder.stockledger.data.ZhuoruiEmailManualSyncOptions
 import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
+import com.recoder.stockledger.data.local.LedgerEntity
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -83,6 +84,136 @@ import com.recoder.stockledger.ui.theme.MarketUp
 import com.recoder.stockledger.ui.theme.StockLedgerTheme
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import java.time.LocalDate
+import kotlin.math.absoluteValue
+
+
+@Composable
+fun JointSplitCard(
+    contributions: List<PartnerContribution>,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                color = SurfaceSecondary,
+                shape = RoundedCornerShape(16.dp),
+            )
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "合资出资及权益分摊",
+                color = ForegroundPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Box(
+                modifier = Modifier
+                    .background(
+                        color = androidx.compose.ui.graphics.Color(0xFFE5A93B).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    text = "合资模式",
+                    color = androidx.compose.ui.graphics.Color(0xFFE5A93B),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            contributions.forEach { contribution ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = BackgroundPrimary,
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = contribution.name,
+                                color = ForegroundPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        color = ForegroundMuted.copy(alpha = 0.1f),
+                                        shape = RoundedCornerShape(6.dp),
+                                    )
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    text = String.format("%.2f%%", contribution.ratio * 100),
+                                    color = ForegroundSecondary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        Text(
+                            text = String.format("净入金: ¥%,.2f", contribution.netContributionCny),
+                            color = ForegroundMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = String.format("权益市值: ¥%,.2f", contribution.assetsShareCny),
+                            color = ForegroundPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = "分配盈亏: ",
+                                color = ForegroundMuted,
+                                fontSize = 12.sp,
+                            )
+                            val pnl = contribution.pnlShareCny
+                            val pnlText = if (pnl >= 0.0) String.format("+¥%,.2f", pnl) else String.format("-¥%,.2f", pnl.absoluteValue)
+                            val pnlColor = if (pnl >= 0.0) MarketUp else MarketDown
+                            Text(
+                                text = pnlText,
+                                color = pnlColor,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
@@ -91,6 +222,8 @@ fun HoldingsRoute(
     displayCurrency: DisplayCurrency,
     holdings: List<HoldingUiModel>,
     selectedPlatform: BrokerPlatform?,
+    activeLedgerType: String = "",
+    partnerContributions: List<PartnerContribution> = emptyList(),
     onPlatformClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
@@ -190,6 +323,12 @@ fun HoldingsRoute(
                                 modifier = Modifier.weight(1f),
                             )
                         }
+                    }
+                }
+
+                if (activeLedgerType == "JOINT" && partnerContributions.isNotEmpty()) {
+                    item(key = "joint_split_card") {
+                        JointSplitCard(contributions = partnerContributions)
                     }
                 }
 
@@ -317,6 +456,7 @@ fun OperationsRoute(
     onImportPdfStatements: (BrokerPlatform) -> Unit,
     onRetryFailedPdfImport: (BrokerPlatform) -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
+    ledgers: List<LedgerEntity> = emptyList(),
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
 
@@ -509,6 +649,57 @@ fun OperationsRoute(
                                 onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(password = value))
                             },
                         )
+                        // 目标账本选择
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("默认导入目标账本", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            var expanded by remember { mutableStateOf(false) }
+                            val selectedLedger = ledgers.firstOrNull { it.id == zhuoruiEmailSyncConfig.targetLedgerId } ?: ledgers.firstOrNull()
+                            
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = SurfaceSecondary,
+                                        shape = RoundedCornerShape(12.dp),
+                                    )
+                                    .clickable { expanded = true }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = selectedLedger?.name ?: "默认个人账本",
+                                        color = ForegroundPrimary,
+                                        fontSize = 15.sp,
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Filled.ArrowDropDown,
+                                        contentDescription = "选择导入目标账本",
+                                        tint = ForegroundMuted,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                
+                                DropdownMenu(
+                                    expanded = expanded,
+                                    onDismissRequest = { expanded = false },
+                                    modifier = Modifier.background(SurfaceSecondary)
+                                ) {
+                                    ledgers.forEach { ledger ->
+                                        DropdownMenuItem(
+                                            text = { Text(ledger.name, color = ForegroundPrimary) },
+                                            onClick = {
+                                                onZhuoruiEmailSyncConfigChange(zhuoruiEmailSyncConfig.copy(targetLedgerId = ledger.id))
+                                                expanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -673,6 +864,9 @@ fun TransactionsRoute(
     onToggleSelection: (Long) -> Unit = {},
     onSelectAll: (List<Long>) -> Unit = {},
     onDeleteSelected: () -> Unit = {},
+    ledgers: List<LedgerEntity> = emptyList(),
+    activeLedgerId: Long = 1L,
+    onMoveTransactionsToLedger: (Long) -> Unit = {},
 ) {
     var showFilterSheet by remember { mutableStateOf(false) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
@@ -845,6 +1039,122 @@ fun TransactionsRoute(
             }
         }
 
+        var showMoveLedgerDialog by remember { mutableStateOf(false) }
+
+        if (batchSelectionMode && selectedTransactionIds.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 90.dp, start = 20.dp, end = 20.dp)
+                    .fillMaxWidth()
+                    .background(
+                        color = SurfaceSecondary,
+                        shape = RoundedCornerShape(20.dp),
+                    )
+                    .padding(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { showBatchDeleteDialog = true }
+                            .background(MarketDown.copy(alpha = 0.15f))
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "删除所选 (${selectedTransactionIds.size})",
+                            color = MarketDown,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { showMoveLedgerDialog = true }
+                            .background(BackgroundPrimary)
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "变更账本",
+                            color = ForegroundPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showMoveLedgerDialog) {
+            AlertDialog(
+                onDismissRequest = { showMoveLedgerDialog = false },
+                title = { Text("迁移交易至账本", color = ForegroundPrimary, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("请选择要将选中的 ${selectedTransactionIds.size} 笔交易记录迁移到哪个账本：", color = ForegroundSecondary, fontSize = 13.sp)
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                        ) {
+                            ledgers.forEach { ledger ->
+                                val isCurrent = ledger.id == activeLedgerId
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            color = if (isCurrent) SurfaceSecondary else BackgroundPrimary,
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable {
+                                            if (!isCurrent) {
+                                                onMoveTransactionsToLedger(ledger.id)
+                                                showMoveLedgerDialog = false
+                                            }
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(ledger.name, color = if (isCurrent) ForegroundMuted else ForegroundPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                        val typeLabel = when (ledger.type) {
+                                            "PERSONAL" -> "个人"
+                                            "JOINT" -> "合资"
+                                            "MANAGED" -> "代操"
+                                            else -> ledger.type
+                                        }
+                                        Text(typeLabel, color = ForegroundMuted, fontSize = 11.sp)
+                                    }
+                                    if (isCurrent) {
+                                        Text("当前账本", color = ForegroundMuted, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showMoveLedgerDialog = false }) {
+                        Text("取消", color = ForegroundSecondary)
+                    }
+                }
+            )
+        }
+
         BottomPillNavigation(
             current = TopLevelDestination.TRANSACTIONS,
             onDestinationSelected = onDestinationSelected,
@@ -992,6 +1302,9 @@ fun TradeEntryRoute(
     onNoteChange: (String) -> Unit,
     onDeleteTradeClick: (() -> Unit)? = null,
     onSubmit: () -> Unit,
+    activeLedgerType: String = "",
+    activeLedgerPartners: String = "",
+    onInvestorSelected: ((String?) -> Unit)? = null,
 ) {
     var symbolValue by remember { mutableStateOf(TextFieldValue(state.symbolOrName, TextRange(state.symbolOrName.length))) }
     var priceValue by remember { mutableStateOf(TextFieldValue(state.priceLabel, TextRange(state.priceLabel.length))) }
@@ -1194,6 +1507,71 @@ fun TradeEntryRoute(
                         )
                     }
                 } else {
+                    val partners = remember(activeLedgerPartners) {
+                        activeLedgerPartners.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                    }
+                    LaunchedEffect(partners, state.investorName) {
+                        if (activeLedgerType == "JOINT" && state.investorName == null && partners.isNotEmpty()) {
+                            onInvestorSelected?.invoke(partners.first())
+                        }
+                    }
+
+                    if (activeLedgerType == "JOINT") {
+                        if (partners.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val label = if (state.selectedType == TradeType.DEPOSIT) "出资人 (入金人)" else "撤资人 (出金人)"
+                                Text(label, color = ForegroundSecondary, fontSize = 14.sp)
+                                var expanded by remember { mutableStateOf(false) }
+                                val currentInvestor = state.investorName?.trim()?.takeIf { it in partners } ?: partners.firstOrNull().orEmpty()
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            color = SurfaceSecondary,
+                                            shape = RoundedCornerShape(12.dp),
+                                        )
+                                        .clickable { expanded = true }
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = currentInvestor,
+                                            color = ForegroundPrimary,
+                                            fontSize = 15.sp,
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Filled.ArrowDropDown,
+                                            contentDescription = "选择出资人",
+                                            tint = ForegroundMuted,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                    
+                                    DropdownMenu(
+                                        expanded = expanded,
+                                        onDismissRequest = { expanded = false },
+                                        modifier = Modifier.background(SurfaceSecondary)
+                                    ) {
+                                        partners.forEach { partner ->
+                                            DropdownMenuItem(
+                                                text = { Text(partner, color = ForegroundPrimary) },
+                                                onClick = {
+                                                    onInvestorSelected?.invoke(partner)
+                                                    expanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("货币种类", color = ForegroundSecondary, fontSize = 14.sp)
                         Row(

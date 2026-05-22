@@ -46,6 +46,7 @@ import com.recoder.stockledger.data.PdfImportMode
 import com.recoder.stockledger.data.rateToCny
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.local.TransactionEntity
+import com.recoder.stockledger.data.local.LedgerEntity
 import com.recoder.stockledger.importer.ZhuoruiEmailSyncWorker
 import com.recoder.stockledger.data.repository.HistoricalClosePoint
 import com.recoder.stockledger.data.repository.ImportedBackup
@@ -174,6 +175,17 @@ data class LedgerUiState(
     val llmApiBaseUrl: String = "",
     val batchSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
+    val ledgers: List<LedgerEntity> = emptyList(),
+    val selectedLedgerId: Long = 1L,
+    val partnerContributions: List<PartnerContribution> = emptyList(),
+)
+
+data class PartnerContribution(
+    val name: String,
+    val netContributionCny: Double,
+    val ratio: Double,
+    val assetsShareCny: Double,
+    val pnlShareCny: Double,
 )
 
 class LedgerViewModel(
@@ -242,11 +254,35 @@ class LedgerViewModel(
     private val batchSelectionMode = MutableStateFlow(false)
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
-    private var lastManualRefreshTriggeredAt: Long = 0L
-    private var symbolLookupJob: Job? = null
+    val selectedLedgerId = MutableStateFlow(1L)
+    
+    val ledgers = repository.ledgers.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = emptyList()
+    )
+
+    val filteredTransactions = combine(
+        repository.transactions,
+        selectedLedgerId
+    ) { list, ledgerId ->
+        list.filter { it.ledgerId == ledgerId }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = emptyList()
+    )
+
+    val currentLedger = combine(ledgers, selectedLedgerId) { list, id ->
+        list.firstOrNull { it.id == id }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = null
+    )
 
     private val portfolio = combine(
-        repository.transactions,
+        filteredTransactions,
         repository.quotes,
         repository.exchangeRates,
         selectedPlatform,
@@ -262,8 +298,28 @@ class LedgerViewModel(
         initialValue = emptyPortfolioComputation(),
     )
 
+    val partnerContributions = combine(
+        currentLedger,
+        filteredTransactions,
+        portfolio,
+        repository.exchangeRates
+    ) { ledger, transactions, portfolioData, exchangeRates ->
+        if (ledger == null || ledger.type != "JOINT") {
+            emptyList<PartnerContribution>()
+        } else {
+            computePartnerContributions(ledger, transactions, portfolioData, exchangeRates)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = emptyList()
+    )
+
+    private var lastManualRefreshTriggeredAt: Long = 0L
+    private var symbolLookupJob: Job? = null
+
     private val draftReferencePortfolio = combine(
-        repository.transactions,
+        filteredTransactions,
         repository.quotes,
         repository.exchangeRates,
         editingTrade,
@@ -337,7 +393,7 @@ class LedgerViewModel(
     val uiState: StateFlow<LedgerUiState> = combine(
         portfolio,
         draftReferencePortfolio,
-        repository.transactions,
+        filteredTransactions,
         editingTrade,
         analysisInputs,
     ) { portfolioState, referencePortfolioState, transactions, currentEditingTrade, analysisInput ->
@@ -522,6 +578,12 @@ class LedgerViewModel(
         state.copy(batchSelectionMode = batchMode)
     }.combine(selectedTransactionIds) { state, selectedIds ->
         state.copy(selectedTransactionIds = selectedIds)
+    }.combine(ledgers) { state, ledgerList ->
+        state.copy(ledgers = ledgerList)
+    }.combine(selectedLedgerId) { state, id ->
+        state.copy(selectedLedgerId = id)
+    }.combine(partnerContributions) { state, contributions ->
+        state.copy(partnerContributions = contributions)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -1112,6 +1174,11 @@ class LedgerViewModel(
             )
         }
         val normalizedTradeTime = normalizeTradeTimeLabel(currentDraft.tradeTime)
+        val originalTx = currentEditingTrade?.let { editing ->
+            latestTransactions.firstOrNull { it.id == editing.transactionId }
+        }
+        val targetLedgerId = originalTx?.ledgerId ?: selectedLedgerId.value
+
         val input = TradeDraftInput(
             tradeType = currentDraft.selectedType,
             platform = currentDraft.platform,
@@ -1130,6 +1197,8 @@ class LedgerViewModel(
             note = currentDraft.note.trim(),
             tradeTime = normalizedTradeTime,
             createdAt = currentEditingTrade?.createdAt ?: System.currentTimeMillis(),
+            ledgerId = targetLedgerId,
+            investorName = currentDraft.investorName,
         )
 
         if (currentEditingTrade == null) {
@@ -2985,6 +3054,7 @@ class LedgerViewModel(
             tradeTime = current?.tradeTime ?: base.tradeTime,
             note = current?.note.orEmpty(),
             priceLabel = if (current?.selectedType == type) current.priceLabel else "",
+            investorName = current?.investorName,
         )
     }
 
@@ -3474,6 +3544,89 @@ private data class RefreshMeta(
             }
         }
         return result ?: "unknown"
+    }
+
+    fun switchLedger(ledgerId: Long) {
+        selectedLedgerId.value = ledgerId
+        updateTradeInvestorName(null)
+    }
+
+    fun createLedger(name: String, type: String, description: String, partners: String) {
+        viewModelScope.launch {
+            repository.insertLedger(
+                LedgerEntity(
+                    name = name,
+                    type = type,
+                    description = description,
+                    partners = partners
+                )
+            )
+        }
+    }
+
+    fun updateLedger(ledger: LedgerEntity) {
+        viewModelScope.launch {
+            repository.updateLedger(ledger)
+        }
+    }
+
+    fun deleteLedger(ledgerId: Long) {
+        viewModelScope.launch {
+            repository.deleteLedgerWithTransactions(ledgerId)
+            if (selectedLedgerId.value == ledgerId) {
+                switchLedger(1L)
+            }
+        }
+    }
+
+    fun moveSelectedTransactionsToLedger(targetLedgerId: Long) {
+        val ids = selectedTransactionIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.moveTransactionsToLedger(ids, targetLedgerId)
+            exitBatchSelectionMode()
+            refreshQuotes(trigger = RefreshTrigger.TRADE_UPDATE)
+        }
+    }
+
+    fun updateTradeInvestorName(name: String?) {
+        draft.update { current ->
+            current.copy(investorName = name)
+        }
+    }
+
+    private fun computePartnerContributions(
+        currentLedger: LedgerEntity,
+        transactions: List<TransactionEntity>,
+        portfolio: PortfolioComputation,
+        exchangeRates: ExchangeRates
+    ): List<PartnerContribution> {
+        val partnerNames = currentLedger.partners.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        if (partnerNames.isEmpty()) return emptyList()
+        val contributions = partnerNames.associateWith { 0.0 }.toMutableMap()
+        transactions.forEach { tx ->
+            if (tx.tradeType == "DEPOSIT" || tx.tradeType == "WITHDRAW") {
+                val marketEnum = runCatching { Market.valueOf(tx.market) }.getOrDefault(Market.CASH)
+                val amountCny = tx.price * tx.quantity * exchangeRates.rateToCny(marketEnum)
+                val investor = tx.investorName?.trim()?.takeIf { it in contributions } ?: partnerNames.first()
+                val current = contributions[investor] ?: 0.0
+                contributions[investor] = if (tx.tradeType == "DEPOSIT") current + amountCny else current - amountCny
+            }
+        }
+        val totalNet = contributions.values.sum()
+        val totalAssets = portfolio.totalAssetsCny
+        val totalProfit = portfolio.totalProfitCny
+        return partnerNames.map { name ->
+            val net = contributions[name] ?: 0.0
+            val ratio = if (totalNet > 0.0) net / totalNet else 1.0 / partnerNames.size
+            PartnerContribution(
+                name = name,
+                netContributionCny = net,
+                ratio = ratio,
+                assetsShareCny = totalAssets * ratio,
+                pnlShareCny = totalProfit * ratio
+            )
+        }
     }
 
     private companion object {

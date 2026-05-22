@@ -20,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
@@ -59,6 +61,7 @@ import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundSecondary
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
+import com.recoder.stockledger.data.local.LedgerEntity
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -97,6 +100,9 @@ fun StockLedgerApp(
         currentRoute?.startsWith("${Routes.StockDetail}/") != true
     val coroutineScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val activeLedger = uiState.ledgers.firstOrNull { it.id == uiState.selectedLedgerId }
+    val activeLedgerType = activeLedger?.type.orEmpty()
+    val activeLedgerPartners = activeLedger?.partners.orEmpty()
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             ledgerViewModel.exportBackup(uri)
@@ -132,8 +138,13 @@ fun StockLedgerApp(
                 modifier = Modifier.fillMaxWidth(0.78f),
             ) {
                 PlatformDrawerContent(
+                    ledgers = uiState.ledgers,
+                    selectedLedgerId = uiState.selectedLedgerId,
                     options = uiState.managedPlatforms,
                     visibilityOptions = uiState.platformVisibilityOptions,
+                    onSelectLedger = ledgerViewModel::switchLedger,
+                    onCreateLedger = ledgerViewModel::createLedger,
+                    onDeleteLedger = ledgerViewModel::deleteLedger,
                     onSelect = { platform ->
                         ledgerViewModel.selectGlobalPlatform(platform)
                         coroutineScope.launch { drawerState.close() }
@@ -156,6 +167,8 @@ fun StockLedgerApp(
                         displayCurrency = uiState.displayCurrency,
                         holdings = uiState.holdings,
                         selectedPlatform = uiState.selectedPlatform,
+                        activeLedgerType = activeLedgerType,
+                        partnerContributions = uiState.partnerContributions,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onSettingsClick = { navController.navigate(Routes.Settings) },
                         onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
@@ -302,6 +315,7 @@ fun StockLedgerApp(
                                 }
                             }
                         },
+                        ledgers = uiState.ledgers,
                     )
                 }
 
@@ -354,6 +368,9 @@ fun StockLedgerApp(
                         onToggleSelection = ledgerViewModel::toggleTransactionSelection,
                         onSelectAll = ledgerViewModel::selectAllTransactions,
                         onDeleteSelected = ledgerViewModel::deleteSelectedTransactions,
+                        ledgers = uiState.ledgers,
+                        activeLedgerId = uiState.selectedLedgerId,
+                        onMoveTransactionsToLedger = ledgerViewModel::moveSelectedTransactionsToLedger,
                     )
                 }
 
@@ -414,6 +431,9 @@ fun StockLedgerApp(
                                 }
                             }
                         },
+                        activeLedgerType = activeLedgerType,
+                        activeLedgerPartners = activeLedgerPartners,
+                        onInvestorSelected = ledgerViewModel::updateTradeInvestorName,
                     )
                 }
 
@@ -507,13 +527,133 @@ private fun DrawerToggleButton(
 
 @Composable
 private fun PlatformDrawerContent(
+    ledgers: List<LedgerEntity>,
+    selectedLedgerId: Long,
     options: List<ManagedPlatformUiModel>,
     visibilityOptions: List<PlatformVisibilityUiModel>,
+    onSelectLedger: (Long) -> Unit,
+    onCreateLedger: (String, String, String, String) -> Unit,
+    onDeleteLedger: (Long) -> Unit,
     onSelect: (BrokerPlatform?) -> Unit,
     onPlatformVisibilityChange: (BrokerPlatform, Boolean) -> Unit,
     onClose: () -> Unit = {},
 ) {
     var showVisibilitySettings by remember { mutableStateOf(false) }
+    var showCreateLedgerDialog by remember { mutableStateOf(false) }
+    var ledgerToDelete by remember { mutableStateOf<LedgerEntity?>(null) }
+
+    if (showCreateLedgerDialog) {
+        var ledgerName by remember { mutableStateOf("") }
+        var ledgerType by remember { mutableStateOf("PERSONAL") }
+        var ledgerDesc by remember { mutableStateOf("") }
+        var ledgerPartners by remember { mutableStateOf("") }
+        var showError by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showCreateLedgerDialog = false },
+            title = { Text("新建账本", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = ledgerName,
+                        onValueChange = { ledgerName = it; showError = false },
+                        label = { Text("账本名称") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Text("账本类型", color = ForegroundSecondary, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("PERSONAL" to "个人", "JOINT" to "合资").forEach { (typeVal, typeLbl) ->
+                            val selected = ledgerType == typeVal
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(
+                                        color = if (selected) BackgroundPrimary else SurfaceSecondary,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { ledgerType = typeVal }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = typeLbl,
+                                    color = if (selected) ForegroundPrimary else ForegroundSecondary,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                    if (ledgerType == "JOINT") {
+                        androidx.compose.material3.OutlinedTextField(
+                            value = ledgerPartners,
+                            onValueChange = { ledgerPartners = it },
+                            label = { Text("合伙人/出资人姓名 (英文或中文逗号分隔)") },
+                            placeholder = { Text("如: 张三, 李四") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                    androidx.compose.material3.OutlinedTextField(
+                        value = ledgerDesc,
+                        onValueChange = { ledgerDesc = it },
+                        label = { Text("账本备注 (选填)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    if (showError) {
+                        Text("账本名称及合伙人姓名不能为空", color = androidx.compose.ui.graphics.Color(0xFFE53935), fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        if (ledgerName.isBlank() || (ledgerType == "JOINT" && ledgerPartners.isBlank())) {
+                            showError = true
+                        } else {
+                            onCreateLedger(ledgerName.trim(), ledgerType, ledgerDesc.trim(), ledgerPartners.trim())
+                            showCreateLedgerDialog = false
+                        }
+                    }
+                ) {
+                    Text("创建", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showCreateLedgerDialog = false }) {
+                    Text("取消", color = ForegroundSecondary)
+                }
+            }
+        )
+    }
+
+    ledgerToDelete?.let { ledger: LedgerEntity ->
+        AlertDialog(
+            onDismissRequest = { ledgerToDelete = null },
+            title = { Text("确认删除账本", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+            text = { Text("此操作将永久删除账本 [${ledger.name}] 及其下所有的交易记录，且无法恢复！确认删除吗？", color = ForegroundSecondary) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        onDeleteLedger(ledger.id)
+                        ledgerToDelete = null
+                    }
+                ) {
+                    Text("确认删除", color = androidx.compose.ui.graphics.Color(0xFFE53935), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { ledgerToDelete = null }) {
+                    Text("取消", color = ForegroundSecondary)
+                }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -523,6 +663,132 @@ private fun PlatformDrawerContent(
             .padding(horizontal = 18.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("我的账本", color = ForegroundPrimary, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Box(
+                modifier = Modifier
+                    .background(color = SurfaceSecondary, shape = RoundedCornerShape(12.dp))
+                    .clickable { showCreateLedgerDialog = true }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("+ 新建账本", color = ForegroundPrimary, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            }
+        }
+
+        Text("在不同账本间切换以进行资产隔离。合资账本支持资金比例和收益分摊计算。", color = ForegroundSecondary, fontSize = 13.sp)
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    color = SurfaceSecondary,
+                    shape = RoundedCornerShape(22.dp),
+                )
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            ledgers.forEach { ledger ->
+                val isSelected = ledger.id == selectedLedgerId
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = if (isSelected) BackgroundPrimary else SurfaceSecondary,
+                            shape = RoundedCornerShape(18.dp),
+                        )
+                        .clickable { 
+                            onSelectLedger(ledger.id)
+                            onClose() 
+                        }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = ledger.name,
+                                color = ForegroundPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                            )
+                            val typeLabel = when (ledger.type) {
+                                "PERSONAL" -> "个人"
+                                "JOINT" -> "合资"
+                                "MANAGED" -> "代操"
+                                else -> ledger.type
+                            }
+                            val typeBgColor = when (ledger.type) {
+                                "PERSONAL" -> androidx.compose.ui.graphics.Color(0xFF2A82E4).copy(alpha = 0.15f)
+                                "JOINT" -> androidx.compose.ui.graphics.Color(0xFFE5A93B).copy(alpha = 0.15f)
+                                "MANAGED" -> androidx.compose.ui.graphics.Color(0xFF9C27B0).copy(alpha = 0.15f)
+                                else -> androidx.compose.ui.graphics.Color.Gray.copy(alpha = 0.15f)
+                            }
+                            val typeTextColor = when (ledger.type) {
+                                "PERSONAL" -> androidx.compose.ui.graphics.Color(0xFF2A82E4)
+                                "JOINT" -> androidx.compose.ui.graphics.Color(0xFFE5A93B)
+                                "MANAGED" -> androidx.compose.ui.graphics.Color(0xFF9C27B0)
+                                else -> androidx.compose.ui.graphics.Color.Gray
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .background(color = typeBgColor, shape = RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = typeLabel,
+                                    color = typeTextColor,
+                                    fontSize = 10.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                )
+                            }
+                        }
+                        if (ledger.description.isNotBlank()) {
+                            Text(
+                                text = ledger.description,
+                                color = ForegroundMuted,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isSelected) {
+                            Text("当前", color = ForegroundPrimary, fontSize = 12.sp)
+                        }
+                        if (ledger.id != 1L) {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = "删除账本",
+                                tint = androidx.compose.ui.graphics.Color(0xFFE53935),
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clickable { ledgerToDelete = ledger }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 分割线
+        androidx.compose.material3.HorizontalDivider(
+            modifier = Modifier.padding(vertical = 8.dp),
+            color = SurfaceSecondary
+        )
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -560,7 +826,10 @@ private fun PlatformDrawerContent(
                                 color = if (option.isSelected) BackgroundPrimary else SurfaceSecondary,
                                 shape = RoundedCornerShape(18.dp),
                             )
-                            .clickable { onSelect(option.platform) }
+                            .clickable { 
+                                onSelect(option.platform) 
+                                onClose()
+                            }
                             .padding(horizontal = 14.dp, vertical = 14.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,

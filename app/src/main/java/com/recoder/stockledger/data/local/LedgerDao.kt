@@ -129,4 +129,39 @@ interface LedgerDao {
         quantity: Int,
         price: Double,
     ): TransactionEntity?
+
+    // --- 账本 (Ledger) 相关操作 ---
+
+    @Query("SELECT * FROM ledgers ORDER BY id ASC")
+    fun observeLedgers(): Flow<List<LedgerEntity>>
+
+    @Query("SELECT * FROM ledgers")
+    suspend fun getAllLedgers(): List<LedgerEntity>
+
+    @Query("SELECT * FROM ledgers WHERE id = :id LIMIT 1")
+    suspend fun getLedgerById(id: Long): LedgerEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertLedger(ledger: LedgerEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertLedgers(ledgers: List<LedgerEntity>): List<Long>
+
+    @Update
+    suspend fun updateLedger(ledger: LedgerEntity): Int
+
+    @Query("DELETE FROM ledgers WHERE id = :id")
+    suspend fun deleteLedgerOnly(id: Long): Int
+
+    @Query("DELETE FROM transactions WHERE ledgerId = :ledgerId")
+    suspend fun deleteTransactionsByLedgerId(ledgerId: Long): Int
+
+    @Transaction
+    suspend fun deleteLedgerWithTransactions(ledgerId: Long) {
+        deleteTransactionsByLedgerId(ledgerId)
+        deleteLedgerOnly(ledgerId)
+    }
+
+    @Query("UPDATE transactions SET ledgerId = :targetLedgerId WHERE id IN (:ids)")
+    suspend fun updateTransactionsLedger(ids: List<Long>, targetLedgerId: Long): Int
 }
