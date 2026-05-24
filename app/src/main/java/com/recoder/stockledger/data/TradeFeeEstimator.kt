@@ -44,7 +44,7 @@ object TradeFeeEstimator {
     private const val PLAN_LONGBRIDGE_PUBLIC_PROMO = "longbridge_public_promo"
     private const val PLAN_HSBC_STANDARD = "hsbc_standard"
     private const val PLAN_HSBC_TRADE25 = "hsbc_trade25"
-    private const val PLAN_WEBULL_PUBLIC_PROMO = "webull_public_promo"
+    private const val PLAN_USMART_PUBLIC_PROMO = "usmart_public_promo"
     private const val PLAN_ZHUORUI_NEW_CUSTOMER = "zhuorui_new_customer"
     private const val PLAN_ZHUORUI_LEGACY_CUSTOMER = "zhuorui_legacy_customer"
     private const val PLAN_CHIEF_ONLINE_STANDARD = "chief_online_standard"
@@ -80,11 +80,11 @@ object TradeFeeEstimator {
         ),
     )
 
-    private val webullPlans = listOf(
+    private val usmartPlans = listOf(
         TradeFeePlanOption(
-            id = PLAN_WEBULL_PUBLIC_PROMO,
+            id = PLAN_USMART_PUBLIC_PROMO,
             label = "当前公开费率",
-            description = "按 Webull 官网当前公开的 0 佣金、0 平台费活动价估算。",
+            description = "按 uSMART 官网当前公开的 0 佣金、0 平台费活动价估算。",
         ),
     )
 
@@ -122,7 +122,7 @@ object TradeFeeEstimator {
         BrokerPlatform.EAST_MONEY -> eastMoneyPlans
         BrokerPlatform.LONGBRIDGE -> longbridgePlans
         BrokerPlatform.HSBC -> hsbcPlans
-        BrokerPlatform.WEBULL -> webullPlans
+        BrokerPlatform.USMART -> usmartPlans
         BrokerPlatform.ZHUORUI -> zhuoruiPlans
         BrokerPlatform.CHIEF -> chiefPlans
         BrokerPlatform.SCHWAB -> schwabPlans
@@ -239,26 +239,26 @@ object TradeFeeEstimator {
                 )
             }
 
-            BrokerPlatform.WEBULL -> when (market) {
+            BrokerPlatform.USMART -> when (market) {
                 Market.HK -> TradeFeeProfile(
                     coverage = FeeEstimateCoverage.PARTIAL,
                     planId = resolvedPlan.id,
                     planLabel = resolvedPlan.label,
-                    note = "按 Webull 官网当前公开活动价估算：佣金 0、平台费 0；已计入公开可确认的港股法定收费，未含官网未公开列示的交收费。",
+                    note = "按 uSMART 官网当前公开活动价估算：佣金 0、平台费 0；已计入公开可确认的港股法定收费，未含官网未公开列示的交收费。",
                 )
 
                 Market.US -> TradeFeeProfile(
                     coverage = FeeEstimateCoverage.PARTIAL,
                     planId = resolvedPlan.id,
                     planLabel = resolvedPlan.label,
-                    note = "按 Webull 官网当前公开活动价估算：佣金 0、平台费 0；已计入 SEC/FINRA 卖出规费，未含官网未公开列示的第三方结算费。",
+                    note = "按 uSMART 官网当前公开活动价估算：佣金 0、平台费 0；已计入 SEC/FINRA 卖出规费，未含官网未公开列示的第三方结算费。",
                 )
 
                 else -> TradeFeeProfile(
                     coverage = FeeEstimateCoverage.UNSUPPORTED,
                     planId = resolvedPlan.id,
                     planLabel = resolvedPlan.label,
-                    note = "Webull 当前仅内置港股和美股自动费率。",
+                    note = "uSMART 当前仅内置港股和美股自动费率。",
                 )
             }
 
@@ -387,7 +387,7 @@ object TradeFeeEstimator {
             BrokerPlatform.EAST_MONEY -> estimateEastMoney(market, tradeType, price, quantity, profile)
             BrokerPlatform.LONGBRIDGE -> estimateLongbridge(market, tradeType, price, quantity, profile)
             BrokerPlatform.HSBC -> estimateHsbc(market, tradeType, price, quantity, profile, context)
-            BrokerPlatform.WEBULL -> estimateWebull(market, tradeType, price, quantity, profile)
+            BrokerPlatform.USMART -> estimateUsmart(market, tradeType, price, quantity, profile)
             BrokerPlatform.ZHUORUI -> estimateZhuorui(market, tradeType, price, quantity, profile, context)
             BrokerPlatform.CHIEF -> estimateChief(market, tradeType, price, quantity, profile)
             BrokerPlatform.SCHWAB -> estimateSchwab(market, tradeType, price, quantity, profile)
@@ -552,7 +552,7 @@ object TradeFeeEstimator {
         else -> unsupportedEstimate(profile.note)
     }
 
-    private fun estimateWebull(
+    private fun estimateUsmart(
         market: Market,
         tradeType: TradeType,
         price: Double,

@@ -258,6 +258,10 @@ fun StockLedgerApp(
                             ledgerViewModel.openTradeEntry(TradeType.WITHDRAW)
                             navController.navigate(Routes.tradeEntry(TradeType.WITHDRAW))
                         },
+                        onInterestClick = {
+                            ledgerViewModel.openTradeEntry(TradeType.INTEREST)
+                            navController.navigate(Routes.tradeEntry(TradeType.INTEREST))
+                        },
                         onExportBackupClick = {
                             val filename = "stock-ledger-backup-${
                                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))

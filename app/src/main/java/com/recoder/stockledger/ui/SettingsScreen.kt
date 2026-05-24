@@ -140,7 +140,7 @@ fun SettingsRoute(
                     }
                 }
 
-                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
+                if (selectedPlatform?.supportsPdfImport == true) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -158,7 +158,7 @@ fun SettingsRoute(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            "仅用于卓锐日结单 PDF；没有密码的结单可留空。",
+                            "用于结单 PDF（如卓锐、uSMART等）；没有密码的结单可留空。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
@@ -260,7 +260,7 @@ fun SettingsRoute(
                     }
                 }
 
-                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
+                if (selectedPlatform?.supportsPdfImport == true) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()

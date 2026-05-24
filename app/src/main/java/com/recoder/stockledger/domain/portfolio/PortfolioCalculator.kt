@@ -88,6 +88,11 @@ class PortfolioCalculator {
                         totalWithdrawCny += amountCny
                     }
 
+                    TradeType.INTEREST -> {
+                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), transaction.market, exchangeRates)
+                        cashBalanceCny -= amountCny
+                    }
+
                     TradeType.BUY, TradeType.SELL -> {
                         totalCommissionCny += convertToCny(transaction.commission, transaction.market, exchangeRates)
                         totalTaxCny += convertToCny(transaction.tax, transaction.market, exchangeRates)

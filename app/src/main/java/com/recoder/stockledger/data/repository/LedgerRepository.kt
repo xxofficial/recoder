@@ -17,6 +17,7 @@ import com.recoder.stockledger.data.importer.HsbcNotificationStatus
 import com.recoder.stockledger.data.importer.ParsedZhuoruiEmail
 import com.recoder.stockledger.data.importer.ZhuoruiEmailParser
 import com.recoder.stockledger.data.importer.ZhuoruiStatementPdfParser
+import com.recoder.stockledger.data.importer.ParsedStatementTrade
 import com.recoder.stockledger.data.local.LedgerDao
 import com.recoder.stockledger.data.local.LedgerEntity
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
@@ -189,14 +190,17 @@ interface ImportRepository {
         receivedAtMillis: Long = System.currentTimeMillis(),
     ): TradeImportResult
 
-    suspend fun importZhuoruiStatementPdf(
+    suspend fun importStatementPdf(
         inputStream: InputStream,
         password: String,
+        platform: BrokerPlatform,
+        ledgerId: Long = 1L,
     ): List<TradeImportResult>
 
     suspend fun importParsedTrades(
-        parsedTrades: List<com.recoder.stockledger.data.importer.ParsedStatementTrade>,
+        parsedTrades: List<ParsedStatementTrade>,
         platform: BrokerPlatform = BrokerPlatform.ZHUORUI,
+        ledgerId: Long = 1L,
     ): List<TradeImportResult>
 
     suspend fun syncZhuoruiMailbox(
@@ -620,31 +624,33 @@ class DefaultLedgerRepository(
         )
     }
 
-    override suspend fun importZhuoruiStatementPdf(
+    override suspend fun importStatementPdf(
         inputStream: InputStream,
         password: String,
+        platform: BrokerPlatform,
+        ledgerId: Long,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
-        Log.d(TAG, "开始导入PDF结单, password长度=${password.length}")
-        val parsedTrades = ZhuoruiStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
+        Log.d(TAG, "开始导入PDF结单, platform=${platform.name}, password长度=${password.length}, ledgerId=$ledgerId")
+        val parsedTrades = if (platform == BrokerPlatform.USMART) {
+            com.recoder.stockledger.data.importer.USmartStatementPdfParser.parse(inputStream, password)
+        } else {
+            ZhuoruiStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
+        }
         Log.d(TAG, "PDF解析完成, 找到${parsedTrades.size}条交易记录")
         if (parsedTrades.isEmpty()) {
             Log.w(TAG, "PDF结单中未找到可导入的交易记录")
-            return@withContext listOf(
-                TradeImportResult(
-                    outcome = TradeImportOutcome.UNSUPPORTED,
-                    message = "PDF结单中未找到可导入的交易记录",
-                )
-            )
+            return@withContext emptyList()
         }
 
         val results = mutableListOf<TradeImportResult>()
         for (parsed in parsedTrades) {
-            val externalReference = "ZR-STMT-${parsed.tradeRef}"
+            val externalReference = "${platform.shortLabel}-STMT-${parsed.tradeRef}"
             val existing = dao.findTransactionByExternalReference(
-                platform = BrokerPlatform.ZHUORUI.name,
+                platform = platform.name,
                 externalReference = externalReference,
             )
             if (existing != null) {
+                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}, extRef=$externalReference")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
@@ -656,7 +662,7 @@ class DefaultLedgerRepository(
             }
 
             val duplicate = dao.findDuplicateTransaction(
-                platform = BrokerPlatform.ZHUORUI.name,
+                platform = platform.name,
                 symbol = parsed.symbol,
                 market = parsed.market.name,
                 tradeDate = parsed.tradeDate.toString(),
@@ -665,6 +671,7 @@ class DefaultLedgerRepository(
                 price = parsed.price,
             )
             if (duplicate != null) {
+                Log.d(TAG, "发现重复交易(内容匹配): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
@@ -679,7 +686,7 @@ class DefaultLedgerRepository(
             val feeEstimate = if (!hasParsedFees) {
                 estimateImportedTradeFees(
                     tradeType = parsed.tradeType,
-                    platform = BrokerPlatform.ZHUORUI,
+                    platform = platform,
                     market = parsed.market,
                     price = parsed.price,
                     quantity = parsed.quantity,
@@ -699,7 +706,7 @@ class DefaultLedgerRepository(
             addTrade(
                 TradeDraftInput(
                     tradeType = parsed.tradeType,
-                    platform = BrokerPlatform.ZHUORUI,
+                    platform = platform,
                     sourceChannel = parsed.sourceChannel,
                     externalReference = externalReference,
                     market = parsed.market,
@@ -718,6 +725,7 @@ class DefaultLedgerRepository(
                     ),
                     tradeTime = parsed.tradeTime ?: "00:00",
                     createdAt = System.currentTimeMillis(),
+                    ledgerId = ledgerId,
                 ),
             )
             results.add(
@@ -737,8 +745,9 @@ class DefaultLedgerRepository(
     }
 
     override suspend fun importParsedTrades(
-        parsedTrades: List<com.recoder.stockledger.data.importer.ParsedStatementTrade>,
+        parsedTrades: List<ParsedStatementTrade>,
         platform: BrokerPlatform,
+        ledgerId: Long,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
         val refPrefix = if (platform == BrokerPlatform.ZHUORUI) "ZR-STMT-" else "PDF-STMT-"
         val results = mutableListOf<TradeImportResult>()
@@ -749,6 +758,7 @@ class DefaultLedgerRepository(
                 externalReference = externalReference,
             )
             if (existing != null) {
+                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}, extRef=$externalReference")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
@@ -769,6 +779,7 @@ class DefaultLedgerRepository(
                 price = parsed.price,
             )
             if (duplicate != null) {
+                Log.d(TAG, "发现重复交易(内容匹配): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
@@ -822,6 +833,7 @@ class DefaultLedgerRepository(
                     ),
                     tradeTime = parsed.tradeTime ?: "00:00",
                     createdAt = System.currentTimeMillis(),
+                    ledgerId = ledgerId,
                 ),
             )
             results.add(
