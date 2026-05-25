@@ -95,6 +95,56 @@ class PortfolioCalculator {
                         if (transaction.tradeType == TradeType.BUY) buyTradeCount++ else sellTradeCount++
                         cashBalanceCny += applySecurityTrade(transaction, positions, exchangeRates)
                     }
+
+                    TradeType.TRANSFER_IN -> {
+                        if (transaction.symbol == "CASH") {
+                            val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
+                            cashBalanceCny += amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, transaction.market)
+                            val current = positions[key] ?: PortfolioPosition(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = transaction.market,
+                                quantity = 0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                            )
+                            val nextQuantity = current.quantity + transaction.quantity
+                            val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
+                    }
+
+                    TradeType.TRANSFER_OUT -> {
+                        if (transaction.symbol == "CASH") {
+                            val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
+                            cashBalanceCny -= amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, transaction.market)
+                            val current = positions[key] ?: PortfolioPosition(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = transaction.market,
+                                quantity = 0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                            )
+                            val nextQuantity = current.quantity - transaction.quantity
+                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
+                    }
                 }
             }
 

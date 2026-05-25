@@ -110,6 +110,7 @@ fun StockLedgerApp(
     val activeLedgerType = activeLedger?.type.orEmpty()
     val activeLedgerPartners = activeLedger?.partners.orEmpty()
     var showExportDialog by remember { mutableStateOf(false) }
+    var showTransferDialog by remember { mutableStateOf(false) }
     var selectedLedgerIdsForExport by remember { mutableStateOf(emptySet<Long>()) }
     var selectedPlatformsForExport by remember { mutableStateOf(emptySet<String>()) }
 
@@ -183,6 +184,8 @@ fun StockLedgerApp(
                         selectedPlatform = uiState.selectedPlatform,
                         activeLedgerType = activeLedgerType,
                         partnerContributions = uiState.partnerContributions,
+                        selectedPartner = uiState.selectedPartnerPerspective,
+                        onPartnerClick = ledgerViewModel::selectPartnerPerspective,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onSettingsClick = { navController.navigate(Routes.Settings) },
                         onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
@@ -272,9 +275,18 @@ fun StockLedgerApp(
                             ledgerViewModel.openTradeEntry(TradeType.WITHDRAW)
                             navController.navigate(Routes.tradeEntry(TradeType.WITHDRAW))
                         },
+                        onTransferClick = {
+                            showTransferDialog = true
+                        },
                         onExportBackupClick = {
                             selectedLedgerIdsForExport = uiState.ledgers.map { it.id }.toSet()
-                            selectedPlatformsForExport = BrokerPlatform.entries.map { it.name }.toSet()
+                            val platformsWithTx = ledgerViewModel.transactionSnapshot.value.map { it.platform }.filter { it.isNotBlank() }.toSet()
+                            val currentPlatform = uiState.selectedPlatform?.name
+                            selectedPlatformsForExport = if (currentPlatform != null) {
+                                setOf(currentPlatform)
+                            } else {
+                                platformsWithTx
+                            }
                             showExportDialog = true
                         },
                         onImportBackupClick = {
@@ -508,6 +520,26 @@ fun StockLedgerApp(
                         onBack = { navController.popBackStack() },
                     )
                 }
+            }
+
+            if (showTransferDialog) {
+                PlatformTransferDialog(
+                    enabledPlatforms = BrokerPlatform.entries.filter { it.isConfigurable },
+                    onDismiss = { showTransferDialog = false },
+                    onConfirm = { isStock, symbol, name, market, quantity, amount, currency, sourcePlatform, targetPlatform ->
+                        ledgerViewModel.performPlatformTransfer(
+                            isStock = isStock,
+                            symbol = symbol,
+                            name = name,
+                            market = market,
+                            quantity = quantity,
+                            amount = amount,
+                            currency = currency,
+                            sourcePlatform = sourcePlatform,
+                            targetPlatform = targetPlatform,
+                        )
+                    }
+                )
             }
 
             if (showExportDialog) {

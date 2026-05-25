@@ -54,6 +54,34 @@ class PortfolioCalculatorTest {
         assertEquals(-1_682.0, snapshot.cashBalanceCny, 0.0001)
     }
 
+    @Test
+    fun `calculate handles transfer of cash and stocks`() {
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.DEPOSIT, market = Market.CASH, price = 10_000.0, quantity = 1),
+                trade(type = TradeType.BUY, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 10),
+                trade(type = TradeType.TRANSFER_OUT, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 5),
+                trade(type = TradeType.TRANSFER_IN, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 5),
+                trade(type = TradeType.TRANSFER_OUT, market = Market.CASH, symbol = "CASH", price = 1000.0, quantity = 1),
+                trade(type = TradeType.TRANSFER_IN, market = Market.CASH, symbol = "CASH", price = 1000.0, quantity = 1),
+            ),
+            quotes = listOf(
+                PortfolioQuote(
+                    symbol = "AAPL",
+                    market = Market.US,
+                    currentPrice = 110.0,
+                    previousClose = 105.0,
+                ),
+            ),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 0.9),
+        )
+
+        assertEquals(1, snapshot.positions.size)
+        assertEquals(10, snapshot.positions.getValue("US:AAPL").quantity)
+        assertEquals(100.0, snapshot.positions.getValue("US:AAPL").averageCost, 0.0001)
+        assertEquals(3_000.0, snapshot.cashBalanceCny, 0.0001)
+    }
+
     private fun trade(
         type: TradeType,
         market: Market,

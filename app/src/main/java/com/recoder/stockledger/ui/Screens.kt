@@ -1,6 +1,8 @@
 package com.recoder.stockledger.ui
 
 import android.app.DatePickerDialog
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
@@ -91,6 +93,8 @@ import kotlin.math.absoluteValue
 fun JointSplitCard(
     contributions: List<PartnerContribution>,
     displayCurrency: DisplayCurrency,
+    selectedPartner: String?,
+    onPartnerClick: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -135,6 +139,12 @@ fun JointSplitCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             contributions.forEach { contribution ->
+                val isSelected = selectedPartner == contribution.name
+                val border = if (isSelected) {
+                    androidx.compose.foundation.BorderStroke(1.5.dp, androidx.compose.ui.graphics.Color(0xFFE5A93B))
+                } else {
+                    null
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -142,6 +152,16 @@ fun JointSplitCard(
                             color = BackgroundPrimary,
                             shape = RoundedCornerShape(12.dp),
                         )
+                        .let { 
+                            if (border != null) it.border(border, RoundedCornerShape(12.dp)) else it
+                        }
+                        .clickable {
+                            if (isSelected) {
+                                onPartnerClick(null)
+                            } else {
+                                onPartnerClick(contribution.name)
+                            }
+                        }
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
@@ -171,6 +191,23 @@ fun JointSplitCard(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold,
                                 )
+                            }
+                            if (isSelected) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(
+                                            color = androidx.compose.ui.graphics.Color(0xFFE5A93B).copy(alpha = 0.15f),
+                                            shape = RoundedCornerShape(6.dp),
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        text = "当前视角",
+                                        color = androidx.compose.ui.graphics.Color(0xFFE5A93B),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
                             }
                         }
                         Text(
@@ -229,6 +266,8 @@ fun HoldingsRoute(
     selectedPlatform: BrokerPlatform?,
     activeLedgerType: String = "",
     partnerContributions: List<PartnerContribution> = emptyList(),
+    selectedPartner: String? = null,
+    onPartnerClick: (String?) -> Unit = {},
     onPlatformClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
@@ -335,7 +374,9 @@ fun HoldingsRoute(
                     item(key = "joint_split_card") {
                         JointSplitCard(
                             contributions = partnerContributions,
-                            displayCurrency = displayCurrency
+                            displayCurrency = displayCurrency,
+                            selectedPartner = selectedPartner,
+                            onPartnerClick = onPartnerClick,
                         )
                     }
                 }
@@ -441,6 +482,7 @@ fun OperationsRoute(
     onSellClick: () -> Unit,
     onDepositClick: () -> Unit,
     onWithdrawClick: () -> Unit,
+    onTransferClick: () -> Unit = {},
     onExportBackupClick: () -> Unit,
     onImportBackupClick: () -> Unit,
     backupStatusMessage: String?,
@@ -493,6 +535,7 @@ fun OperationsRoute(
                     onSellClick = onSellClick,
                     onDepositClick = onDepositClick,
                     onWithdrawClick = onWithdrawClick,
+                    onTransferClick = onTransferClick,
                 )
 
                 Column(
@@ -876,6 +919,9 @@ fun TransactionsRoute(
     activeLedgerId: Long = 1L,
     onMoveTransactionsToLedger: (Long) -> Unit = {},
 ) {
+    BackHandler(enabled = batchSelectionMode) {
+        onExitBatchMode()
+    }
     var showFilterSheet by remember { mutableStateOf(false) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var draftTradeFilter by remember { mutableStateOf(selectedTradeFilter) }
@@ -995,7 +1041,7 @@ fun TransactionsRoute(
                                     .background(SurfaceSecondary)
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                             ) {
-                                Text("批量删除", color = ForegroundPrimary, fontSize = 13.sp)
+                                Text("批量", color = ForegroundPrimary, fontSize = 13.sp)
                             }
                         }
                     }
@@ -1481,9 +1527,16 @@ fun TradeEntryRoute(
                         supportingText = "24小时制",
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Text,
-                        onValueChange = {
-                            timeValue = it
-                            onTimeChange(it.text)
+                        onValueChange = { textFieldValue ->
+                            val text = textFieldValue.text
+                            val adjustedText = if (timeValue.text.endsWith(":") && text.length == timeValue.text.length - 1) {
+                                text.dropLast(1)
+                            } else {
+                                text
+                            }
+                            val filtered = formatTimeInput(adjustedText)
+                            timeValue = TextFieldValue(filtered, selection = TextRange(filtered.length))
+                            onTimeChange(filtered)
                         },
                     )
                 }
@@ -1666,6 +1719,7 @@ fun TradeEntryRoute(
                             TradeType.SELL -> "确认卖出"
                             TradeType.DEPOSIT -> "确认入金"
                             TradeType.WITHDRAW -> "确认出金"
+                            else -> ""
                         }
                     },
                     onClick = onSubmit,
@@ -2047,6 +2101,384 @@ private fun TradeEntryRoutePreview() {
             onSubmit = {},
         )
     }
+}
+
+private fun formatTimeInput(input: String): String {
+    val digits = input.filter { it.isDigit() }.take(6)
+    val sb = java.lang.StringBuilder()
+    for (i in digits.indices) {
+        val char = digits[i]
+        when (i) {
+            0 -> if (char > '2') continue
+            1 -> {
+                val prev = digits[0]
+                if (prev == '2' && char > '3') continue
+            }
+            2 -> if (char > '5') continue
+            4 -> if (char > '5') continue
+        }
+        sb.append(char)
+        if ((i == 1 && digits.length > 2) || (i == 3 && digits.length > 4)) {
+            sb.append(":")
+        }
+    }
+    return sb.toString()
+}
+
+@Composable
+fun PlatformTransferDialog(
+    enabledPlatforms: List<BrokerPlatform>,
+    onDismiss: () -> Unit,
+    onConfirm: (
+        isStock: Boolean,
+        symbol: String,
+        name: String,
+        market: Market,
+        quantity: Int,
+        amount: Double,
+        currency: DisplayCurrency,
+        sourcePlatform: BrokerPlatform,
+        targetPlatform: BrokerPlatform,
+    ) -> Unit,
+) {
+    var isStock by remember { mutableStateOf(true) }
+    var sourcePlatform by remember { mutableStateOf(enabledPlatforms.firstOrNull { it != BrokerPlatform.UNSPECIFIED } ?: BrokerPlatform.HSBC) }
+    var targetPlatform by remember { mutableStateOf(enabledPlatforms.firstOrNull { it != BrokerPlatform.UNSPECIFIED && it != sourcePlatform } ?: BrokerPlatform.ZHUORUI) }
+    
+    var symbol by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var market by remember { mutableStateOf(Market.US) }
+    var quantityStr by remember { mutableStateOf("") }
+    
+    var currency by remember { mutableStateOf(DisplayCurrency.CNY) }
+    var amountStr by remember { mutableStateOf("") }
+    
+    var sourceExpanded by remember { mutableStateOf(false) }
+    var targetExpanded by remember { mutableStateOf(false) }
+    var marketExpanded by remember { mutableStateOf(false) }
+    var currencyExpanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "平台间资产转仓",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = ForegroundPrimary,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                        .padding(3.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isStock) BackgroundPrimary else androidx.compose.ui.graphics.Color.Transparent)
+                            .clickable { isStock = true }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "股票转仓",
+                            color = if (isStock) ForegroundPrimary else ForegroundSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (!isStock) BackgroundPrimary else androidx.compose.ui.graphics.Color.Transparent)
+                            .clickable { isStock = false }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "资金划转",
+                            color = if (!isStock) ForegroundPrimary else ForegroundSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("转出平台", color = ForegroundSecondary, fontSize = 12.sp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                            .clickable { sourceExpanded = true }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(sourcePlatform.label, color = ForegroundPrimary, fontSize = 14.sp)
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                tint = ForegroundSecondary,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = sourceExpanded,
+                            onDismissRequest = { sourceExpanded = false },
+                            modifier = Modifier.background(BackgroundPrimary),
+                        ) {
+                            enabledPlatforms.filter { it != BrokerPlatform.UNSPECIFIED }.forEach { platform ->
+                                DropdownMenuItem(
+                                    text = { Text(platform.label, color = ForegroundPrimary) },
+                                    onClick = {
+                                        sourcePlatform = platform
+                                        sourceExpanded = false
+                                        if (targetPlatform == platform) {
+                                            targetPlatform = enabledPlatforms.firstOrNull { it != BrokerPlatform.UNSPECIFIED && it != platform } ?: BrokerPlatform.UNSPECIFIED
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("转入平台", color = ForegroundSecondary, fontSize = 12.sp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                            .clickable { targetExpanded = true }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(targetPlatform.label, color = ForegroundPrimary, fontSize = 14.sp)
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                tint = ForegroundSecondary,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = targetExpanded,
+                            onDismissRequest = { targetExpanded = false },
+                            modifier = Modifier.background(BackgroundPrimary),
+                        ) {
+                            enabledPlatforms.filter { it != BrokerPlatform.UNSPECIFIED && it != sourcePlatform }.forEach { platform ->
+                                DropdownMenuItem(
+                                    text = { Text(platform.label, color = ForegroundPrimary) },
+                                    onClick = {
+                                        targetPlatform = platform
+                                        targetExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (isStock) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("股票代码", color = ForegroundSecondary, fontSize = 12.sp)
+                        InputFieldBlockWithoutTime(
+                            value = symbol,
+                            placeholder = "例如: AAPL",
+                            onValueChange = { symbol = it },
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("股票名称", color = ForegroundSecondary, fontSize = 12.sp)
+                        InputFieldBlockWithoutTime(
+                            value = name,
+                            placeholder = "例如: 苹果",
+                            onValueChange = { name = it },
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("所属市场", color = ForegroundSecondary, fontSize = 12.sp)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                                .clickable { marketExpanded = true }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(market.label, color = ForegroundPrimary, fontSize = 14.sp)
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = ForegroundSecondary,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = marketExpanded,
+                                onDismissRequest = { marketExpanded = false },
+                                modifier = Modifier.background(BackgroundPrimary),
+                            ) {
+                                listOf(Market.US, Market.HK, Market.A_SHARE).forEach { m ->
+                                    DropdownMenuItem(
+                                        text = { Text(m.label, color = ForegroundPrimary) },
+                                        onClick = {
+                                            market = m
+                                            marketExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("数量 (股)", color = ForegroundSecondary, fontSize = 12.sp)
+                        InputFieldBlockWithoutTime(
+                            value = quantityStr,
+                            placeholder = "要转移的股数",
+                            keyboardType = KeyboardType.Number,
+                            onValueChange = { quantityStr = it.filter { c -> c.isDigit() } },
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("币种", color = ForegroundSecondary, fontSize = 12.sp)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                                .clickable { currencyExpanded = true }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(currency.label, color = ForegroundPrimary, fontSize = 14.sp)
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = ForegroundSecondary,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = currencyExpanded,
+                                onDismissRequest = { currencyExpanded = false },
+                                modifier = Modifier.background(BackgroundPrimary),
+                            ) {
+                                DisplayCurrency.entries.forEach { cur ->
+                                    DropdownMenuItem(
+                                        text = { Text(cur.label, color = ForegroundPrimary) },
+                                        onClick = {
+                                            currency = cur
+                                            currencyExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("划转金额", color = ForegroundSecondary, fontSize = 12.sp)
+                        InputFieldBlockWithoutTime(
+                            value = amountStr,
+                            placeholder = "要划转的金额",
+                            keyboardType = KeyboardType.Decimal,
+                            onValueChange = { amountStr = it },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val qty = quantityStr.toIntOrNull() ?: 0
+                    val amt = amountStr.toDoubleOrNull() ?: 0.0
+                    if (sourcePlatform != BrokerPlatform.UNSPECIFIED && targetPlatform != BrokerPlatform.UNSPECIFIED) {
+                        onConfirm(
+                            isStock,
+                            symbol,
+                            name,
+                            market,
+                            qty,
+                            amt,
+                            currency,
+                            sourcePlatform,
+                            targetPlatform,
+                        )
+                        onDismiss()
+                    }
+                },
+                enabled = if (isStock) {
+                    symbol.isNotBlank() && name.isNotBlank() && (quantityStr.toIntOrNull() ?: 0) > 0
+                } else {
+                    (amountStr.toDoubleOrNull() ?: 0.0) > 0.0
+                }
+            ) {
+                Text("确定", color = androidx.compose.ui.graphics.Color(0xFFE5A93B), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = ForegroundSecondary)
+            }
+        },
+        containerColor = BackgroundPrimary,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InputFieldBlockWithoutTime(
+    value: String,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    onValueChange: (String) -> Unit,
+) {
+    androidx.compose.material3.TextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { Text(placeholder, color = ForegroundMuted, fontSize = 14.sp) },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = keyboardType),
+        colors = androidx.compose.material3.TextFieldDefaults.colors(
+            focusedTextColor = ForegroundPrimary,
+            unfocusedTextColor = ForegroundPrimary,
+            focusedContainerColor = SurfaceSecondary,
+            unfocusedContainerColor = SurfaceSecondary,
+            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+        ),
+        shape = RoundedCornerShape(8.dp),
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
 

@@ -180,6 +180,7 @@ data class LedgerUiState(
     val ledgers: List<LedgerEntity> = emptyList(),
     val selectedLedgerId: Long = 1L,
     val partnerContributions: List<PartnerContribution> = emptyList(),
+    val selectedPartnerPerspective: String? = null,
 )
 
 data class PartnerContribution(
@@ -228,7 +229,7 @@ class LedgerViewModel(
     private val enabledPlatforms = MutableStateFlow(loadEnabledPlatforms())
     private val platformFeePlanSelections = MutableStateFlow(loadPlatformFeePlanSelections())
     private val zhuoruiPromoConfig = MutableStateFlow(loadZhuoruiPromoConfig())
-    private val transactionSnapshot = MutableStateFlow<List<TransactionEntity>>(emptyList())
+    val transactionSnapshot = MutableStateFlow<List<TransactionEntity>>(emptyList())
     private val draft = MutableStateFlow(SampleData.tradeForm(TradeType.BUY))
     private val symbolLookup = MutableStateFlow(SymbolLookupUiModel())
     private val symbolSuggestions = MutableStateFlow<List<SecuritySuggestionUiModel>>(emptyList())
@@ -259,6 +260,7 @@ class LedgerViewModel(
     private val selectedTransactionIds = MutableStateFlow<Set<Long>>(emptySet())
 
     val selectedLedgerId = MutableStateFlow(1L)
+    val selectedPartnerPerspective = MutableStateFlow<String?>(null)
     
     val ledgers = repository.ledgers.stateIn(
         scope = viewModelScope,
@@ -431,8 +433,13 @@ class LedgerViewModel(
         upstream to platforms
     }.combine(displayCurrency) { upstream, selectedDisplayCurrency ->
         Triple(upstream.first, upstream.second, selectedDisplayCurrency)
+    }.combine(partnerContributions) { upstream, contributions ->
+        Pair(upstream, contributions)
+    }.combine(selectedPartnerPerspective) { upstream, perspective ->
+        Triple(upstream.first, upstream.second, perspective)
     }.combine(symbolLookup) { upstream, lookup ->
-        val (state, platforms, selectedDisplayCurrency) = upstream
+        val (firstPart, contributions, perspective) = upstream
+        val (state, platforms, selectedDisplayCurrency) = firstPart
         val selectedFilters = state.upstream.upstream.filters
         val context = state.upstream.upstream.context
 
@@ -466,8 +473,10 @@ class LedgerViewModel(
                     .takeIf { current -> current !in platforms.enabled && current.isConfigurable }
                     ?.let(::add)
             }
-            LedgerUiState(
-                summary = buildSummary(
+            val partnerContribution = contributions.firstOrNull { it.name == perspective }
+            val (finalSummary, finalHoldings) = if (perspective != null && partnerContribution != null) {
+                val ratio = partnerContribution.ratio
+                val summary = buildSummary(
                     portfolio = context.portfolio,
                     refresh = state.refresh.refresh,
                     refreshedAt = state.refresh.refreshedAt,
@@ -475,8 +484,98 @@ class LedgerViewModel(
                     showPullRefreshTime = state.refresh.showPullRefreshTime,
                     displayCurrency = selectedDisplayCurrency,
                     exchangeRates = repository.exchangeRates.value,
-                ),
-                holdings = context.portfolio.holdings,
+                ).copy(
+                    totalAssets = formatDisplayCurrencyAmount(partnerContribution.assetsShareCny, selectedDisplayCurrency),
+                    totalCost = formatDisplayCurrencyAmount(partnerContribution.netContributionCny, selectedDisplayCurrency),
+                    totalProfit = formatSignedDisplayCurrencyAmount(partnerContribution.pnlShareCny, selectedDisplayCurrency),
+                    totalCostHint = "视角: ${partnerContribution.name} · 累计净入金 ${formatDisplayCurrencyAmount(partnerContribution.netContributionCny, selectedDisplayCurrency)}",
+                    totalProfitHint = "权益占比 ${String.format("%.2f%%", ratio * 100)}",
+                    cashBalance = formatDisplayAmount(context.portfolio.cashBalanceCny * ratio, selectedDisplayCurrency, repository.exchangeRates.value),
+                    holdingsValue = formatDisplayAmount(context.portfolio.holdingsValueCny * ratio, selectedDisplayCurrency, repository.exchangeRates.value),
+                    dayProfit = "${formatDisplayAmount(context.portfolio.dayProfitCny * ratio, selectedDisplayCurrency, repository.exchangeRates.value)} (${formatSignedPercent(context.portfolio.dayProfitPercent)})"
+                )
+                val holdings = context.portfolio.positions.values
+                    .filter { it.quantity != 0 }
+                    .map { position ->
+                        val quote = context.quotes.firstOrNull { it.symbol == position.symbol && it.market == position.market.name }
+                        val currentPrice = quote?.currentPrice
+                        val previousClose = quote?.previousClose
+                        
+                        val scaledQty = position.quantity * ratio
+                        val scaledCost = position.remainingCost * ratio
+                        val scaledAvgCost = if (position.quantity != 0) position.remainingCost / position.quantity else 0.0
+                        
+                        val unrealized = currentPrice?.let { (it - scaledAvgCost) * scaledQty }
+                        val dayProfit = if (currentPrice != null && previousClose != null) {
+                            (currentPrice - previousClose) * scaledQty
+                        } else {
+                            null
+                        }
+                        val dayPercent = if (currentPrice != null && previousClose != null && previousClose > 0.0) {
+                            ((currentPrice - previousClose) / previousClose) * 100.0
+                        } else {
+                            null
+                        }
+                        val totalProfitPercent = if (unrealized != null && scaledCost != 0.0) {
+                            (unrealized / scaledCost.absoluteValue) * 100.0
+                        } else {
+                            null
+                        }
+                        val marketValue = (currentPrice ?: scaledAvgCost) * scaledQty
+                        
+                        val formattedQty = String.format("%.2f", scaledQty).removeSuffix(".00").removeSuffix("0").removeSuffix(".")
+                        
+                        HoldingUiModel(
+                            name = position.name,
+                            code = position.symbol,
+                            market = position.market,
+                            quantityLabel = "$formattedQty 股",
+                            costLabel = "成本 ${formatMarketAmount(scaledAvgCost, position.market)}",
+                            priceLabel = currentPrice?.let { formatMarketAmount(it, position.market) } ?: "--",
+                            changeLabel = dayPercent?.let(::formatSignedPercent) ?: "价格暂不可用",
+                            pnlLabel = unrealized?.let { labelForUnrealized(it, position.market) } ?: "价格暂不可用",
+                            trend = when {
+                                currentPrice == null || dayPercent == null -> PriceTrend.NEUTRAL
+                                dayPercent > 0 -> PriceTrend.UP
+                                dayPercent < 0 -> PriceTrend.DOWN
+                                else -> PriceTrend.NEUTRAL
+                            },
+                            dayProfitLabel = dayProfit?.let { formatSignedMarketAmount(it, position.market) } ?: "--",
+                            dayProfitPercentLabel = dayPercent?.let(::formatSignedPercent) ?: "--",
+                            totalProfitLabel = unrealized?.let { formatSignedMarketAmount(it, position.market) } ?: "--",
+                            totalProfitPercentLabel = totalProfitPercent?.let(::formatSignedPercent) ?: "--",
+                            dayTrend = when {
+                                dayProfit == null -> PriceTrend.NEUTRAL
+                                dayProfit > 0 -> PriceTrend.UP
+                                dayProfit < 0 -> PriceTrend.DOWN
+                                else -> PriceTrend.NEUTRAL
+                            },
+                            totalTrend = when {
+                                unrealized == null -> PriceTrend.NEUTRAL
+                                unrealized > 0 -> PriceTrend.UP
+                                unrealized < 0 -> PriceTrend.DOWN
+                                else -> PriceTrend.NEUTRAL
+                            },
+                        ) to marketValue
+                    }
+                    .sortedByDescending { it.second }
+                    .map { it.first }
+                Pair(summary, holdings)
+            } else {
+                val summary = buildSummary(
+                    portfolio = context.portfolio,
+                    refresh = state.refresh.refresh,
+                    refreshedAt = state.refresh.refreshedAt,
+                    refreshNote = state.refresh.note,
+                    showPullRefreshTime = state.refresh.showPullRefreshTime,
+                    displayCurrency = selectedDisplayCurrency,
+                    exchangeRates = repository.exchangeRates.value,
+                )
+                Pair(summary, context.portfolio.holdings)
+            }
+            LedgerUiState(
+                summary = finalSummary,
+                holdings = finalHoldings,
                 sellCandidates = buildSellCandidates(context.draftReferencePortfolio.positions),
                 transactionSections = buildTransactionSections(
                     transactions = platformScopedTransactions,
@@ -541,6 +640,7 @@ class LedgerViewModel(
                 editingTransactionId = context.editingTrade?.transactionId,
                 displayCurrency = selectedDisplayCurrency,
                 exchangeRates = repository.exchangeRates.value,
+                selectedPartnerPerspective = perspective,
             )
         }
     }.combine(symbolSuggestions) { state, suggestions ->
@@ -758,6 +858,10 @@ class LedgerViewModel(
 
     fun selectTradeFilter(filter: TransactionFilter) {
         tradeFilter.value = filter
+    }
+
+    fun selectPartnerPerspective(partner: String?) {
+        selectedPartnerPerspective.value = partner
     }
 
     fun selectMarketFilter(filter: MarketFilter) {
@@ -1965,24 +2069,24 @@ class LedgerViewModel(
                         TransactionUiModel(
                             id = transaction.id,
                             tradeType = tradeType,
-                            stockName = if (tradeType.isSecurityTrade) {
+                            stockName = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "${transaction.symbol} ${transaction.name}"
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
-                            primaryMeta = if (tradeType.isSecurityTrade) {
+                            primaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "${platform.label} · ${market.label}"
                             } else {
                                 platform.label
                             },
-                            secondaryMeta = if (tradeType.isSecurityTrade) {
+                            secondaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
                             amountLabel = formatSignedMarketAmount(cashFlow, market),
                             timeLabel = transaction.tradeTime,
-                            feeLabel = if (tradeType.isSecurityTrade) {
+                            feeLabel = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "费用 ${formatMarketAmount(transaction.commission + transaction.tax, market)}"
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
@@ -2082,6 +2186,56 @@ class LedgerViewModel(
                         cashBalanceCny -= amountCny
                         totalWithdrawCny += amountCny
                         dailyNetFlowCny -= amountCny
+                    }
+
+                    TradeType.TRANSFER_IN -> {
+                        if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                            val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                            cashBalanceCny += amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, market)
+                            val current = positions[key] ?: PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = 0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0
+                            )
+                            val nextQuantity = current.quantity + transaction.quantity
+                            val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
+                    }
+
+                    TradeType.TRANSFER_OUT -> {
+                        if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                            val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                            cashBalanceCny -= amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, market)
+                            val current = positions[key] ?: PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = 0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0
+                            )
+                            val nextQuantity = current.quantity - transaction.quantity
+                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
                     }
 
                     TradeType.BUY, TradeType.SELL -> {
@@ -2435,6 +2589,56 @@ class LedgerViewModel(
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                     netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
                 }
+
+                TradeType.TRANSFER_IN -> {
+                    if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                        netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
+                    } else {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0
+                        )
+                        val nextQuantity = current.quantity + transaction.quantity
+                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = nextRemaining,
+                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                        )
+                    }
+                }
+
+                TradeType.TRANSFER_OUT -> {
+                    if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                        netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
+                    } else {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0
+                        )
+                        val nextQuantity = current.quantity - transaction.quantity
+                        val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = nextRemaining,
+                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                        )
+                    }
+                }
             }
         }
 
@@ -2628,6 +2832,50 @@ class LedgerViewModel(
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                     cashBalanceCny -= amountCny
                     totalWithdrawCny += amountCny
+                }
+
+                TradeType.TRANSFER_OUT -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                        cashBalanceCny -= amountCny
+                    } else {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key]
+                        if (current != null) {
+                            val nextQuantity = current.quantity - transaction.quantity
+                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity
+                            )
+                        }
+                    }
+                }
+
+                TradeType.TRANSFER_IN -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                        cashBalanceCny += amountCny
+                    } else {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                        )
+                        val nextQuantity = current.quantity + transaction.quantity
+                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = nextRemaining,
+                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity
+                        )
+                    }
                 }
 
                 TradeType.BUY, TradeType.SELL -> {
@@ -2852,6 +3100,16 @@ class LedgerViewModel(
 
     private fun convertToCny(value: Double, market: Market, exchangeRates: ExchangeRates): Double =
         value * exchangeRates.rateToCny(market)
+
+    private fun formatDisplayCurrencyAmount(amount: Double, currency: DisplayCurrency): String {
+        val prefix = if (amount < 0) "-" else ""
+        return "$prefix${currency.symbol}${numberFormatter.format(amount.absoluteValue)}"
+    }
+
+    private fun formatSignedDisplayCurrencyAmount(amount: Double, currency: DisplayCurrency): String {
+        val prefix = if (amount > 0) "+" else if (amount < 0) "-" else ""
+        return "$prefix${currency.symbol}${numberFormatter.format(amount.absoluteValue)}"
+    }
 
     private fun convertFromCny(
         value: Double,
@@ -3154,6 +3412,20 @@ class LedgerViewModel(
         TradeType.SELL -> transaction.price * transaction.quantity - transaction.commission - transaction.tax
         TradeType.DEPOSIT -> transaction.price * transaction.quantity
         TradeType.WITHDRAW -> -(transaction.price * transaction.quantity)
+        TradeType.TRANSFER_OUT -> {
+            if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                -(transaction.price * transaction.quantity)
+            } else {
+                0.0
+            }
+        }
+        TradeType.TRANSFER_IN -> {
+            if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                transaction.price * transaction.quantity
+            } else {
+                0.0
+            }
+        }
     }
 
     private enum class RefreshTrigger {
@@ -3584,7 +3856,115 @@ private data class RefreshMeta(
 
     fun switchLedger(ledgerId: Long) {
         selectedLedgerId.value = ledgerId
+        selectedPartnerPerspective.value = null
         updateTradeInvestorName(null)
+    }
+
+    fun performPlatformTransfer(
+        isStock: Boolean,
+        symbol: String,
+        name: String,
+        market: Market,
+        quantity: Int,
+        amount: Double,
+        currency: DisplayCurrency,
+        sourcePlatform: BrokerPlatform,
+        targetPlatform: BrokerPlatform,
+    ) {
+        viewModelScope.launch {
+            val date = LocalDate.now().toString()
+            val time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
+            val nowMs = System.currentTimeMillis()
+            
+            if (isStock) {
+                val allTx = transactionSnapshot.value
+                val sourceTx = filterTransactionsByPlatform(allTx, sourcePlatform)
+                val sourcePortfolio = computePortfolio(sourceTx, repository.quotes.first(), repository.exchangeRates.value)
+                val key = positionKey(symbol, market)
+                val position = sourcePortfolio.positions[key]
+                val carryingCost = position?.averageCost ?: 0.0
+                
+                val txOut = TradeDraftInput(
+                    tradeType = TradeType.TRANSFER_OUT,
+                    platform = sourcePlatform,
+                    market = market,
+                    symbol = symbol,
+                    name = name,
+                    tradeDate = date,
+                    tradeTime = time,
+                    price = carryingCost,
+                    quantity = quantity,
+                    commission = 0.0,
+                    tax = 0.0,
+                    note = "转仓至 ${targetPlatform.label}",
+                    createdAt = nowMs,
+                    ledgerId = selectedLedgerId.value,
+                )
+                
+                val txIn = TradeDraftInput(
+                    tradeType = TradeType.TRANSFER_IN,
+                    platform = targetPlatform,
+                    market = market,
+                    symbol = symbol,
+                    name = name,
+                    tradeDate = date,
+                    tradeTime = time,
+                    price = carryingCost,
+                    quantity = quantity,
+                    commission = 0.0,
+                    tax = 0.0,
+                    note = "从 ${sourcePlatform.label} 转仓",
+                    createdAt = nowMs + 10,
+                    ledgerId = selectedLedgerId.value,
+                )
+                
+                repository.addTrade(txOut)
+                repository.addTrade(txIn)
+            } else {
+                val cashMarket = when (currency) {
+                    DisplayCurrency.CNY -> Market.CASH
+                    DisplayCurrency.HKD -> Market.HK
+                    DisplayCurrency.USD -> Market.US
+                }
+                
+                val txOut = TradeDraftInput(
+                    tradeType = TradeType.TRANSFER_OUT,
+                    platform = sourcePlatform,
+                    market = cashMarket,
+                    symbol = CASH_ACCOUNT_SYMBOL,
+                    name = CASH_ACCOUNT_NAME,
+                    tradeDate = date,
+                    tradeTime = time,
+                    price = amount,
+                    quantity = 1,
+                    commission = 0.0,
+                    tax = 0.0,
+                    note = "资金划转至 ${targetPlatform.label}",
+                    createdAt = nowMs,
+                    ledgerId = selectedLedgerId.value,
+                )
+                
+                val txIn = TradeDraftInput(
+                    tradeType = TradeType.TRANSFER_IN,
+                    platform = targetPlatform,
+                    market = cashMarket,
+                    symbol = CASH_ACCOUNT_SYMBOL,
+                    name = CASH_ACCOUNT_NAME,
+                    tradeDate = date,
+                    tradeTime = time,
+                    price = amount,
+                    quantity = 1,
+                    commission = 0.0,
+                    tax = 0.0,
+                    note = "资金从 ${sourcePlatform.label} 划转",
+                    createdAt = nowMs + 10,
+                    ledgerId = selectedLedgerId.value,
+                )
+                
+                repository.addTrade(txOut)
+                repository.addTrade(txIn)
+            }
+        }
     }
 
     fun createLedger(name: String, type: String, description: String, partners: String) {
@@ -3730,6 +4110,25 @@ private data class RefreshMeta(
                     stockQuantities[key] = (stockQuantities[key] ?: 0.0) - tx.quantity
                     val proceedsCny = convertToCny(tx.price * tx.quantity - tx.commission - tx.tax, market, exchangeRates)
                     cashBalanceCny += proceedsCny
+                }
+                TradeType.TRANSFER_OUT -> {
+                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    if (market == Market.CASH || tx.symbol == CASH_ACCOUNT_SYMBOL) {
+                        cashBalanceCny -= amountCny
+                    } else {
+                        stockQuantities[key] = (stockQuantities[key] ?: 0.0) - tx.quantity
+                    }
+                }
+                TradeType.TRANSFER_IN -> {
+                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    if (market == Market.CASH || tx.symbol == CASH_ACCOUNT_SYMBOL) {
+                        cashBalanceCny += amountCny
+                    } else {
+                        if (stockPrices[key] == null || stockPrices[key] == 0.0) {
+                            stockPrices[key] = convertToCny(tx.price, market, exchangeRates)
+                        }
+                        stockQuantities[key] = (stockQuantities[key] ?: 0.0) + tx.quantity
+                    }
                 }
                 else -> {}
             }

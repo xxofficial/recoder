@@ -42,13 +42,15 @@ enum class TradeType(val label: String) {
     SELL("卖出"),
     DEPOSIT("入金"),
     WITHDRAW("出金"),
+    TRANSFER_OUT("转出"),
+    TRANSFER_IN("转入"),
     ;
 
     val isSecurityTrade: Boolean
         get() = this == BUY || this == SELL
 
     val isCashFlowPositive: Boolean
-        get() = this == SELL || this == DEPOSIT
+        get() = this == SELL || this == DEPOSIT || this == TRANSFER_IN
 }
 
 enum class RefreshState(val title: String) {

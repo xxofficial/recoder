@@ -265,6 +265,7 @@ fun TradeActionButtons(
     onSellClick: () -> Unit,
     onDepositClick: () -> Unit,
     onWithdrawClick: () -> Unit,
+    onTransferClick: () -> Unit,
     enabled: Boolean = true,
 ) {
     Column(
@@ -304,6 +305,11 @@ fun TradeActionButtons(
             OutlineActionButton(
                 text = "出金",
                 onClick = onWithdrawClick,
+                modifier = Modifier.weight(1f),
+            )
+            OutlineActionButton(
+                text = "转仓",
+                onClick = onTransferClick,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1391,8 +1397,8 @@ fun TradeTypeSelector(
 }
 
 fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
-    TradeType.BUY, TradeType.DEPOSIT -> MarketUpSoft to MarketUp
-    TradeType.SELL, TradeType.WITHDRAW -> MarketDownSoft to MarketDown
+    TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN -> MarketUpSoft to MarketUp
+    TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT -> MarketDownSoft to MarketDown
 }
 
 @Composable
