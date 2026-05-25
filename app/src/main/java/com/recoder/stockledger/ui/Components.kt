@@ -1,6 +1,7 @@
 package com.recoder.stockledger.ui
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1277,6 +1278,36 @@ fun TradeEntryDateField(
                 selectedDate.year,
                 selectedDate.monthValue - 1,
                 selectedDate.dayOfMonth,
+            ).show()
+        },
+    )
+}
+  
+@Composable
+fun TradeEntryTimeField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val selectedTime = remember(value) {
+        runCatching { java.time.LocalTime.parse(value) }.getOrNull() ?: java.time.LocalTime.now()
+    }
+    InputFieldBlock(
+        label = "交易时间",
+        value = value,
+        modifier = modifier,
+        trailingIcon = Icons.Filled.KeyboardArrowDown,
+        onClick = {
+            TimePickerDialog(
+                context,
+                { _, hourOfDay, minuteOfHour ->
+                    val formatted = String.format(java.util.Locale.US, "%02d:%02d:00", hourOfDay, minuteOfHour)
+                    onValueChange(formatted)
+                },
+                selectedTime.hour,
+                selectedTime.minute,
+                true // is24HourView
             ).show()
         },
     )

@@ -52,3 +52,31 @@ data class SecurityProfitPointUiModel(
     val cumulativeProfitCny: Double,
     val closePrice: Double? = null,
 )
+
+fun ProfitAnalysisUiModel.scaled(ratio: Double): ProfitAnalysisUiModel {
+    return this.copy(
+        dailyPoints = this.dailyPoints.map { pt ->
+            pt.copy(
+                dailyProfitCny = pt.dailyProfitCny * ratio,
+                cumulativeProfitCny = pt.cumulativeProfitCny * ratio,
+                totalAssetsCny = pt.totalAssetsCny * ratio,
+                netInflowCny = pt.netInflowCny * ratio,
+                dailyCommissionCny = pt.dailyCommissionCny * ratio,
+                dailyTaxCny = pt.dailyTaxCny * ratio
+            )
+        },
+        securityAnalyses = this.securityAnalyses.map { sa ->
+            sa.copy(
+                dailyPoints = sa.dailyPoints.map { spt ->
+                    spt.copy(
+                        dailyProfitCny = spt.dailyProfitCny * ratio,
+                        cumulativeProfitCny = spt.cumulativeProfitCny * ratio
+                    )
+                }
+            )
+        },
+        netInflowCny = this.netInflowCny * ratio,
+        totalCommissionCny = this.totalCommissionCny * ratio,
+        totalTaxCny = this.totalTaxCny * ratio
+    )
+}

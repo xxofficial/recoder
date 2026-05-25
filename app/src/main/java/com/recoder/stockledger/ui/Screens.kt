@@ -1,6 +1,7 @@
 package com.recoder.stockledger.ui
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -1522,24 +1523,13 @@ fun TradeEntryRoute(
                         onValueChange = onDateChange,
                         modifier = Modifier.weight(1f),
                     )
-                    InputFieldBlock(
-                        label = "交易时间",
-                        value = timeValue,
-                        placeholder = "HH:MM:SS",
-                        supportingText = "24小时制",
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Text,
-                        onValueChange = { textFieldValue ->
-                            val text = textFieldValue.text
-                            val adjustedText = if (timeValue.text.endsWith(":") && text.length == timeValue.text.length - 1) {
-                                text.dropLast(1)
-                            } else {
-                                text
-                            }
-                            val filtered = formatTimeInput(adjustedText)
+                    TradeEntryTimeField(
+                        value = timeValue.text,
+                        onValueChange = { filtered ->
                             timeValue = TextFieldValue(filtered, selection = TextRange(filtered.length))
                             onTimeChange(filtered)
                         },
+                        modifier = Modifier.weight(1f),
                     )
                 }
 
@@ -2361,20 +2351,29 @@ fun PlatformTransferDialog(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text("转移时间", color = ForegroundSecondary, fontSize = 12.sp)
-                        InputFieldBlockWithoutTime(
-                            value = timeValue.text,
-                            placeholder = "HH:MM:SS",
-                            keyboardType = KeyboardType.Text,
-                            onValueChange = { text ->
-                                val adjustedText = if (timeValue.text.endsWith(":") && text.length == timeValue.text.length - 1) {
-                                    text.dropLast(1)
-                                } else {
-                                    text
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val timeParts = timeValue.text.split(":").mapNotNull { it.toIntOrNull() }
+                                    val hour = timeParts.getOrNull(0) ?: calendar.get(java.util.Calendar.HOUR_OF_DAY)
+                                    val minute = timeParts.getOrNull(1) ?: calendar.get(java.util.Calendar.MINUTE)
+                                    TimePickerDialog(
+                                        context,
+                                        { _, hourOfDay, minuteOfHour ->
+                                            val formattedTime = String.format(java.util.Locale.US, "%02d:%02d:00", hourOfDay, minuteOfHour)
+                                            timeValue = androidx.compose.ui.text.input.TextFieldValue(formattedTime, selection = androidx.compose.ui.text.TextRange(formattedTime.length))
+                                        },
+                                        hour,
+                                        minute,
+                                        true // is24HourView
+                                    ).show()
                                 }
-                                val filtered = formatTimeInput(adjustedText)
-                                timeValue = androidx.compose.ui.text.input.TextFieldValue(filtered, selection = androidx.compose.ui.text.TextRange(filtered.length))
-                            },
-                        )
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                        ) {
+                            Text(timeValue.text, color = ForegroundPrimary, fontSize = 14.sp)
+                        }
                     }
                 }
 
@@ -2385,15 +2384,6 @@ fun PlatformTransferDialog(
                             value = symbol,
                             placeholder = "例如: AAPL",
                             onValueChange = { symbol = it },
-                        )
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("股票名称", color = ForegroundSecondary, fontSize = 12.sp)
-                        InputFieldBlockWithoutTime(
-                            value = name,
-                            placeholder = "例如: 苹果",
-                            onValueChange = { name = it },
                         )
                     }
 
