@@ -1573,8 +1573,8 @@ fun TradeEntryRoute(
                     val partners = remember(activeLedgerPartners) {
                         activeLedgerPartners.split(",").map { it.trim() }.filter { it.isNotBlank() }
                     }
-                    LaunchedEffect(partners, state.investorName) {
-                        if (activeLedgerType == "JOINT" && state.investorName == null && partners.isNotEmpty()) {
+                    LaunchedEffect(partners, state.investorName, isEditing) {
+                        if (activeLedgerType == "JOINT" && state.investorName == null && partners.isNotEmpty() && !isEditing) {
                             onInvestorSelected?.invoke(partners.first())
                         }
                     }
@@ -2133,6 +2133,7 @@ private fun formatTimeInput(input: String): String {
 @Composable
 fun PlatformTransferDialog(
     enabledPlatforms: List<BrokerPlatform>,
+    getCashBalance: (BrokerPlatform, DisplayCurrency) -> Double,
     onDismiss: () -> Unit,
     onConfirm: (
         isStock: Boolean,
@@ -2144,6 +2145,8 @@ fun PlatformTransferDialog(
         currency: DisplayCurrency,
         sourcePlatform: BrokerPlatform,
         targetPlatform: BrokerPlatform,
+        tradeDate: String,
+        tradeTime: String,
     ) -> Unit,
 ) {
     var isStock by remember { mutableStateOf(true) }
@@ -2158,6 +2161,21 @@ fun PlatformTransferDialog(
     var currency by remember { mutableStateOf(DisplayCurrency.CNY) }
     var amountStr by remember { mutableStateOf("") }
     
+    LaunchedEffect(isStock, sourcePlatform, currency) {
+        if (!isStock) {
+            val balance = getCashBalance(sourcePlatform, currency)
+            amountStr = if (balance <= 0.0) "" else String.format(java.util.Locale.US, "%.2f", balance)
+        }
+    }
+    
+    var tradeDate by remember { mutableStateOf(LocalDate.now().toString()) }
+    val initialTime = remember { java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")) }
+    var timeValue by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(initialTime, androidx.compose.ui.text.TextRange(initialTime.length))) }
+    
+    val isValidTime = remember(timeValue.text) {
+        runCatching { java.time.LocalTime.parse(timeValue.text) }.isSuccess
+    }
+
     var sourceExpanded by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
     var marketExpanded by remember { mutableStateOf(false) }
@@ -2301,6 +2319,65 @@ fun PlatformTransferDialog(
                     }
                 }
 
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val calendar = remember { java.util.Calendar.getInstance() }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text("转移日期", color = ForegroundSecondary, fontSize = 12.sp)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SurfaceSecondary, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val dateParts = tradeDate.split("-").mapNotNull { it.toIntOrNull() }
+                                    val y = dateParts.getOrNull(0) ?: calendar.get(java.util.Calendar.YEAR)
+                                    val m = dateParts.getOrNull(1)?.minus(1) ?: calendar.get(java.util.Calendar.MONTH)
+                                    val d = dateParts.getOrNull(2) ?: calendar.get(java.util.Calendar.DAY_OF_MONTH)
+                                    DatePickerDialog(
+                                        context,
+                                        { _, year, month, dayOfMonth ->
+                                            tradeDate = java.time.LocalDate.of(year, month + 1, dayOfMonth).toString()
+                                        },
+                                        y,
+                                        m,
+                                        d
+                                    ).show()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                        ) {
+                            Text(tradeDate, color = ForegroundPrimary, fontSize = 14.sp)
+                        }
+                    }
+                    
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text("转移时间", color = ForegroundSecondary, fontSize = 12.sp)
+                        InputFieldBlockWithoutTime(
+                            value = timeValue.text,
+                            placeholder = "HH:MM:SS",
+                            keyboardType = KeyboardType.Text,
+                            onValueChange = { text ->
+                                val adjustedText = if (timeValue.text.endsWith(":") && text.length == timeValue.text.length - 1) {
+                                    text.dropLast(1)
+                                } else {
+                                    text
+                                }
+                                val filtered = formatTimeInput(adjustedText)
+                                timeValue = androidx.compose.ui.text.input.TextFieldValue(filtered, selection = androidx.compose.ui.text.TextRange(filtered.length))
+                            },
+                        )
+                    }
+                }
+
                 if (isStock) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("股票代码", color = ForegroundSecondary, fontSize = 12.sp)
@@ -2425,7 +2502,7 @@ fun PlatformTransferDialog(
                 onClick = {
                     val qty = quantityStr.toIntOrNull() ?: 0
                     val amt = amountStr.toDoubleOrNull() ?: 0.0
-                    if (sourcePlatform != BrokerPlatform.UNSPECIFIED && targetPlatform != BrokerPlatform.UNSPECIFIED) {
+                    if (sourcePlatform != BrokerPlatform.UNSPECIFIED && targetPlatform != BrokerPlatform.UNSPECIFIED && isValidTime) {
                         onConfirm(
                             isStock,
                             symbol,
@@ -2436,15 +2513,17 @@ fun PlatformTransferDialog(
                             currency,
                             sourcePlatform,
                             targetPlatform,
+                            tradeDate,
+                            timeValue.text,
                         )
                         onDismiss()
                     }
                 },
-                enabled = if (isStock) {
-                    symbol.isNotBlank() && name.isNotBlank() && (quantityStr.toIntOrNull() ?: 0) > 0
+                enabled = (if (isStock) {
+                    symbol.isNotBlank() && (quantityStr.toIntOrNull() ?: 0) > 0
                 } else {
                     (amountStr.toDoubleOrNull() ?: 0.0) > 0.0
-                }
+                }) && isValidTime
             ) {
                 Text("确定", color = androidx.compose.ui.graphics.Color(0xFFE5A93B), fontWeight = FontWeight.Bold)
             }

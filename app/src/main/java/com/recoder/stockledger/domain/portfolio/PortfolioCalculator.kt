@@ -102,8 +102,8 @@ class PortfolioCalculator {
                     }
 
                     TradeType.TRANSFER_IN -> {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
                         if (transaction.symbol == "CASH") {
-                            val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
                             cashBalanceCny += amountCny
                         } else {
                             val key = positionKey(transaction.symbol, transaction.market)
@@ -124,11 +124,12 @@ class PortfolioCalculator {
                                 averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
                             )
                         }
+                        totalDepositCny += amountCny
                     }
 
                     TradeType.TRANSFER_OUT -> {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
                         if (transaction.symbol == "CASH") {
-                            val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
                             cashBalanceCny -= amountCny
                         } else {
                             val key = positionKey(transaction.symbol, transaction.market)
@@ -149,6 +150,7 @@ class PortfolioCalculator {
                                 averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
                             )
                         }
+                        totalWithdrawCny += amountCny
                     }
                 }
             }

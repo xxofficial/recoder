@@ -283,28 +283,46 @@ class DefaultLedgerRepository(
         input: TradeDraftInput,
     ) {
         val resolvedName = resolveConsistentName(input.symbol, input.market, input.name)
-        dao.updateTransaction(
-            TransactionEntity(
-                id = transactionId,
-                tradeType = input.tradeType.name,
-                platform = input.platform.name,
-                sourceChannel = input.sourceChannel?.name,
-                externalReference = input.externalReference,
-                market = input.market.name,
-                symbol = input.symbol,
-                name = resolvedName,
-                tradeDate = input.tradeDate,
-                tradeTime = input.tradeTime,
-                price = input.price,
-                quantity = input.quantity,
-                commission = input.commission,
-                tax = input.tax,
-                note = input.note,
-                createdAt = input.createdAt,
-                ledgerId = input.ledgerId,
-                investorName = input.investorName,
-            ),
+        val entity = TransactionEntity(
+            id = transactionId,
+            tradeType = input.tradeType.name,
+            platform = input.platform.name,
+            sourceChannel = input.sourceChannel?.name,
+            externalReference = input.externalReference,
+            market = input.market.name,
+            symbol = input.symbol,
+            name = resolvedName,
+            tradeDate = input.tradeDate,
+            tradeTime = input.tradeTime,
+            price = input.price,
+            quantity = input.quantity,
+            commission = input.commission,
+            tax = input.tax,
+            note = input.note,
+            createdAt = input.createdAt,
+            ledgerId = input.ledgerId,
+            investorName = input.investorName,
         )
+        dao.updateTransaction(entity)
+
+        val extRef = input.externalReference
+        if (extRef != null && extRef.startsWith("transfer_")) {
+            val otherTxs = dao.getAllTransactions().filter { it.externalReference == extRef && it.id != transactionId }
+            for (other in otherTxs) {
+                val updatedOther = other.copy(
+                    market = entity.market,
+                    symbol = entity.symbol,
+                    name = entity.name,
+                    tradeDate = entity.tradeDate,
+                    tradeTime = entity.tradeTime,
+                    price = entity.price,
+                    quantity = entity.quantity,
+                    ledgerId = entity.ledgerId,
+                    investorName = entity.investorName,
+                )
+                dao.updateTransaction(updatedOther)
+            }
+        }
     }
 
     private suspend fun resolveConsistentName(symbol: String, market: Market, providedName: String): String {
@@ -337,9 +355,34 @@ class DefaultLedgerRepository(
         return providedName
     }
 
-    override suspend fun deleteTrade(transactionId: Long): Int = dao.deleteTransactionById(transactionId)
+    override suspend fun deleteTrade(transactionId: Long): Int {
+        val tx = dao.getTransactionById(transactionId)
+        val extRef = tx?.externalReference
+        if (extRef != null && extRef.startsWith("transfer_")) {
+            return dao.deleteTransactionsByExternalReference(extRef)
+        }
+        return dao.deleteTransactionById(transactionId)
+    }
 
-    override suspend fun deleteTransactionsByIds(ids: List<Long>): Int = dao.deleteTransactionsByIds(ids)
+    override suspend fun deleteTransactionsByIds(ids: List<Long>): Int {
+        val transactionsToDelete = dao.getAllTransactions().filter { it.id in ids }
+        val extRefs = transactionsToDelete.mapNotNull { it.externalReference }.filter { it.startsWith("transfer_") }.toSet()
+        if (extRefs.isNotEmpty()) {
+            var count = 0
+            for (ref in extRefs) {
+                count += dao.deleteTransactionsByExternalReference(ref)
+            }
+            val remainingIds = ids.filter { id ->
+                val tx = transactionsToDelete.firstOrNull { it.id == id }
+                tx == null || tx.externalReference == null || !tx.externalReference.startsWith("transfer_")
+            }
+            if (remainingIds.isNotEmpty()) {
+                count += dao.deleteTransactionsByIds(remainingIds)
+            }
+            return count
+        }
+        return dao.deleteTransactionsByIds(ids)
+    }
 
     override suspend fun replaceTransactions(transactions: List<TransactionEntity>) {
         dao.replaceTransactions(transactions)

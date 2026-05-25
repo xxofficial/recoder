@@ -529,8 +529,9 @@ fun StockLedgerApp(
             if (showTransferDialog) {
                 PlatformTransferDialog(
                     enabledPlatforms = BrokerPlatform.entries.filter { it.isConfigurable },
+                    getCashBalance = ledgerViewModel::getCashBalance,
                     onDismiss = { showTransferDialog = false },
-                    onConfirm = { isStock, symbol, name, market, quantity, amount, currency, sourcePlatform, targetPlatform ->
+                    onConfirm = { isStock, symbol, name, market, quantity, amount, currency, sourcePlatform, targetPlatform, date, time ->
                         ledgerViewModel.performPlatformTransfer(
                             isStock = isStock,
                             symbol = symbol,
@@ -541,6 +542,8 @@ fun StockLedgerApp(
                             currency = currency,
                             sourcePlatform = sourcePlatform,
                             targetPlatform = targetPlatform,
+                            tradeDate = date,
+                            tradeTime = time,
                         )
                     }
                 )

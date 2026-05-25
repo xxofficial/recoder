@@ -83,6 +83,9 @@ enum class TransactionFilter(
     SELL("卖出", TradeType.SELL),
     DEPOSIT("入金", TradeType.DEPOSIT),
     WITHDRAW("出金", TradeType.WITHDRAW),
+    INTEREST("利息", TradeType.INTEREST),
+    TRANSFER_IN("划入/转入", TradeType.TRANSFER_IN),
+    TRANSFER_OUT("划出/转出", TradeType.TRANSFER_OUT),
 }
 
 enum class MarketFilter(

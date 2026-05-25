@@ -67,6 +67,12 @@ interface LedgerDao {
     @Query("DELETE FROM transactions WHERE id IN (:ids)")
     suspend fun deleteTransactionsByIds(ids: List<Long>): Int
 
+    @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
+    suspend fun getTransactionById(id: Long): TransactionEntity?
+
+    @Query("DELETE FROM transactions WHERE externalReference = :externalReference")
+    suspend fun deleteTransactionsByExternalReference(externalReference: String): Int
+
     @Query("DELETE FROM quote_snapshots WHERE symbol = :symbol AND market = :market")
     suspend fun deleteQuoteByHolding(symbol: String, market: String): Int
 

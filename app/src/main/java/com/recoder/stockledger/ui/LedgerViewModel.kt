@@ -789,6 +789,10 @@ class LedgerViewModel(
             )
             symbolLookup.value = resolvedLookup
             symbolSuggestions.value = emptyList()
+            val ledger = repository.getAllLedgers().firstOrNull { it.id == transaction.ledgerId }
+            val partners = ledger?.partners?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
+            val defaultInvestor = partners.firstOrNull()
+
             draft.value = applyDraftRules(
                 draft = TradeFormState(
                     selectedType = tradeType,
@@ -807,6 +811,7 @@ class LedgerViewModel(
                     taxLabel = formatEditableAmount(transaction.tax),
                     note = transaction.note,
                     feeEstimateStatus = FeeEstimateStatus.MANUAL_OVERRIDE,
+                    investorName = transaction.investorName ?: defaultInvestor,
                 ),
                 lookup = resolvedLookup,
                 positions = referencePortfolio.positions,
@@ -2821,6 +2826,7 @@ class LedgerViewModel(
                             )
                         }
                     }
+                    totalWithdrawCny += amountCny
                 }
 
                 TradeType.TRANSFER_IN -> {
@@ -2846,6 +2852,7 @@ class LedgerViewModel(
                             averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity
                         )
                     }
+                    totalDepositCny += amountCny
                 }
                 TradeType.INTEREST -> {
                     val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
@@ -3850,13 +3857,21 @@ private data class RefreshMeta(
         currency: DisplayCurrency,
         sourcePlatform: BrokerPlatform,
         targetPlatform: BrokerPlatform,
+        tradeDate: String,
+        tradeTime: String,
     ) {
         viewModelScope.launch {
-            val date = LocalDate.now().toString()
-            val time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
+            val date = tradeDate
+            val time = tradeTime
             val nowMs = System.currentTimeMillis()
+            val transferRef = "transfer_" + java.util.UUID.randomUUID().toString()
             
             if (isStock) {
+                val transactionsList = repository.transactions.first()
+                val resolvedName = name.trim().takeIf { it.isNotEmpty() }
+                    ?: transactionsList.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) }?.name
+                    ?: symbol
+
                 val allTx = transactionSnapshot.value
                 val sourceTx = filterTransactionsByPlatform(allTx, sourcePlatform)
                 val sourcePortfolio = computePortfolio(sourceTx, repository.quotes.first(), repository.exchangeRates.value)
@@ -3869,7 +3884,7 @@ private data class RefreshMeta(
                     platform = sourcePlatform,
                     market = market,
                     symbol = symbol,
-                    name = name,
+                    name = resolvedName,
                     tradeDate = date,
                     tradeTime = time,
                     price = carryingCost,
@@ -3879,6 +3894,7 @@ private data class RefreshMeta(
                     note = "转仓至 ${targetPlatform.label}",
                     createdAt = nowMs,
                     ledgerId = selectedLedgerId.value,
+                    externalReference = transferRef,
                 )
                 
                 val txIn = TradeDraftInput(
@@ -3886,7 +3902,7 @@ private data class RefreshMeta(
                     platform = targetPlatform,
                     market = market,
                     symbol = symbol,
-                    name = name,
+                    name = resolvedName,
                     tradeDate = date,
                     tradeTime = time,
                     price = carryingCost,
@@ -3896,6 +3912,7 @@ private data class RefreshMeta(
                     note = "从 ${sourcePlatform.label} 转仓",
                     createdAt = nowMs + 10,
                     ledgerId = selectedLedgerId.value,
+                    externalReference = transferRef,
                 )
                 
                 repository.addTrade(txOut)
@@ -3922,6 +3939,7 @@ private data class RefreshMeta(
                     note = "资金划转至 ${targetPlatform.label}",
                     createdAt = nowMs,
                     ledgerId = selectedLedgerId.value,
+                    externalReference = transferRef,
                 )
                 
                 val txIn = TradeDraftInput(
@@ -3939,6 +3957,7 @@ private data class RefreshMeta(
                     note = "资金从 ${sourcePlatform.label} 划转",
                     createdAt = nowMs + 10,
                     ledgerId = selectedLedgerId.value,
+                    externalReference = transferRef,
                 )
                 
                 repository.addTrade(txOut)
@@ -3946,6 +3965,50 @@ private data class RefreshMeta(
             }
         }
     }
+    fun getCashBalance(platform: BrokerPlatform, currency: DisplayCurrency): Double {
+        val transactions = transactionSnapshot.value
+        val platformTx = filterTransactionsByPlatform(transactions, platform)
+        var balance = 0.0
+        for (tx in platformTx) {
+            val txCurrency = when (Market.fromString(tx.market)) {
+                Market.US -> DisplayCurrency.USD
+                Market.HK -> DisplayCurrency.HKD
+                else -> DisplayCurrency.CNY
+            }
+            if (txCurrency != currency) continue
+            
+            val tradeType = runCatching { TradeType.valueOf(tx.tradeType) }.getOrNull() ?: continue
+            when (tradeType) {
+                TradeType.DEPOSIT -> {
+                    balance += tx.price * tx.quantity
+                }
+                TradeType.WITHDRAW -> {
+                    balance -= tx.price * tx.quantity
+                }
+                TradeType.INTEREST -> {
+                    balance -= kotlin.math.abs(tx.price * tx.quantity)
+                }
+                TradeType.BUY -> {
+                    balance -= (tx.price * tx.quantity + tx.commission + tx.tax)
+                }
+                TradeType.SELL -> {
+                    balance += (tx.price * tx.quantity - tx.commission - tx.tax)
+                }
+                TradeType.TRANSFER_IN -> {
+                    if (tx.symbol == CASH_ACCOUNT_SYMBOL) {
+                        balance += tx.price * tx.quantity
+                    }
+                }
+                TradeType.TRANSFER_OUT -> {
+                    if (tx.symbol == CASH_ACCOUNT_SYMBOL) {
+                        balance -= tx.price * tx.quantity
+                    }
+                }
+            }
+        }
+        return balance
+    }
+
 
     fun createLedger(name: String, type: String, description: String, partners: String) {
         viewModelScope.launch {
