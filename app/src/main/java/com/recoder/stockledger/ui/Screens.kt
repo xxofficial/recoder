@@ -90,6 +90,7 @@ import kotlin.math.absoluteValue
 @Composable
 fun JointSplitCard(
     contributions: List<PartnerContribution>,
+    displayCurrency: DisplayCurrency,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -173,7 +174,7 @@ fun JointSplitCard(
                             }
                         }
                         Text(
-                            text = String.format("净入金: ¥%,.2f", contribution.netContributionCny),
+                            text = String.format("净入金: %s%,.2f", displayCurrency.symbol, contribution.netContributionCny),
                             color = ForegroundMuted,
                             fontSize = 12.sp,
                         )
@@ -184,7 +185,7 @@ fun JointSplitCard(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = String.format("权益市值: ¥%,.2f", contribution.assetsShareCny),
+                            text = String.format("权益市值: %s%,.2f", displayCurrency.symbol, contribution.assetsShareCny),
                             color = ForegroundPrimary,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -199,7 +200,11 @@ fun JointSplitCard(
                                 fontSize = 12.sp,
                             )
                             val pnl = contribution.pnlShareCny
-                            val pnlText = if (pnl >= 0.0) String.format("+¥%,.2f", pnl) else String.format("-¥%,.2f", pnl.absoluteValue)
+                            val pnlText = if (pnl >= 0.0) {
+                                String.format("+%s%,.2f", displayCurrency.symbol, pnl)
+                            } else {
+                                String.format("-%s%,.2f", displayCurrency.symbol, pnl.absoluteValue)
+                            }
                             val pnlColor = if (pnl >= 0.0) MarketUp else MarketDown
                             Text(
                                 text = pnlText,
@@ -328,7 +333,10 @@ fun HoldingsRoute(
 
                 if (activeLedgerType == "JOINT" && partnerContributions.isNotEmpty()) {
                     item(key = "joint_split_card") {
-                        JointSplitCard(contributions = partnerContributions)
+                        JointSplitCard(
+                            contributions = partnerContributions,
+                            displayCurrency = displayCurrency
+                        )
                     }
                 }
 

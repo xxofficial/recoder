@@ -28,6 +28,11 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -96,21 +101,30 @@ fun StockLedgerApp(
     val uiState by ledgerViewModel.uiState.collectAsStateWithLifecycle()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
-    val drawerGesturesEnabled = currentRoute != Routes.FullRanking &&
-        currentRoute?.startsWith("${Routes.StockDetail}/") != true
-    val coroutineScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val drawerGesturesEnabled = currentRoute != Routes.FullRanking &&
+        currentRoute?.startsWith("${Routes.StockDetail}/") != true &&
+        drawerState.isOpen
+    val coroutineScope = rememberCoroutineScope()
     val activeLedger = uiState.ledgers.firstOrNull { it.id == uiState.selectedLedgerId }
     val activeLedgerType = activeLedger?.type.orEmpty()
     val activeLedgerPartners = activeLedger?.partners.orEmpty()
+    var showExportDialog by remember { mutableStateOf(false) }
+    var selectedLedgerIdsForExport by remember { mutableStateOf(emptySet<Long>()) }
+    var selectedPlatformsForExport by remember { mutableStateOf(emptySet<String>()) }
+
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
-            ledgerViewModel.exportBackup(uri)
+            ledgerViewModel.exportBackup(
+                uri = uri,
+                selectedLedgerIds = selectedLedgerIdsForExport.toList(),
+                selectedPlatforms = selectedPlatformsForExport.toList()
+            )
         }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            ledgerViewModel.importBackup(uri)
+            ledgerViewModel.parseBackupFile(uri)
         }
     }
     var pendingPdfImportPlatform by remember { mutableStateOf<BrokerPlatform?>(null) }
@@ -259,10 +273,9 @@ fun StockLedgerApp(
                             navController.navigate(Routes.tradeEntry(TradeType.WITHDRAW))
                         },
                         onExportBackupClick = {
-                            val filename = "stock-ledger-backup-${
-                                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-                            }.json"
-                            exportLauncher.launch(filename)
+                            selectedLedgerIdsForExport = uiState.ledgers.map { it.id }.toSet()
+                            selectedPlatformsForExport = BrokerPlatform.entries.map { it.name }.toSet()
+                            showExportDialog = true
                         },
                         onImportBackupClick = {
                             importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
@@ -495,6 +508,202 @@ fun StockLedgerApp(
                         onBack = { navController.popBackStack() },
                     )
                 }
+            }
+
+            if (showExportDialog) {
+                AlertDialog(
+                    onDismissRequest = { showExportDialog = false },
+                    title = { Text("导出备份设置", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+                    text = {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                        ) {
+                            Text("选择要导出的账本：", color = ForegroundSecondary, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            uiState.ledgers.forEach { ledger ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedLedgerIdsForExport = if (selectedLedgerIdsForExport.contains(ledger.id)) {
+                                                selectedLedgerIdsForExport - ledger.id
+                                            } else {
+                                                selectedLedgerIdsForExport + ledger.id
+                                            }
+                                        }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = selectedLedgerIdsForExport.contains(ledger.id),
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = ForegroundPrimary, uncheckedColor = ForegroundMuted)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(ledger.name, color = ForegroundPrimary, fontSize = 14.sp)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("选择要导出的交易平台：", color = ForegroundSecondary, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            val allPlatforms = remember {
+                                BrokerPlatform.entries.map { it.name }
+                            }
+                            allPlatforms.forEach { platformName ->
+                                val platform = BrokerPlatform.entries.firstOrNull { it.name == platformName } ?: return@forEach
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedPlatformsForExport = if (selectedPlatformsForExport.contains(platformName)) {
+                                                selectedPlatformsForExport - platformName
+                                            } else {
+                                                selectedPlatformsForExport + platformName
+                                            }
+                                        }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = selectedPlatformsForExport.contains(platformName),
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = ForegroundPrimary, uncheckedColor = ForegroundMuted)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(platform.label, color = ForegroundPrimary, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                if (selectedLedgerIdsForExport.isNotEmpty() && selectedPlatformsForExport.isNotEmpty()) {
+                                    showExportDialog = false
+                                    val filename = "stock-ledger-backup-${
+                                        LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+                                    }.json"
+                                    exportLauncher.launch(filename)
+                                }
+                            },
+                            enabled = selectedLedgerIdsForExport.isNotEmpty() && selectedPlatformsForExport.isNotEmpty()
+                        ) {
+                            Text("确认导出", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = { showExportDialog = false }) {
+                            Text("取消", color = ForegroundSecondary)
+                        }
+                    }
+                )
+            }
+
+            if (uiState.showImportDialog && uiState.parsedBackupData != null) {
+                val backup = uiState.parsedBackupData!!
+                val importedPlatforms = remember(backup) {
+                    backup.transactions.map { it.platform }.distinct().sorted()
+                }
+                var selectedLedgerIdsForImport by remember(backup) {
+                    mutableStateOf(backup.ledgers.map { it.id }.toSet())
+                }
+                var selectedPlatformsForImport by remember(backup) {
+                    mutableStateOf(importedPlatforms.toSet())
+                }
+
+                AlertDialog(
+                    onDismissRequest = {
+                        ledgerViewModel.showImportDialog.value = false
+                        ledgerViewModel.parsedBackupData.value = null
+                    },
+                    title = { Text("确认导入备份", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+                    text = {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                        ) {
+                            Text("选择要导入的账本：", color = ForegroundSecondary, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            backup.ledgers.forEach { ledger ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedLedgerIdsForImport = if (selectedLedgerIdsForImport.contains(ledger.id)) {
+                                                selectedLedgerIdsForImport - ledger.id
+                                            } else {
+                                                selectedLedgerIdsForImport + ledger.id
+                                            }
+                                        }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = selectedLedgerIdsForImport.contains(ledger.id),
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = ForegroundPrimary, uncheckedColor = ForegroundMuted)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(ledger.name, color = ForegroundPrimary, fontSize = 14.sp)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("选择要导入的交易平台：", color = ForegroundSecondary, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            if (importedPlatforms.isEmpty()) {
+                                Text("无交易平台记录", color = ForegroundMuted, fontSize = 13.sp)
+                            } else {
+                                importedPlatforms.forEach { platformName ->
+                                    val platform = BrokerPlatform.entries.firstOrNull { it.name == platformName }
+                                    val label = platform?.label ?: platformName
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                selectedPlatformsForImport = if (selectedPlatformsForImport.contains(platformName)) {
+                                                    selectedPlatformsForImport - platformName
+                                                } else {
+                                                    selectedPlatformsForImport + platformName
+                                                }
+                                            }
+                                            .padding(vertical = 4.dp)
+                                    ) {
+                                        Checkbox(
+                                            checked = selectedPlatformsForImport.contains(platformName),
+                                            onCheckedChange = null,
+                                            colors = CheckboxDefaults.colors(checkedColor = ForegroundPrimary, uncheckedColor = ForegroundMuted)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(label, color = ForegroundPrimary, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                ledgerViewModel.confirmImport(
+                                    selectedLedgerIds = selectedLedgerIdsForImport.toList(),
+                                    selectedPlatforms = selectedPlatformsForImport.toList()
+                                )
+                            },
+                            enabled = selectedLedgerIdsForImport.isNotEmpty() && (importedPlatforms.isEmpty() || selectedPlatformsForImport.isNotEmpty())
+                        ) {
+                            Text("确认导入", color = ForegroundPrimary, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                ledgerViewModel.showImportDialog.value = false
+                                ledgerViewModel.parsedBackupData.value = null
+                            }
+                        ) {
+                            Text("取消", color = ForegroundSecondary)
+                        }
+                    }
+                )
             }
         }
     }
@@ -795,14 +1004,6 @@ private fun PlatformDrawerContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("交易平台", color = ForegroundPrimary, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-            Text(
-                text = "关闭",
-                color = ForegroundMuted,
-                fontSize = 14.sp,
-                modifier = Modifier
-                    .clickable { onClose() }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            )
         }
         Text("侧边栏切换后，持仓、盈亏和流水会同步显示对应平台的数据。", color = ForegroundSecondary, fontSize = 13.sp)
         if (!showVisibilitySettings) {

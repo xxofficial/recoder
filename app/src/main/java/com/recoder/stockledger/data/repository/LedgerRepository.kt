@@ -92,9 +92,10 @@ data class TradeDraftInput(
 
 data class ImportedBackup(
     val displayCurrencyName: String?,
-    val transactionCount: Int,
     val enabledPlatforms: List<BrokerPlatform>,
     val selectedPlatform: BrokerPlatform?,
+    val ledgers: List<LedgerEntity>,
+    val transactions: List<TransactionEntity>,
 )
 
 enum class TradeImportOutcome {
@@ -152,8 +153,15 @@ interface LedgerRepository {
         displayCurrencyName: String,
         enabledPlatforms: List<BrokerPlatform>,
         selectedPlatform: BrokerPlatform?,
+        selectedLedgerIds: List<Long>,
+        selectedPlatforms: List<String>,
     )
-    suspend fun importBackup(inputStream: InputStream): ImportedBackup
+    suspend fun parseBackup(inputStream: InputStream): ImportedBackup
+    suspend fun executeImportBackup(
+        imported: ImportedBackup,
+        selectedLedgerIds: List<Long>,
+        selectedPlatforms: List<String>
+    )
     suspend fun deleteHolding(symbol: String, market: Market): Int
 
     suspend fun getAllLedgers(): List<LedgerEntity>
@@ -338,16 +346,36 @@ class DefaultLedgerRepository(
         displayCurrencyName: String,
         enabledPlatforms: List<BrokerPlatform>,
         selectedPlatform: BrokerPlatform?,
+        selectedLedgerIds: List<Long>,
+        selectedPlatforms: List<String>,
     ) = withContext(Dispatchers.IO) {
-        val transactionsSnapshot = transactions.first()
+        val allLedgers = getAllLedgers()
+        val ledgersSnapshot = allLedgers.filter { it.id in selectedLedgerIds }
+        val transactionsSnapshot = transactions.first().filter {
+            it.ledgerId in selectedLedgerIds && it.platform in selectedPlatforms
+        }
         val payload = JSONObject().apply {
-            put("version", 3)
+            put("version", 4)
             put("exportedAt", System.currentTimeMillis())
             put("displayCurrency", displayCurrencyName)
             put("enabledPlatforms", org.json.JSONArray().apply {
                 enabledPlatforms.forEach { put(it.name) }
             })
             put("selectedPlatform", selectedPlatform?.name)
+            put("ledgers", org.json.JSONArray().apply {
+                ledgersSnapshot.forEach { ledger ->
+                    put(
+                        JSONObject().apply {
+                            put("id", ledger.id)
+                            put("name", ledger.name)
+                            put("type", ledger.type)
+                            put("description", ledger.description)
+                            put("partners", ledger.partners)
+                            put("createdAt", ledger.createdAt)
+                        }
+                    )
+                }
+            })
             put("transactions", org.json.JSONArray().apply {
                 transactionsSnapshot.forEach { transaction ->
                     put(
@@ -368,6 +396,8 @@ class DefaultLedgerRepository(
                             put("tax", transaction.tax)
                             put("note", transaction.note)
                             put("createdAt", transaction.createdAt)
+                            put("ledgerId", transaction.ledgerId)
+                            put("investorName", transaction.investorName)
                         },
                     )
                 }
@@ -376,10 +406,11 @@ class DefaultLedgerRepository(
         outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload.toString(2)) }
     }
 
-    override suspend fun importBackup(inputStream: InputStream): ImportedBackup = withContext(Dispatchers.IO) {
+    override suspend fun parseBackup(inputStream: InputStream): ImportedBackup = withContext(Dispatchers.IO) {
         val json = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         val payload = JSONObject(json)
         val transactionsArray = payload.optJSONArray("transactions") ?: org.json.JSONArray()
+        val ledgersArray = payload.optJSONArray("ledgers")
         val enabledPlatforms = buildList {
             val array = payload.optJSONArray("enabledPlatforms") ?: org.json.JSONArray()
             for (index in 0 until array.length()) {
@@ -390,7 +421,35 @@ class DefaultLedgerRepository(
         val selectedPlatform = payload.optString("selectedPlatform")
             .takeIf { it.isNotBlank() }
             ?.let { name -> BrokerPlatform.entries.firstOrNull { it.name == name && it.isConfigurable } }
-        val rawTransactions = buildList {
+
+        val parsedLedgers = buildList {
+            if (ledgersArray != null) {
+                for (index in 0 until ledgersArray.length()) {
+                    val item = ledgersArray.optJSONObject(index) ?: continue
+                    add(
+                        LedgerEntity(
+                            id = item.optLong("id"),
+                            name = item.optString("name"),
+                            type = item.optString("type"),
+                            description = item.optString("description", ""),
+                            partners = item.optString("partners", ""),
+                            createdAt = item.optLong("createdAt", System.currentTimeMillis())
+                        )
+                    )
+                }
+            } else {
+                add(
+                    LedgerEntity(
+                        id = 1L,
+                        name = "默认个人账本",
+                        type = "PERSONAL",
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+
+        val parsedTransactions = buildList {
             for (index in 0 until transactionsArray.length()) {
                 val item = transactionsArray.optJSONObject(index) ?: continue
                 add(
@@ -411,46 +470,94 @@ class DefaultLedgerRepository(
                         tax = item.optDouble("tax"),
                         note = item.optString("note"),
                         createdAt = item.optLong("createdAt"),
+                        ledgerId = item.optLong("ledgerId", 1L),
+                        investorName = item.optString("investorName").takeIf { it.isNotBlank() },
                     ),
                 )
             }
         }
 
-        // Ensure name consistency based on symbol: pick the most recent name for each symbol
-        val symbolToName = rawTransactions
+        ImportedBackup(
+            displayCurrencyName = payload.optString("displayCurrency").takeIf { it.isNotBlank() },
+            enabledPlatforms = enabledPlatforms,
+            selectedPlatform = selectedPlatform,
+            ledgers = parsedLedgers,
+            transactions = parsedTransactions,
+        )
+    }
+
+    override suspend fun executeImportBackup(
+        imported: ImportedBackup,
+        selectedLedgerIds: List<Long>,
+        selectedPlatforms: List<String>
+    ) = withContext(Dispatchers.IO) {
+        val existingLedgers = getAllLedgers()
+        val ledgerIdMap = mutableMapOf<Long, Long>()
+
+        imported.ledgers.filter { it.id in selectedLedgerIds }.forEach { importedLedger ->
+            val existing = existingLedgers.firstOrNull {
+                it.name.equals(importedLedger.name, ignoreCase = true) && it.type == importedLedger.type
+            }
+            if (existing != null) {
+                ledgerIdMap[importedLedger.id] = existing.id
+            } else {
+                val newLedger = LedgerEntity(
+                    name = importedLedger.name,
+                    type = importedLedger.type,
+                    description = importedLedger.description,
+                    partners = importedLedger.partners,
+                    createdAt = importedLedger.createdAt
+                )
+                val newId = insertLedger(newLedger)
+                ledgerIdMap[importedLedger.id] = newId
+            }
+        }
+
+        val transactionsToImport = imported.transactions.filter {
+            it.ledgerId in selectedLedgerIds && it.platform in selectedPlatforms
+        }
+
+        val symbolToName = transactionsToImport
             .filter { it.symbol.isNotBlank() && it.name.isNotBlank() }
             .groupBy { it.market to it.symbol }
             .mapValues { (_, txns) ->
                 txns.maxByOrNull { "${it.tradeDate} ${it.tradeTime}" }?.name ?: ""
             }
 
-        val importedTransactions = rawTransactions.map { txn ->
+        val allExistingTransactions = dao.getAllTransactions()
+        val transactionsToInsert = mutableListOf<TransactionEntity>()
+
+        transactionsToImport.forEach { txn ->
+            val targetLedgerId = ledgerIdMap[txn.ledgerId] ?: return@forEach
             val consistentName = symbolToName[txn.market to txn.symbol]
-            if (consistentName != null && consistentName.isNotBlank()) {
-                txn.copy(name = consistentName)
-            } else {
-                txn
+            val finalName = if (!consistentName.isNullOrBlank()) consistentName else txn.name
+
+            val isDuplicate = allExistingTransactions.any { existing ->
+                existing.ledgerId == targetLedgerId &&
+                existing.platform == txn.platform &&
+                existing.symbol == txn.symbol &&
+                existing.market == txn.market &&
+                existing.tradeDate == txn.tradeDate &&
+                existing.tradeTime == txn.tradeTime &&
+                existing.tradeType == txn.tradeType &&
+                existing.quantity == txn.quantity &&
+                java.lang.Math.abs(existing.price - txn.price) < 0.0001
+            }
+
+            if (!isDuplicate) {
+                transactionsToInsert.add(
+                    txn.copy(
+                        id = 0,
+                        ledgerId = targetLedgerId,
+                        name = finalName
+                    )
+                )
             }
         }
 
-        val restoredPlatforms = if (enabledPlatforms.isNotEmpty()) {
-            enabledPlatforms
-        } else {
-            importedTransactions
-                .mapNotNull { transaction ->
-                    BrokerPlatform.entries.firstOrNull {
-                        it.name == transaction.platform && it.isConfigurable
-                    }
-                }
-                .distinctBy { it.name }
+        if (transactionsToInsert.isNotEmpty()) {
+            dao.insertTransactions(transactionsToInsert)
         }
-        replaceTransactions(importedTransactions)
-        ImportedBackup(
-            displayCurrencyName = payload.optString("displayCurrency").takeIf { it.isNotBlank() },
-            transactionCount = importedTransactions.size,
-            enabledPlatforms = restoredPlatforms,
-            selectedPlatform = selectedPlatform?.takeIf { it in restoredPlatforms },
-        )
     }
 
     override suspend fun importSharedTradeText(

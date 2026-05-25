@@ -158,6 +158,8 @@ data class LedgerUiState(
     val displayCurrency: DisplayCurrency = DisplayCurrency.CNY,
     val exchangeRates: ExchangeRates = ExchangeRates(),
     val backupStatusMessage: String? = null,
+    val parsedBackupData: ImportedBackup? = null,
+    val showImportDialog: Boolean = false,
     val hsbcImportDraftText: String = "",
     val hsbcImportStatusMessage: String? = null,
     val zhuoruiEmailSyncConfig: ZhuoruiEmailSyncConfig = ZhuoruiEmailSyncConfig(),
@@ -237,6 +239,8 @@ class LedgerViewModel(
     private val displayCurrency = MutableStateFlow(loadSavedDisplayCurrency())
     private val editingTrade = MutableStateFlow<EditingTradeSession?>(null)
     private val backupStatusMessage = MutableStateFlow<String?>(null)
+    val parsedBackupData = MutableStateFlow<ImportedBackup?>(null)
+    val showImportDialog = MutableStateFlow(false)
     private val hsbcImportDraftText = MutableStateFlow("")
     private val hsbcImportStatusMessage = MutableStateFlow<String?>(null)
     private val zhuoruiEmailSyncConfig = MutableStateFlow(loadZhuoruiEmailSyncConfig())
@@ -302,12 +306,23 @@ class LedgerViewModel(
         currentLedger,
         filteredTransactions,
         portfolio,
-        repository.exchangeRates
-    ) { ledger, transactions, portfolioData, exchangeRates ->
+        repository.exchangeRates,
+        repository.quotes,
+        displayCurrency
+    ) { args ->
+        val ledger = args[0] as LedgerEntity?
+        @Suppress("UNCHECKED_CAST")
+        val transactions = args[1] as List<TransactionEntity>
+        val portfolioData = args[2] as PortfolioComputation
+        val exchangeRates = args[3] as ExchangeRates
+        @Suppress("UNCHECKED_CAST")
+        val quotes = args[4] as List<QuoteSnapshotEntity>
+        val currency = args[5] as DisplayCurrency
+
         if (ledger == null || ledger.type != "JOINT") {
             emptyList<PartnerContribution>()
         } else {
-            computePartnerContributions(ledger, transactions, portfolioData, exchangeRates)
+            computePartnerContributions(ledger, transactions, portfolioData, exchangeRates, quotes, currency)
         }
     }.stateIn(
         scope = viewModelScope,
@@ -584,6 +599,10 @@ class LedgerViewModel(
         state.copy(selectedLedgerId = id)
     }.combine(partnerContributions) { state, contributions ->
         state.copy(partnerContributions = contributions)
+    }.combine(parsedBackupData) { state, backup ->
+        state.copy(parsedBackupData = backup)
+    }.combine(showImportDialog) { state, show ->
+        state.copy(showImportDialog = show)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -1230,16 +1249,17 @@ class LedgerViewModel(
         return true
     }
 
-    fun exportBackup(uri: Uri) {
+    fun exportBackup(uri: Uri, selectedLedgerIds: List<Long>, selectedPlatforms: List<String>) {
         viewModelScope.launch {
             runCatching {
-                val recordedPlatforms = repository.transactions.first()
                 getApplication<Application>().contentResolver.openOutputStream(uri)?.use { outputStream ->
                     repository.exportBackup(
                         outputStream = outputStream,
                         displayCurrencyName = displayCurrency.value.name,
                         enabledPlatforms = enabledPlatforms.value,
                         selectedPlatform = selectedPlatform.value,
+                        selectedLedgerIds = selectedLedgerIds,
+                        selectedPlatforms = selectedPlatforms,
                     )
                 } ?: error("无法创建备份文件")
             }.onSuccess {
@@ -1250,12 +1270,28 @@ class LedgerViewModel(
         }
     }
 
-    fun importBackup(uri: Uri) {
+    fun parseBackupFile(uri: Uri) {
         viewModelScope.launch {
             runCatching {
-                val imported = getApplication<Application>().contentResolver.openInputStream(uri)?.use { inputStream ->
-                    repository.importBackup(inputStream)
+                getApplication<Application>().contentResolver.openInputStream(uri)?.use { inputStream ->
+                    repository.parseBackup(inputStream)
                 } ?: error("无法读取备份文件")
+            }.onSuccess { imported ->
+                parsedBackupData.value = imported
+                showImportDialog.value = true
+            }.onFailure { error ->
+                backupStatusMessage.value = "解析备份失败：${error.message ?: "请检查文件格式"}"
+            }
+        }
+    }
+
+    fun confirmImport(selectedLedgerIds: List<Long>, selectedPlatforms: List<String>) {
+        val imported = parsedBackupData.value ?: return
+        showImportDialog.value = false
+        parsedBackupData.value = null
+        viewModelScope.launch {
+            runCatching {
+                repository.executeImportBackup(imported, selectedLedgerIds, selectedPlatforms)
                 applyImportedBackup(imported)
             }.onSuccess {
                 val latestTransactions = repository.transactions.first()
@@ -1273,7 +1309,7 @@ class LedgerViewModel(
                     refreshQuotes(trigger = RefreshTrigger.BACKUP_IMPORT)
                 }
             }.onFailure { error ->
-                backupStatusMessage.value = "导入失败：${error.message ?: "请检查备份文件"}"
+                backupStatusMessage.value = "导入失败：${error.message ?: "请稍后重试"}"
             }
         }
     }
@@ -3099,7 +3135,7 @@ class LedgerViewModel(
                     ?: SampleData.tradeForm(TradeType.BUY).platform,
             ),
         )
-        backupStatusMessage.value = "已导入 ${importedBackup.transactionCount} 条交易记录"
+        backupStatusMessage.value = "已导入 ${importedBackup.transactions.size} 条交易记录"
     }
 
     private fun cashMarketFor(currency: DisplayCurrency): Market = when (currency) {
@@ -3599,32 +3635,128 @@ private data class RefreshMeta(
         currentLedger: LedgerEntity,
         transactions: List<TransactionEntity>,
         portfolio: PortfolioComputation,
-        exchangeRates: ExchangeRates
+        exchangeRates: ExchangeRates,
+        quotes: List<QuoteSnapshotEntity>,
+        currency: DisplayCurrency
     ): List<PartnerContribution> {
         val partnerNames = currentLedger.partners.split(",").map { it.trim() }.filter { it.isNotBlank() }
         if (partnerNames.isEmpty()) return emptyList()
-        val contributions = partnerNames.associateWith { 0.0 }.toMutableMap()
-        transactions.forEach { tx ->
-            if (tx.tradeType == "DEPOSIT" || tx.tradeType == "WITHDRAW") {
-                val marketEnum = runCatching { Market.valueOf(tx.market) }.getOrDefault(Market.CASH)
-                val amountCny = tx.price * tx.quantity * exchangeRates.rateToCny(marketEnum)
-                val investor = tx.investorName?.trim()?.takeIf { it in contributions } ?: partnerNames.first()
-                val current = contributions[investor] ?: 0.0
-                contributions[investor] = if (tx.tradeType == "DEPOSIT") current + amountCny else current - amountCny
+
+        val partnerUnits = partnerNames.associateWith { 0.0 }.toMutableMap()
+        val partnerNetContributions = partnerNames.associateWith { 0.0 }.toMutableMap()
+        var totalUnits = 0.0
+
+        var cashBalanceCny = 0.0
+        val stockQuantities = mutableMapOf<String, Double>()
+        val stockPrices = mutableMapOf<String, Double>()
+
+        quotes.forEach { quote ->
+            val market = Market.fromString(quote.market) ?: Market.CASH
+            val key = positionKey(quote.symbol, market)
+            val price = quote.currentPrice ?: 0.0
+            stockPrices[key] = price * exchangeRates.rateToCny(market)
+        }
+
+        val ordered = transactions.sortedWith(
+            compareBy<TransactionEntity>({
+                val m = Market.fromString(it.market) ?: Market.CASH
+                effectiveTradeDate(it.tradeDate, it.tradeTime, m).toString()
+            }, { it.tradeTime }, { it.createdAt }),
+        )
+
+        ordered.forEach { tx ->
+            val market = Market.fromString(tx.market) ?: Market.CASH
+            val key = positionKey(tx.symbol, market)
+
+            when (runCatching { TradeType.valueOf(tx.tradeType) }.getOrNull()) {
+                TradeType.DEPOSIT -> {
+                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    val investor = tx.investorName?.trim()?.takeIf { it in partnerUnits } ?: partnerNames.first()
+
+                    val holdingsValueCny = stockQuantities.entries.sumOf { (k, qty) ->
+                        val price = stockPrices[k] ?: 0.0
+                        qty * price
+                    }
+                    val totalAssetValueBefore = cashBalanceCny + holdingsValueCny
+
+                    val unitPrice = if (totalUnits > 0.0 && totalAssetValueBefore > 0.0) {
+                        totalAssetValueBefore / totalUnits
+                    } else {
+                        1.0
+                    }
+
+                    val unitsIssued = amountCny / unitPrice
+                    partnerUnits[investor] = (partnerUnits[investor] ?: 0.0) + unitsIssued
+                    totalUnits += unitsIssued
+                    cashBalanceCny += amountCny
+                    partnerNetContributions[investor] = (partnerNetContributions[investor] ?: 0.0) + amountCny
+                }
+                TradeType.WITHDRAW -> {
+                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    val investor = tx.investorName?.trim()?.takeIf { it in partnerUnits } ?: partnerNames.first()
+
+                    val holdingsValueCny = stockQuantities.entries.sumOf { (k, qty) ->
+                        val price = stockPrices[k] ?: 0.0
+                        qty * price
+                    }
+                    val totalAssetValueBefore = cashBalanceCny + holdingsValueCny
+
+                    val unitPrice = if (totalUnits > 0.0 && totalAssetValueBefore > 0.0) {
+                        totalAssetValueBefore / totalUnits
+                    } else {
+                        1.0
+                    }
+
+                    val unitsRedeemed = amountCny / unitPrice
+                    partnerUnits[investor] = (partnerUnits[investor] ?: 0.0) - unitsRedeemed
+                    totalUnits -= unitsRedeemed
+                    cashBalanceCny -= amountCny
+                    partnerNetContributions[investor] = (partnerNetContributions[investor] ?: 0.0) - amountCny
+                }
+                TradeType.BUY -> {
+                    val txPriceCny = convertToCny(tx.price, market, exchangeRates)
+                    if (stockPrices[key] == null || stockPrices[key] == 0.0) {
+                        stockPrices[key] = txPriceCny
+                    }
+                    stockQuantities[key] = (stockQuantities[key] ?: 0.0) + tx.quantity
+                    val costCny = convertToCny(tx.price * tx.quantity + tx.commission + tx.tax, market, exchangeRates)
+                    cashBalanceCny -= costCny
+                }
+                TradeType.SELL -> {
+                    val txPriceCny = convertToCny(tx.price, market, exchangeRates)
+                    if (stockPrices[key] == null || stockPrices[key] == 0.0) {
+                        stockPrices[key] = txPriceCny
+                    }
+                    stockQuantities[key] = (stockQuantities[key] ?: 0.0) - tx.quantity
+                    val proceedsCny = convertToCny(tx.price * tx.quantity - tx.commission - tx.tax, market, exchangeRates)
+                    cashBalanceCny += proceedsCny
+                }
+                else -> {}
             }
         }
-        val totalNet = contributions.values.sum()
+
         val totalAssets = portfolio.totalAssetsCny
-        val totalProfit = portfolio.totalProfitCny
         return partnerNames.map { name ->
-            val net = contributions[name] ?: 0.0
-            val ratio = if (totalNet > 0.0) net / totalNet else 1.0 / partnerNames.size
+            val net = partnerNetContributions[name] ?: 0.0
+            val ratio = if (totalUnits > 0.0) {
+                val u = partnerUnits[name] ?: 0.0
+                maxOf(0.0, u / totalUnits)
+            } else {
+                1.0 / partnerNames.size
+            }
+            val assetsShareCny = totalAssets * ratio
+            val pnlShareCny = assetsShareCny - net
+
+            val netConverted = convertFromCny(net, currency, exchangeRates)
+            val assetsShareConverted = convertFromCny(assetsShareCny, currency, exchangeRates)
+            val pnlShareConverted = convertFromCny(pnlShareCny, currency, exchangeRates)
+
             PartnerContribution(
                 name = name,
-                netContributionCny = net,
+                netContributionCny = netConverted,
                 ratio = ratio,
-                assetsShareCny = totalAssets * ratio,
-                pnlShareCny = totalProfit * ratio
+                assetsShareCny = assetsShareConverted,
+                pnlShareCny = pnlShareConverted
             )
         }
     }
