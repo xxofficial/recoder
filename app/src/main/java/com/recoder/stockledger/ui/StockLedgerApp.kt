@@ -272,6 +272,10 @@ fun StockLedgerApp(
                             ledgerViewModel.openTradeEntry(TradeType.WITHDRAW)
                             navController.navigate(Routes.tradeEntry(TradeType.WITHDRAW))
                         },
+                        onInterestClick = {
+                            ledgerViewModel.openTradeEntry(TradeType.INTEREST)
+                            navController.navigate(Routes.tradeEntry(TradeType.INTEREST))
+                        },
                         onExportBackupClick = {
                             selectedLedgerIdsForExport = uiState.ledgers.map { it.id }.toSet()
                             selectedPlatformsForExport = BrokerPlatform.entries.map { it.name }.toSet()

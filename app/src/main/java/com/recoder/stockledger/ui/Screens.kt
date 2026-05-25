@@ -441,6 +441,7 @@ fun OperationsRoute(
     onSellClick: () -> Unit,
     onDepositClick: () -> Unit,
     onWithdrawClick: () -> Unit,
+    onInterestClick: () -> Unit,
     onExportBackupClick: () -> Unit,
     onImportBackupClick: () -> Unit,
     backupStatusMessage: String?,
@@ -493,6 +494,7 @@ fun OperationsRoute(
                     onSellClick = onSellClick,
                     onDepositClick = onDepositClick,
                     onWithdrawClick = onWithdrawClick,
+                    onInterestClick = onInterestClick,
                 )
 
                 Column(
@@ -791,7 +793,7 @@ fun OperationsRoute(
                     }
                 }
 
-                if (selectedPlatform == BrokerPlatform.ZHUORUI) {
+                if (selectedPlatform?.supportsPdfImport == true) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -804,7 +806,7 @@ fun OperationsRoute(
                     ) {
                         Text("电子结单导入", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "支持导入${selectedPlatform.label}的日结单（PDF格式），结单密码和解析方式在设置中维护。",
+                            "支持导入${selectedPlatform.label}的电子结单（PDF格式），结单密码和解析方式在设置中维护。",
                             color = ForegroundSecondary,
                             fontSize = 13.sp,
                         )
@@ -1524,7 +1526,7 @@ fun TradeEntryRoute(
                         }
                     }
 
-                    if (activeLedgerType == "JOINT") {
+                    if (activeLedgerType == "JOINT" && (state.selectedType == TradeType.DEPOSIT || state.selectedType == TradeType.WITHDRAW)) {
                         if (partners.isNotEmpty()) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val label = if (state.selectedType == TradeType.DEPOSIT) "出资人 (入金人)" else "撤资人 (出金人)"
@@ -1597,10 +1599,10 @@ fun TradeEntryRoute(
                         }
                     }
                     InputFieldBlock(
-                        label = if (state.selectedType == TradeType.DEPOSIT) {
-                            "入金金额 ($cashCurrencyCode)"
-                        } else {
-                            "出金金额 ($cashCurrencyCode)"
+                        label = when (state.selectedType) {
+                            TradeType.DEPOSIT -> "入金金额 ($cashCurrencyCode)"
+                            TradeType.INTEREST -> "利息金额 ($cashCurrencyCode)"
+                            else -> "出金金额 ($cashCurrencyCode)"
                         },
                         value = priceValue,
                         supportingText = "当前按${cashCurrencyLabel}录入，保存后会自动折算到资产汇总。",
@@ -1666,6 +1668,7 @@ fun TradeEntryRoute(
                             TradeType.SELL -> "确认卖出"
                             TradeType.DEPOSIT -> "确认入金"
                             TradeType.WITHDRAW -> "确认出金"
+                            TradeType.INTEREST -> "确认支付利息"
                         }
                     },
                     onClick = onSubmit,
@@ -1963,6 +1966,7 @@ private fun OperationsRoutePreview() {
             onSellClick = {},
             onDepositClick = {},
             onWithdrawClick = {},
+            onInterestClick = {},
             onExportBackupClick = {},
             onImportBackupClick = {},
             backupStatusMessage = "最近备份已完成",

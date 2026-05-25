@@ -94,6 +94,7 @@ dependencies {
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     ksp("androidx.room:room-compiler:2.8.4")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.apache.pdfbox:pdfbox:2.0.29")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

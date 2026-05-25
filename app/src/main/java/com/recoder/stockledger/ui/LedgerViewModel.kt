@@ -1185,6 +1185,12 @@ class LedgerViewModel(
 
         val resolved = if (currentDraft.selectedType.isSecurityTrade) {
             resolveSecurity(currentDraft, portfolioState.positions, currentLookup) ?: return false
+        } else if (currentDraft.selectedType == TradeType.INTEREST) {
+            ResolvedSecurity(
+                symbol = "INTEREST",
+                name = "融资利息",
+                market = normalizeCashMarket(currentDraft.market),
+            )
         } else {
             ResolvedSecurity(
                 symbol = CASH_ACCOUNT_SYMBOL,
@@ -1967,6 +1973,8 @@ class LedgerViewModel(
                             tradeType = tradeType,
                             stockName = if (tradeType.isSecurityTrade) {
                                 "${transaction.symbol} ${transaction.name}"
+                            } else if (tradeType == TradeType.INTEREST) {
+                                "融资利息"
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
@@ -1977,6 +1985,8 @@ class LedgerViewModel(
                             },
                             secondaryMeta = if (tradeType.isSecurityTrade) {
                                 "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
+                            } else if (tradeType == TradeType.INTEREST) {
+                                transaction.note.ifBlank { "融资利息支出" }
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
@@ -2082,6 +2092,11 @@ class LedgerViewModel(
                         cashBalanceCny -= amountCny
                         totalWithdrawCny += amountCny
                         dailyNetFlowCny -= amountCny
+                    }
+
+                    TradeType.INTEREST -> {
+                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                        cashBalanceCny -= amountCny
                     }
 
                     TradeType.BUY, TradeType.SELL -> {
@@ -2435,6 +2450,11 @@ class LedgerViewModel(
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                     netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
                 }
+
+                TradeType.INTEREST -> {
+                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) - amountCny
+                }
             }
         }
 
@@ -2628,6 +2648,11 @@ class LedgerViewModel(
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                     cashBalanceCny -= amountCny
                     totalWithdrawCny += amountCny
+                }
+
+                TradeType.INTEREST -> {
+                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                    cashBalanceCny -= amountCny
                 }
 
                 TradeType.BUY, TradeType.SELL -> {
@@ -3154,6 +3179,7 @@ class LedgerViewModel(
         TradeType.SELL -> transaction.price * transaction.quantity - transaction.commission - transaction.tax
         TradeType.DEPOSIT -> transaction.price * transaction.quantity
         TradeType.WITHDRAW -> -(transaction.price * transaction.quantity)
+        TradeType.INTEREST -> -(transaction.price * transaction.quantity)
     }
 
     private enum class RefreshTrigger {
@@ -3384,16 +3410,17 @@ private data class RefreshMeta(
                 runCatching {
                     val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
                     inputStream?.use { stream ->
-                        // NOTE: ZhuoruiStatementPdfParser might currently only parse Zhuorui format.
-                        // We will let it try anyway.
-                        val results = repository.importZhuoruiStatementPdf(stream, password)
+                        val results = repository.importStatementPdf(stream, password, platform, selectedLedgerId.value)
                         if (results.isEmpty()) {
                             totalSkipped++
                         } else {
                             for (result in results) {
                                 when (result.outcome) {
                                     com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> {
+                                        totalDuplicate++
+                                        android.util.Log.d("LedgerViewModel", "在文件 [${getFileName(uri)}] 中检测到重复交易: ${result.message}")
+                                    }
                                     else -> totalFailed++
                                 }
                             }
@@ -3467,11 +3494,14 @@ private data class RefreshMeta(
                         if (trades.isEmpty()) {
                             totalSkipped++
                         } else {
-                            val results = repository.importParsedTrades(trades, platform)
+                            val results = repository.importParsedTrades(trades, platform, selectedLedgerId.value)
                             for (result in results) {
                                 when (result.outcome) {
                                     com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> {
+                                        totalDuplicate++
+                                        android.util.Log.d("LedgerViewModel", "在文件 [$fileName] 中检测到重复交易: ${result.message}")
+                                    }
                                     else -> totalFailed++
                                 }
                             }

@@ -212,7 +212,7 @@ class TextPdfImporter(
  * 3. Sorts each row left-to-right by X-coordinate.
  * 4. Inserts spaces or tabs based on inter-glyph gaps to preserve column structure.
  */
-private class CoordinateTextExtractor : PDFTextStripper() {
+class CoordinateTextExtractor : PDFTextStripper() {
 
     private data class TextGlyph(
         val text: String,
