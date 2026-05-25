@@ -266,6 +266,7 @@ fun TradeActionButtons(
     onDepositClick: () -> Unit,
     onWithdrawClick: () -> Unit,
     onTransferClick: () -> Unit,
+    onInterestClick: () -> Unit,
     enabled: Boolean = true,
 ) {
     Column(
@@ -312,6 +313,18 @@ fun TradeActionButtons(
                 onClick = onTransferClick,
                 modifier = Modifier.weight(1f),
             )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlineActionButton(
+                text = "融资利息",
+                onClick = onInterestClick,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.weight(1f))
         }
     }
 }
@@ -1395,10 +1408,9 @@ fun TradeTypeSelector(
         }
     }
 }
-
 fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
     TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN -> MarketUpSoft to MarketUp
-    TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT -> MarketDownSoft to MarketDown
+    TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT, TradeType.INTEREST -> MarketDownSoft to MarketDown
 }
 
 @Composable
@@ -1585,7 +1597,7 @@ private fun platformLogoRes(platform: BrokerPlatform): Int? = when (platform) {
     BrokerPlatform.EAST_MONEY -> R.drawable.platform_east_money
     BrokerPlatform.LONGBRIDGE -> R.drawable.platform_longbridge
     BrokerPlatform.HSBC -> R.drawable.platform_hsbc
-    BrokerPlatform.WEBULL -> R.drawable.platform_webull
+    BrokerPlatform.USMART -> R.drawable.platform_usmart
     BrokerPlatform.ZHUORUI -> R.drawable.platform_zhuorui
     BrokerPlatform.CHIEF -> R.drawable.platform_chief
     BrokerPlatform.SCHWAB -> R.drawable.platform_schwab

@@ -278,6 +278,10 @@ fun StockLedgerApp(
                         onTransferClick = {
                             showTransferDialog = true
                         },
+                        onInterestClick = {
+                            ledgerViewModel.openTradeEntry(TradeType.INTEREST)
+                            navController.navigate(Routes.tradeEntry(TradeType.INTEREST))
+                        },
                         onExportBackupClick = {
                             selectedLedgerIdsForExport = uiState.ledgers.map { it.id }.toSet()
                             val platformsWithTx = ledgerViewModel.transactionSnapshot.value.map { it.platform }.filter { it.isNotBlank() }.toSet()

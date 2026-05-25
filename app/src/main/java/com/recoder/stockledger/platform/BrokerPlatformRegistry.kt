@@ -52,9 +52,9 @@ class BrokerPlatformRegistry(
                 supportedImportChannels = setOf(ImportSourceChannel.HSBC_SMS, ImportSourceChannel.HSBC_EMAIL),
             ),
             DefaultBrokerPlatformAdapter(
-                platform = BrokerPlatform.WEBULL,
+                platform = BrokerPlatform.USMART,
                 supportedMarkets = setOf(Market.HK, Market.US),
-                supportedImportChannels = emptySet(),
+                supportedImportChannels = setOf(ImportSourceChannel.PDF_STATEMENT),
             ),
             DefaultBrokerPlatformAdapter(
                 platform = BrokerPlatform.ZHUORUI,

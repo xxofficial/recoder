@@ -44,6 +44,7 @@ enum class TradeType(val label: String) {
     WITHDRAW("出金"),
     TRANSFER_OUT("转出"),
     TRANSFER_IN("转入"),
+    INTEREST("利息"),
     ;
 
     val isSecurityTrade: Boolean
@@ -123,11 +124,14 @@ enum class BrokerPlatform(
     EAST_MONEY("东方财富", "东财"),
     LONGBRIDGE("长桥证券", "长桥"),
     HSBC("汇丰银行", "HS"),
-    WEBULL("盈立证券", "盈立"),
+    USMART("uSMART", "uSMART"),
     ZHUORUI("卓锐证券", "卓锐"),
     CHIEF("致富证券", "致富"),
     SCHWAB("嘉信国际", "嘉信"),
     ;
+
+    val supportsPdfImport: Boolean
+        get() = this == ZHUORUI || this == USMART
 
     companion object {
         val configurableEntries: List<BrokerPlatform> = entries.filter { it.isConfigurable }

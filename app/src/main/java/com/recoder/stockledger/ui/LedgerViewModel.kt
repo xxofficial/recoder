@@ -1289,6 +1289,12 @@ class LedgerViewModel(
 
         val resolved = if (currentDraft.selectedType.isSecurityTrade) {
             resolveSecurity(currentDraft, portfolioState.positions, currentLookup) ?: return false
+        } else if (currentDraft.selectedType == TradeType.INTEREST) {
+            ResolvedSecurity(
+                symbol = "INTEREST",
+                name = "融资利息",
+                market = normalizeCashMarket(currentDraft.market),
+            )
         } else {
             ResolvedSecurity(
                 symbol = CASH_ACCOUNT_SYMBOL,
@@ -2071,6 +2077,8 @@ class LedgerViewModel(
                             tradeType = tradeType,
                             stockName = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "${transaction.symbol} ${transaction.name}"
+                            } else if (tradeType == TradeType.INTEREST) {
+                                "融资利息"
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
@@ -2081,6 +2089,8 @@ class LedgerViewModel(
                             },
                             secondaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
+                            } else if (tradeType == TradeType.INTEREST) {
+                                transaction.note.ifBlank { "融资利息支出" }
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
@@ -2188,35 +2198,14 @@ class LedgerViewModel(
                         dailyNetFlowCny -= amountCny
                     }
 
-                    TradeType.TRANSFER_IN -> {
-                        if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                            val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
-                            cashBalanceCny += amountCny
-                        } else {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key] ?: PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = 0,
-                                averageCost = 0.0,
-                                remainingCost = 0.0,
-                                realizedProfit = 0.0
-                            )
-                            val nextQuantity = current.quantity + transaction.quantity
-                            val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                            )
-                        }
-                    }
-
-                    TradeType.TRANSFER_OUT -> {
-                        if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                            val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT, TradeType.INTEREST -> {
+                        val sign = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
+                        if (tradeType == TradeType.INTEREST) {
+                            val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
                             cashBalanceCny -= amountCny
+                        } else if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                            val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                            cashBalanceCny += (sign * amountCny)
                         } else {
                             val key = positionKey(transaction.symbol, market)
                             val current = positions[key] ?: PositionComputation(
@@ -2228,8 +2217,8 @@ class LedgerViewModel(
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0
                             )
-                            val nextQuantity = current.quantity - transaction.quantity
-                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                            val nextQuantity = current.quantity + (sign * transaction.quantity)
+                            val nextRemaining = current.remainingCost + (sign * (transaction.price * transaction.quantity))
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
@@ -2590,53 +2579,34 @@ class LedgerViewModel(
                     netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
                 }
 
-                TradeType.TRANSFER_IN -> {
-                    if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
-                        netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
+                TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT, TradeType.INTEREST -> {
+                    if (tradeType == TradeType.TRANSFER_IN || tradeType == TradeType.TRANSFER_OUT) {
+                        val multiplier = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
+                        if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                            val amountCny = convertToCny(transaction.price * transaction.quantity * multiplier, market, exchangeRates)
+                            netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, market)
+                            val current = positions[key] ?: PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = 0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0
+                            )
+                            val nextQuantity = current.quantity + (transaction.quantity * multiplier)
+                            val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity * multiplier)
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            )
+                        }
                     } else {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0
-                        )
-                        val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                        )
-                    }
-                }
-
-                TradeType.TRANSFER_OUT -> {
-                    if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
-                        netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
-                    } else {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0
-                        )
-                        val nextQuantity = current.quantity - transaction.quantity
-                        val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
-                        )
+                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                        dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) - amountCny
                     }
                 }
             }
@@ -2876,6 +2846,11 @@ class LedgerViewModel(
                             averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity
                         )
                     }
+                }
+                TradeType.INTEREST -> {
+                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                    cashBalanceCny -= amountCny
+
                 }
 
                 TradeType.BUY, TradeType.SELL -> {
@@ -3426,6 +3401,7 @@ class LedgerViewModel(
                 0.0
             }
         }
+        TradeType.INTEREST -> -(transaction.price * transaction.quantity)
     }
 
     private enum class RefreshTrigger {
@@ -3656,16 +3632,17 @@ private data class RefreshMeta(
                 runCatching {
                     val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
                     inputStream?.use { stream ->
-                        // NOTE: ZhuoruiStatementPdfParser might currently only parse Zhuorui format.
-                        // We will let it try anyway.
-                        val results = repository.importZhuoruiStatementPdf(stream, password)
+                        val results = repository.importStatementPdf(stream, password, platform, selectedLedgerId.value)
                         if (results.isEmpty()) {
                             totalSkipped++
                         } else {
                             for (result in results) {
                                 when (result.outcome) {
                                     com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> {
+                                        totalDuplicate++
+                                        android.util.Log.d("LedgerViewModel", "在文件 [${getFileName(uri)}] 中检测到重复交易: ${result.message}")
+                                    }
                                     else -> totalFailed++
                                 }
                             }
@@ -3739,11 +3716,14 @@ private data class RefreshMeta(
                         if (trades.isEmpty()) {
                             totalSkipped++
                         } else {
-                            val results = repository.importParsedTrades(trades, platform)
+                            val results = repository.importParsedTrades(trades, platform, selectedLedgerId.value)
                             for (result in results) {
                                 when (result.outcome) {
                                     com.recoder.stockledger.data.repository.TradeImportOutcome.IMPORTED -> totalImported++
-                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> totalDuplicate++
+                                    com.recoder.stockledger.data.repository.TradeImportOutcome.DUPLICATE -> {
+                                        totalDuplicate++
+                                        android.util.Log.d("LedgerViewModel", "在文件 [$fileName] 中检测到重复交易: ${result.message}")
+                                    }
                                     else -> totalFailed++
                                 }
                             }
