@@ -134,7 +134,7 @@ enum class BrokerPlatform(
     ;
 
     val supportsPdfImport: Boolean
-        get() = this == ZHUORUI || this == USMART
+        get() = this == ZHUORUI || this == USMART || this == HSBC
 
     companion object {
         val configurableEntries: List<BrokerPlatform> = entries.filter { it.isConfigurable }

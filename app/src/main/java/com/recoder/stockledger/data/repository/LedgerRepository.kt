@@ -781,10 +781,16 @@ class DefaultLedgerRepository(
         ledgerId: Long,
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
         Log.d(TAG, "开始导入PDF结单, platform=${platform.name}, password长度=${password.length}, ledgerId=$ledgerId")
-        val parsedTrades = if (platform == BrokerPlatform.USMART) {
-            com.recoder.stockledger.data.importer.USmartStatementPdfParser.parse(inputStream, password)
-        } else {
-            ZhuoruiStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
+        val parsedTrades = when (platform) {
+            BrokerPlatform.USMART -> {
+                com.recoder.stockledger.data.importer.USmartStatementPdfParser.parse(inputStream, password)
+            }
+            BrokerPlatform.HSBC -> {
+                com.recoder.stockledger.data.importer.HsbcStatementPdfParser.parse(inputStream, password)
+            }
+            else -> {
+                ZhuoruiStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
+            }
         }
         Log.d(TAG, "PDF解析完成, 找到${parsedTrades.size}条交易记录")
         if (parsedTrades.isEmpty()) {
