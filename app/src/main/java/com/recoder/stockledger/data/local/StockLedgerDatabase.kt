@@ -84,6 +84,11 @@ abstract class StockLedgerDatabase : RoomDatabase() {
                     CREATE INDEX IF NOT EXISTS `index_transactions_ledgerId` ON `transactions` (`ledgerId`)
                     """.trimIndent()
                 )
+                database.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_transactions_symbol_market` ON `transactions` (`symbol`, `market`)
+                    """.trimIndent()
+                )
             }
         }
     }

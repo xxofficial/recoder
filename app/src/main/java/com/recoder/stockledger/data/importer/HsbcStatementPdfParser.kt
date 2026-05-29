@@ -246,12 +246,17 @@ object HsbcStatementPdfParser {
 
     private fun extractText(inputStream: InputStream, password: String?): String {
         return try {
-            val doc = if (!password.isNullOrBlank()) {
-                PDDocument.load(inputStream, password).apply {
-                    if (isEncrypted) setAllSecurityToBeRemoved(true)
+            val bytes = inputStream.readBytes()
+            val doc = try {
+                PDDocument.load(java.io.ByteArrayInputStream(bytes))
+            } catch (e: Exception) {
+                if (!password.isNullOrBlank()) {
+                    PDDocument.load(java.io.ByteArrayInputStream(bytes), password).apply {
+                        if (isEncrypted) setAllSecurityToBeRemoved(true)
+                    }
+                } else {
+                    throw e
                 }
-            } else {
-                PDDocument.load(inputStream)
             }
             doc.use { document ->
                 val stripper = PDFTextStripper().apply {
