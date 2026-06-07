@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import com.recoder.stockledger.data.importer.ImportCoordinator
 import com.recoder.stockledger.data.local.StockLedgerDatabase
+import com.recoder.stockledger.data.repository.AutoNameRepairingStockLedgerRepository
 import com.recoder.stockledger.data.repository.DefaultLedgerRepository
 import com.recoder.stockledger.data.repository.FrankfurterExchangeRateDataSource
 import com.recoder.stockledger.data.repository.ImportRepository
@@ -50,12 +51,14 @@ class AppContainer(
     }
 
     val repository: StockLedgerRepository by lazy {
-        DefaultLedgerRepository(
-            context = applicationContext,
-            dao = database.ledgerDao(),
-            quoteDataSource = quoteDataSource,
-            exchangeRateDataSource = exchangeRateDataSource,
-            platformFeePlanSelectionProvider = settingsStore::loadPlatformFeePlanSelections,
+        AutoNameRepairingStockLedgerRepository(
+            DefaultLedgerRepository(
+                context = applicationContext,
+                dao = database.ledgerDao(),
+                quoteDataSource = quoteDataSource,
+                exchangeRateDataSource = exchangeRateDataSource,
+                platformFeePlanSelectionProvider = settingsStore::loadPlatformFeePlanSelections,
+            )
         )
     }
 

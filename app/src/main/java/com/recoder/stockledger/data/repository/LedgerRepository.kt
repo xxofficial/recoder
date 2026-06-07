@@ -117,6 +117,7 @@ data class ZhuoruiMailboxSyncResult(
     val duplicateCount: Int,
     val ignoredCount: Int,
     val latestSeenMessageAt: Long?,
+    val importedExternalReferences: List<String> = emptyList(),
 )
 
 interface QuoteDataSource {
@@ -217,6 +218,8 @@ interface ImportRepository {
         fetchCount: Int = 200,
         earliestReceivedAtMillis: Long? = null,
     ): ZhuoruiMailboxSyncResult
+
+    suspend fun repairNamesByExternalReferences(externalReferences: List<String>)
 }
 
 interface StockLedgerRepository : LedgerRepository, MarketDataRepository, ImportRepository
@@ -1338,6 +1341,8 @@ class DefaultLedgerRepository(
                 val scanThreshold = earliestReceivedAtMillis ?: defaultThreshold
                 Log.d(TAG, "卓锐邮箱同步开始: 共${messages.size}封邮件, scanThreshold=$scanThreshold")
 
+                val importedRefs = mutableListOf<String>()
+
                 for (message in messages) {
                     val messageTimestamp = messageTimestampMillis(message)
                     val subject = runCatching { message.subject }.getOrNull() ?: "(无主题)"
@@ -1370,6 +1375,7 @@ class DefaultLedgerRepository(
                         TradeImportOutcome.IMPORTED -> {
                             Log.d(TAG, "导入成功: ${parsed.tradeType} ${parsed.symbol} x${parsed.quantity} @${parsed.price}")
                             importedCount += 1
+                            result.externalReference?.let { importedRefs.add(it) }
                         }
                         TradeImportOutcome.DUPLICATE -> {
                             Log.d(TAG, "重复记录, 跳过: ${parsed.symbol} ${parsed.tradeDateTime}")
@@ -1392,12 +1398,47 @@ class DefaultLedgerRepository(
                     duplicateCount = duplicateCount,
                     ignoredCount = ignoredCount,
                     latestSeenMessageAt = latestSeenMessageAt,
+                    importedExternalReferences = importedRefs,
                 )
             } finally {
                 runCatching { folder.close(false) }
             }
         } finally {
             runCatching { store.close() }
+        }
+    }
+
+    override suspend fun repairNamesByExternalReferences(externalReferences: List<String>) {
+        if (externalReferences.isEmpty()) return
+        Log.d(TAG, "开始对导入的交易记录进行名称统一修复, 记录数=${externalReferences.size}")
+
+        // 1. Fetch transactions matching external references
+        val importedTxns = dao.getAllTransactions().filter { it.externalReference in externalReferences }
+        if (importedTxns.isEmpty()) return
+
+        // 2. Extract unique (symbol, market)
+        val targetHoldings = importedTxns
+            .filter { it.symbol.isNotBlank() && it.market != Market.CASH.name }
+            .map { it.symbol to it.market }
+            .distinct()
+
+        for ((symbol, marketName) in targetHoldings) {
+            val market = Market.fromString(marketName) ?: continue
+
+            // 3. Retrieve correct name using lookupSecurity (which uses Sina Suggest API)
+            val lookup = lookupSecurity(symbol, market)
+            if (lookup != null && lookup.name.isNotBlank() && lookup.name != lookup.symbol) {
+                val officialName = lookup.name
+                Log.d(TAG, "获取到证券 ${symbol} (${market.name}) 的统一官方名称: $officialName")
+
+                // 4. Update all transactions in the ledger with this symbol/market to use this official name
+                val txnsToUpdate = dao.getAllTransactions().filter { it.symbol == symbol && it.market == marketName }
+                for (txn in txnsToUpdate) {
+                    if (txn.name != officialName) {
+                        dao.updateTransaction(txn.copy(name = officialName))
+                    }
+                }
+            }
         }
     }
 
