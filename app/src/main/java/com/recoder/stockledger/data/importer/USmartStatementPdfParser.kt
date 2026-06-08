@@ -43,6 +43,47 @@ object USmartStatementPdfParser {
     private const val TAG = "USmartStmtPdfParser"
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
+    var ocrEngine: OcrEngine? = null
+
+    private val defaultOcrEngine: OcrEngine? by lazy {
+        try {
+            Class.forName("com.recoder.stockledger.data.importer.AndroidOcrEngine")
+                .getDeclaredConstructor()
+                .newInstance() as OcrEngine
+        } catch (e: Throwable) {
+            Log.w(TAG, "AndroidOcrEngine not available (this is normal in JUnit tests): ${e.message}")
+            null
+        }
+    }
+
+    var pdfTextExtractor: PdfTextExtractor? = null
+
+    private val defaultPdfTextExtractor: PdfTextExtractor by lazy {
+        object : PdfTextExtractor {
+            override fun extractText(inputStream: InputStream, password: String?): String {
+                return try {
+                    val doc = if (!password.isNullOrBlank()) {
+                        com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputStream, password).apply {
+                            if (isEncrypted) setAllSecurityToBeRemoved(true)
+                        }
+                    } else {
+                        com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputStream)
+                    }
+                    doc.use { document ->
+                        Log.d(TAG, "PDF loaded, pages=${document.numberOfPages}")
+                        val stripper = com.tom_roush.pdfbox.text.PDFTextStripper().apply {
+                            sortByPosition = true
+                        }
+                        stripper.getText(document)
+                    }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "uSMART PDF extraction failed", e)
+                    throw e
+                }
+            }
+        }
+    }
+
     // ===== Noise / Page Footer =====
     private val NOISE_PATTERNS = listOf(
         "證監會中央編號", "SFC CE NO",
@@ -121,15 +162,37 @@ object USmartStatementPdfParser {
     // ===== Public API =====
 
     fun parse(inputStream: InputStream, password: String? = null): List<ParsedStatementTrade> {
-        val rawText = extractText(inputStream, password)
-        if (rawText.isBlank()) return emptyList()
+        val bytes = inputStream.readBytes()
+        val extractor = pdfTextExtractor ?: defaultPdfTextExtractor
+        val rawText = extractor.extractText(bytes.inputStream(), password)
+        
+        if (isGarbledOrEmpty(rawText)) {
+            Log.d(TAG, "Extracted text is empty or garbled, falling back to OCR...")
+            val engine = ocrEngine ?: defaultOcrEngine
+            if (engine != null) {
+                val ocrText = engine.recognizeText(bytes.inputStream())
+                if (!ocrText.isNullOrBlank() && !isGarbledOrEmpty(ocrText)) {
+                    Log.d(TAG, "OCR successfully extracted text")
+                    return parseText(ocrText)
+                }
+            }
+            Log.w(TAG, "OCR engine not available or returned invalid text")
+        }
         return parseText(rawText)
     }
 
+    private fun isGarbledOrEmpty(text: String): Boolean {
+        if (text.isBlank()) return true
+        // Strip all whitespace for robust keyword checking (OCR engines often add spaces between characters)
+        val cleaned = text.replace(Regex("""\s+"""), "")
+        val hasKeywords = cleaned.contains("交易明细") || cleaned.contains("结单") || cleaned.contains("uSMART") || cleaned.contains("持仓明细") || cleaned.contains("uSmart")
+        if (!hasKeywords) return true
+        // Check for specific signature characters/garbage patterns
+        if (text.contains("x5yz{|}~") || text.contains("w4xyz")) return true
+        return false
+    }
+
     fun parseText(rawText: String): List<ParsedStatementTrade> {
-        if (rawText.contains("x5yz{|}~") || rawText.contains("w4xyz")) {
-            return getLegacy202509Trades()
-        }
         val normalized = normalizeText(rawText)
         val allLines = normalized.lines().map { it.trim() }
 
@@ -991,130 +1054,6 @@ object USmartStatementPdfParser {
         Market.CASH -> raw
     }
 
-    private fun getLegacy202509Trades(): List<ParsedStatementTrade> {
-        val zone = ZoneId.of("UTC+8")
-        return listOf(
-            ParsedStatementTrade(
-                sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                tradeType = TradeType.BUY,
-                market = Market.US,
-                symbol = "PXLW",
-                name = "美国像素",
-                currencyCode = "USD",
-                price = 10.51,
-                quantity = 40,
-                amount = 420.40,
-                tradeDate = LocalDate.of(2025, 9, 16),
-                tradeTime = "21:35",
-                commission = 2.00,
-                platformFee = null,
-                tax = 0.0,
-                tradeRef = "YL-2025-09-16-PXLW-BUY-40-10.5100-0",
-                rawLine = "PXLW 美国像素 BUY 40@10.51",
-                createdAt = LocalDate.of(2025, 9, 16).atTime(21, 35).atZone(zone).toInstant().toEpochMilli()
-            ),
-            ParsedStatementTrade(
-                sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                tradeType = TradeType.BUY,
-                market = Market.US,
-                symbol = "NVDA",
-                name = "英伟达",
-                currencyCode = "USD",
-                price = 175.50,
-                quantity = 5,
-                amount = 877.50,
-                tradeDate = LocalDate.of(2025, 9, 18),
-                tradeTime = "21:35",
-                commission = 1.90,
-                platformFee = null,
-                tax = 0.0,
-                tradeRef = "YL-2025-09-18-NVDA-BUY-5-175.5000-0",
-                rawLine = "NVDA 英伟达 BUY 5@175.50",
-                createdAt = LocalDate.of(2025, 9, 18).atTime(21, 35).atZone(zone).toInstant().toEpochMilli()
-            ),
-            ParsedStatementTrade(
-                sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                tradeType = TradeType.SELL,
-                market = Market.HK,
-                symbol = "01810.HK",
-                name = "小米集团-W",
-                currencyCode = "HKD",
-                price = 59.10,
-                quantity = 200,
-                amount = 11820.00,
-                tradeDate = LocalDate.of(2025, 9, 25),
-                tradeTime = "09:35",
-                commission = 29.06,
-                platformFee = null,
-                tax = 0.0,
-                tradeRef = "YL-2025-09-25-01810.HK-SELL-200-59.1000-0",
-                rawLine = "01810 小米集团-W SELL 200@59.10",
-                createdAt = LocalDate.of(2025, 9, 25).atTime(9, 35).atZone(zone).toInstant().toEpochMilli()
-            ),
-            ParsedStatementTrade(
-                sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                tradeType = TradeType.BUY,
-                market = Market.US,
-                symbol = "PXLW",
-                name = "美国像素",
-                currencyCode = "USD",
-                price = 10.20,
-                quantity = 10,
-                amount = 102.00,
-                tradeDate = LocalDate.of(2025, 9, 30),
-                tradeTime = "21:35",
-                commission = 0.20,
-                platformFee = null,
-                tax = 0.0,
-                tradeRef = "YL-2025-09-30-PXLW-BUY-10-10.2000-0",
-                rawLine = "PXLW 美国像素 BUY 10@10.20",
-                createdAt = LocalDate.of(2025, 9, 30).atTime(21, 35).atZone(zone).toInstant().toEpochMilli()
-            ),
-            ParsedStatementTrade(
-                sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                tradeType = TradeType.BUY,
-                market = Market.US,
-                symbol = "PXLW",
-                name = "美国像素",
-                currencyCode = "USD",
-                price = 10.20,
-                quantity = 99,
-                amount = 1009.80,
-                tradeDate = LocalDate.of(2025, 9, 30),
-                tradeTime = "21:35",
-                commission = 2.01,
-                platformFee = null,
-                tax = 0.0,
-                tradeRef = "YL-2025-09-30-PXLW-BUY-99-10.2000-0",
-                rawLine = "PXLW 美国像素 BUY 99@10.20",
-                createdAt = LocalDate.of(2025, 9, 30).atTime(21, 35).atZone(zone).toInstant().toEpochMilli()
-            )
-        )
-    }
 
-    /**
-     * Extract text from PDF using standard PDFTextStripper with sortByPosition.
-     * This produces per-line output matching the visual layout of the PDF table.
-     */
-    private fun extractText(inputStream: InputStream, password: String?): String {
-        return try {
-            val doc = if (!password.isNullOrBlank()) {
-                PDDocument.load(inputStream, password).apply {
-                    if (isEncrypted) setAllSecurityToBeRemoved(true)
-                }
-            } else {
-                PDDocument.load(inputStream)
-            }
-            doc.use { document ->
-                Log.d(TAG, "PDF loaded, pages=${document.numberOfPages}")
-                val stripper = PDFTextStripper().apply {
-                    sortByPosition = true
-                }
-                stripper.getText(document)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "uSMART PDF extraction failed", e)
-            throw e
-        }
-    }
+
 }

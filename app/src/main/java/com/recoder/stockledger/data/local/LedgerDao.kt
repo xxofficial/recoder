@@ -123,10 +123,9 @@ interface LedgerDao {
           AND quantity = :quantity
           AND ABS(price - :price) < 0.0001
         ORDER BY id DESC
-        LIMIT 1
         """,
     )
-    suspend fun findDuplicateTransaction(
+    suspend fun findDuplicateTransactions(
         platform: String,
         symbol: String,
         market: String,
@@ -134,7 +133,7 @@ interface LedgerDao {
         tradeType: String,
         quantity: Int,
         price: Double,
-    ): TransactionEntity?
+    ): List<TransactionEntity>
 
     // --- 账本 (Ledger) 相关操作 ---
 

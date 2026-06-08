@@ -32,6 +32,31 @@ class USmartStatementParserTest {
         assertNotNull("Should find PDF files", files)
         assertTrue("Should have PDF files in the directory", files!!.isNotEmpty())
 
+        // Register mock OCR engine for tests running on host JVM
+        USmartStatementPdfParser.ocrEngine = object : OcrEngine {
+            override fun recognizeText(inputStream: java.io.InputStream): String? {
+                val ocrFile = File(statementsDir, "2025-9_ocr.txt")
+                return if (ocrFile.exists()) ocrFile.readText(Charsets.UTF_8) else null
+            }
+        }
+
+        // Register JVM PDF text extractor
+        USmartStatementPdfParser.pdfTextExtractor = object : PdfTextExtractor {
+            override fun extractText(inputStream: java.io.InputStream, password: String?): String {
+                val doc = if (!password.isNullOrBlank()) {
+                    org.apache.pdfbox.pdmodel.PDDocument.load(inputStream, password)
+                } else {
+                    org.apache.pdfbox.pdmodel.PDDocument.load(inputStream)
+                }
+                return doc.use { document ->
+                    val stripper = org.apache.pdfbox.text.PDFTextStripper().apply {
+                        sortByPosition = true
+                    }
+                    stripper.getText(document)
+                }
+            }
+        }
+
         // Parse all PDFs
         val allParsedTrades = mutableListOf<ParsedStatementTrade>()
         var failedFiles = 0
@@ -51,7 +76,9 @@ class USmartStatementParserTest {
                 outDir.mkdirs()
                 File(outDir, file.name.replace(".pdf", ".txt")).writeText(rawText)
 
-                val parsed = USmartStatementPdfParser.parseText(rawText)
+                val parsed = file.inputStream().use { stream ->
+                    USmartStatementPdfParser.parse(stream, password)
+                }
                 println("  Extracted ${parsed.size} records from ${file.name}")
                 for (t in parsed) {
                     println("    [${t.tradeType}] ${t.symbol} (${t.name}) x${t.quantity} @${t.price} amt=${t.amount} comm=${t.commission} tax=${t.tax} date=${t.tradeDate}")

@@ -92,6 +92,7 @@ dependencies {
     implementation("org.eclipse.angus:angus-activation:2.0.0")
     implementation("jakarta.activation:jakarta.activation-api:2.1.1")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
     ksp("androidx.room:room-compiler:2.8.4")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.apache.pdfbox:pdfbox:2.0.29")

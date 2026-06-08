@@ -802,6 +802,7 @@ class DefaultLedgerRepository(
         }
 
         val results = mutableListOf<TradeImportResult>()
+        val matchedDbTxIds = mutableSetOf<Long>()
         for (parsed in parsedTrades) {
             val externalReference = "${platform.shortLabel}-STMT-${parsed.tradeRef}"
             val existing = dao.findTransactionByExternalReference(
@@ -817,10 +818,11 @@ class DefaultLedgerRepository(
                         externalReference = externalReference,
                     )
                 )
+                matchedDbTxIds.add(existing.id)
                 continue
             }
 
-            val duplicate = dao.findDuplicateTransaction(
+            val duplicates = dao.findDuplicateTransactions(
                 platform = platform.name,
                 symbol = parsed.symbol,
                 market = parsed.market.name,
@@ -829,6 +831,7 @@ class DefaultLedgerRepository(
                 quantity = parsed.quantity,
                 price = parsed.price,
             )
+            val duplicate = duplicates.firstOrNull { it.id !in matchedDbTxIds }
             if (duplicate != null) {
                 Log.d(TAG, "发现重复交易(内容匹配): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}")
                 results.add(
@@ -838,6 +841,7 @@ class DefaultLedgerRepository(
                         externalReference = externalReference,
                     )
                 )
+                matchedDbTxIds.add(duplicate.id)
                 continue
             }
 
@@ -910,6 +914,7 @@ class DefaultLedgerRepository(
     ): List<TradeImportResult> = withContext(Dispatchers.IO) {
         val refPrefix = if (platform == BrokerPlatform.ZHUORUI) "ZR-STMT-" else "PDF-STMT-"
         val results = mutableListOf<TradeImportResult>()
+        val matchedDbTxIds = mutableSetOf<Long>()
         for (parsed in parsedTrades) {
             val externalReference = "${refPrefix}${parsed.tradeRef}"
             val existing = dao.findTransactionByExternalReference(
@@ -925,10 +930,11 @@ class DefaultLedgerRepository(
                         externalReference = externalReference,
                     )
                 )
+                matchedDbTxIds.add(existing.id)
                 continue
             }
 
-            val duplicate = dao.findDuplicateTransaction(
+            val duplicates = dao.findDuplicateTransactions(
                 platform = platform.name,
                 symbol = parsed.symbol,
                 market = parsed.market.name,
@@ -937,6 +943,7 @@ class DefaultLedgerRepository(
                 quantity = parsed.quantity,
                 price = parsed.price,
             )
+            val duplicate = duplicates.firstOrNull { it.id !in matchedDbTxIds }
             if (duplicate != null) {
                 Log.d(TAG, "发现重复交易(内容匹配): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}")
                 results.add(
@@ -946,6 +953,7 @@ class DefaultLedgerRepository(
                         externalReference = externalReference,
                     )
                 )
+                matchedDbTxIds.add(duplicate.id)
                 continue
             }
 
