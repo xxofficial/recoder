@@ -291,8 +291,47 @@ object USmartStatementPdfParser {
                     val hasCloseParen = line.contains(")") || line.contains("）")
                     currentNameClosed = !hasOpenParen || hasCloseParen
 
-                    if (isValidNameFragment(remainder)) {
-                        currentNameFragments.add(remainder)
+                    // If this same line also contains trade details (common for short symbols like SNDK)
+                    val tradeMatch = tradeRegex.find(line)
+                    if (tradeMatch != null) {
+                        val marketStr = tradeMatch.groupValues[1]
+                        val dirStr = tradeMatch.groupValues[2]
+                        val qty = tradeMatch.groupValues[3].replace(",", "").toInt()
+                        val curr = tradeMatch.groupValues[4]
+                        val price = tradeMatch.groupValues[5].replace(",", "").toDouble()
+                        val amount = tradeMatch.groupValues[6].replace(",", "").toDouble()
+                        val tradeDate = LocalDate.parse(tradeMatch.groupValues[7])
+                        
+                        val market = when (marketStr) {
+                            "美股" -> Market.US
+                            "A股通" -> Market.A_SHARE
+                            else -> Market.HK
+                        }
+                        
+                        val tradeType = when {
+                            BUY_SET.any { dirStr.contains(it) } -> TradeType.BUY
+                            SELL_SET.any { dirStr.contains(it) } -> TradeType.SELL
+                            else -> TradeType.BUY
+                        }
+                        
+                        currentTrades.add(
+                            RawTrade(market, tradeType, qty, curr, price, amount, tradeDate)
+                        )
+
+                        // Name fragment is the portion of the line before the trade start, minus the symbol prefix
+                        val beforeTrade = line.substring(0, tradeMatch.range.first).trim()
+                        var namePart = beforeTrade
+                        if (namePart.startsWith(currentSymbol!!)) {
+                            namePart = namePart.substring(currentSymbol!!.length).trim()
+                        }
+                        if (isValidNameFragment(namePart)) {
+                            currentNameFragments.add(namePart)
+                        }
+                        currentNameClosed = true
+                    } else {
+                        if (isValidNameFragment(remainder)) {
+                            currentNameFragments.add(remainder)
+                        }
                     }
                 } else {
                     currentSymbol = line
@@ -389,8 +428,10 @@ object USmartStatementPdfParser {
             i++
         }
 
-        // De-duplicate interests by tradeRef to handle cases where it's both in cash flow and summary
-        val allInterests = (cashFlowInterests + summaryInterests).distinctBy { it.tradeRef }
+        // De-duplicate interests to avoid double counting between cash flow and summary sections
+        val cashFlowCurrencies = cashFlowInterests.map { it.currencyCode }.toSet()
+        val filteredSummaryInterests = summaryInterests.filter { it.currencyCode !in cashFlowCurrencies }
+        val allInterests = cashFlowInterests + filteredSummaryInterests
         trades.addAll(allInterests)
 
         Log.d(TAG, "Parsed ${trades.size} trades total")

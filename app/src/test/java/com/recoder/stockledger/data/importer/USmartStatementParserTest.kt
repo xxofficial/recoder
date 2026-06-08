@@ -12,7 +12,7 @@ import org.json.JSONArray
 
 class USmartStatementParserTest {
 
-    private val statementsDir = File("D:\\Project\\recoder\\Statements")
+    private val statementsDir = File("../Statements/uSMART")
     private val password = "581577"
     private val goldenFile = File(statementsDir, "parsed_results.json")
 
@@ -47,7 +47,7 @@ class USmartStatementParserTest {
                     stripper.getText(document)
                 }
                 // Save extracted text for diagnosis
-                val outDir = File("D:\\Project\\recoder\\Statements\\extracted")
+                val outDir = File("../Statements/uSMART/extracted")
                 outDir.mkdirs()
                 File(outDir, file.name.replace(".pdf", ".txt")).writeText(rawText)
 
