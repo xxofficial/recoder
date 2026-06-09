@@ -571,7 +571,8 @@ object USmartStatementPdfParser {
                     finalTrades.add(
                         t.copy(
                             tradeTime = newTimeStr,
-                            createdAt = newCreatedAt
+                            createdAt = newCreatedAt,
+                            tradeRef = "${t.tradeRef}-$idx"
                         )
                     )
                 }
