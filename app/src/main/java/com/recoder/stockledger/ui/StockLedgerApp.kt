@@ -463,6 +463,12 @@ fun StockLedgerApp(
                         activeLedgerType = activeLedgerType,
                         activeLedgerPartners = activeLedgerPartners,
                         onInvestorSelected = ledgerViewModel::updateTradeInvestorName,
+                        onAssetTypeSelected = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(assetType = value) } },
+                        onOptionUnderlyingSymbolChanged = ledgerViewModel::onOptionUnderlyingSymbolChanged,
+                        onOptionExpiryDateChanged = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(optionExpiryDate = value) } },
+                        onOptionTypeSelected = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(optionType = value) } },
+                        onOptionStrikePriceChanged = { value -> ledgerViewModel.updateDraft { draft -> draft.copy(optionStrikePriceLabel = value) } },
+                        onOptionUnderlyingSuggestionSelected = ledgerViewModel::selectOptionUnderlyingSuggestion,
                     )
                 }
 

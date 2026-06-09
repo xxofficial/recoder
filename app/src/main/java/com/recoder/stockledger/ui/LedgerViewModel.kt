@@ -1148,6 +1148,36 @@ class LedgerViewModel(
         symbolLookup.value = resolvedLookup
     }
 
+    fun onOptionUnderlyingSymbolChanged(value: String) {
+        android.util.Log.d("LedgerViewModel", "onOptionUnderlyingSymbolChanged: $value")
+        draft.update { current ->
+            applyDraftRules(current.copy(optionUnderlyingSymbol = value))
+        }
+        scheduleSymbolLookup(value = value, market = draft.value.market)
+    }
+
+    fun selectOptionUnderlyingSuggestion(suggestion: SecuritySuggestionUiModel) {
+        symbolLookupJob?.cancel()
+        val resolvedLookup = SymbolLookupUiModel(
+            state = SymbolLookupState.RESOLVED,
+            message = "正股已识别为 ${suggestion.name} ${suggestion.symbol}",
+            resolvedSymbol = suggestion.symbol,
+            resolvedName = suggestion.name,
+            resolvedMarket = suggestion.market,
+        )
+        draft.update { current ->
+            applyDraftRules(
+                current.copy(
+                    market = suggestion.market,
+                    optionUnderlyingSymbol = suggestion.symbol,
+                ),
+                lookup = resolvedLookup,
+            )
+        }
+        symbolSuggestions.value = emptyList()
+        symbolLookup.value = resolvedLookup
+    }
+
     fun updateDraft(transform: (TradeFormState) -> TradeFormState) {
         draft.update { current ->
             applyDraftRules(transform(current))
@@ -1336,6 +1366,41 @@ class LedgerViewModel(
         }
         val targetLedgerId = originalTx?.ledgerId ?: selectedLedgerId.value
 
+        // For option trades, generate standard option symbol/name from the underlying
+        val isOptionTrade = currentDraft.assetType == "OPTION"
+        val finalSymbol: String
+        val finalName: String
+        val finalAssetType: String
+        val finalUnderlyingSymbol: String?
+        val finalExpiryDate: String?
+        val finalStrikePrice: Double?
+        val finalOptionType: String?
+        if (isOptionTrade) {
+            val underlying = resolved.symbol
+            val expiry = currentDraft.optionExpiryDate
+            val strike = parseDecimal(currentDraft.optionStrikePriceLabel)
+            val optType = currentDraft.optionType
+            val expiryCompact = expiry.replace("-", "").takeLast(6) // YYMMDD
+            val typeCode = if (optType == "CALL") "C" else "P"
+            val strikeLabel = if (strike == strike.toLong().toDouble()) strike.toLong().toString() else strike.toString()
+            finalSymbol = "$underlying $expiryCompact$typeCode$strikeLabel"
+            val typeLabel = if (optType == "CALL") "Call" else "Put"
+            finalName = "$underlying $expiry $typeLabel @ $strikeLabel"
+            finalAssetType = "OPTION"
+            finalUnderlyingSymbol = underlying
+            finalExpiryDate = expiry
+            finalStrikePrice = strike
+            finalOptionType = optType
+        } else {
+            finalSymbol = resolved.symbol
+            finalName = resolved.name
+            finalAssetType = "STOCK"
+            finalUnderlyingSymbol = null
+            finalExpiryDate = null
+            finalStrikePrice = null
+            finalOptionType = null
+        }
+
         val input = TradeDraftInput(
             tradeType = currentDraft.selectedType,
             platform = currentDraft.platform,
@@ -1344,8 +1409,8 @@ class LedgerViewModel(
             },
             externalReference = currentEditingTrade?.externalReference,
             market = resolved.market,
-            symbol = resolved.symbol,
-            name = resolved.name,
+            symbol = finalSymbol,
+            name = finalName,
             tradeDate = currentDraft.tradeDate,
             price = parseDecimal(currentDraft.priceLabel),
             quantity = if (currentDraft.selectedType.isSecurityTrade) parseQuantity(currentDraft.quantityLabel) else 1,
@@ -1356,6 +1421,11 @@ class LedgerViewModel(
             createdAt = currentEditingTrade?.createdAt ?: System.currentTimeMillis(),
             ledgerId = targetLedgerId,
             investorName = currentDraft.investorName,
+            assetType = finalAssetType,
+            underlyingSymbol = finalUnderlyingSymbol,
+            expiryDate = finalExpiryDate,
+            strikePrice = finalStrikePrice,
+            optionType = finalOptionType,
         )
 
         if (currentEditingTrade == null) {
@@ -1459,8 +1529,13 @@ class LedgerViewModel(
             symbolSuggestions.value = emptyList()
             return
         }
+        val lookupValue = if (currentDraft.assetType == "OPTION") {
+            currentDraft.optionUnderlyingSymbol
+        } else {
+            currentDraft.symbolOrName
+        }
         scheduleSymbolLookup(
-            value = currentDraft.symbolOrName,
+            value = lookupValue,
             market = currentDraft.market,
         )
     }
@@ -1475,13 +1550,18 @@ class LedgerViewModel(
             symbolLookup.value = SymbolLookupUiModel()
             return
         }
+        val currentDraft = draft.value
         val trimmed = value.trim()
         val local = resolveKnownSecurity(trimmed, market)
         if (local != null) {
             symbolSuggestions.value = emptyList()
             val resolvedLookup = SymbolLookupUiModel(
                 state = SymbolLookupState.RESOLVED,
-                    message = "已识别为 ${local.name} ${local.symbol}",
+                message = if (currentDraft.assetType == "OPTION") {
+                    "正股已识别为 ${local.name} ${local.symbol}"
+                } else {
+                    "已识别为 ${local.name} ${local.symbol}"
+                },
                 resolvedSymbol = local.symbol,
                 resolvedName = local.name,
                 resolvedMarket = local.market,
@@ -1516,7 +1596,12 @@ class LedgerViewModel(
             }
 
             val latestDraft = draft.value
-            if (latestDraft.market != market || latestDraft.symbolOrName.trim() != lookupInput) {
+            val currentTypedValue = if (latestDraft.assetType == "OPTION") {
+                latestDraft.optionUnderlyingSymbol
+            } else {
+                latestDraft.symbolOrName
+            }
+            if (latestDraft.market != market || currentTypedValue.trim() != lookupInput) {
                 return@launch
             }
 
@@ -1536,7 +1621,11 @@ class LedgerViewModel(
                 symbolSuggestions.value = suggestionItems
                 val resolvedLookup = SymbolLookupUiModel(
                     state = SymbolLookupState.RESOLVED,
-                    message = "已识别为 ${exactSuggestion.name} ${exactSuggestion.symbol}，点候选项才会填入",
+                    message = if (latestDraft.assetType == "OPTION") {
+                        "正股已识别为 ${exactSuggestion.name} ${exactSuggestion.symbol}，点候选项才会填入"
+                    } else {
+                        "已识别为 ${exactSuggestion.name} ${exactSuggestion.symbol}，点候选项才会填入"
+                    },
                     resolvedSymbol = exactSuggestion.symbol,
                     resolvedName = exactSuggestion.name,
                     resolvedMarket = exactSuggestion.market,
@@ -1634,8 +1723,10 @@ class LedgerViewModel(
         portfolio: PortfolioComputation,
         lookup: SymbolLookupUiModel,
     ): String? {
+        val isOption = draft.assetType == "OPTION"
+        val symbolInput = if (isOption) draft.optionUnderlyingSymbol else draft.symbolOrName
         val noInputYet = if (draft.selectedType.isSecurityTrade) {
-            draft.symbolOrName.isBlank() &&
+            symbolInput.isBlank() &&
                 draft.priceLabel.isBlank() &&
                 draft.quantityLabel.isBlank()
         } else {
@@ -1659,14 +1750,23 @@ class LedgerViewModel(
             return null
         }
 
-        if (draft.symbolOrName.isBlank()) return "请输入股票代码"
+        if (symbolInput.isBlank()) {
+            return if (isOption) "请输入正股代码" else "请输入股票代码"
+        }
+
+        if (isOption) {
+            if (draft.optionExpiryDate.isBlank()) return "请选择期权到期日"
+            if (parseDecimal(draft.optionStrikePriceLabel) <= 0.0) return "请输入有效的行权价"
+            if (draft.optionType.isBlank()) return "请选择期权类型（Call/Put）"
+        }
 
         val resolved = resolveSecurity(draft, portfolio.positions, lookup)
         if (resolved == null) {
+            val entityLabel = if (isOption) "正股代码" else "股票代码"
             return when (lookup.state) {
-                SymbolLookupState.LOOKING_UP -> "正在校验股票代码，请稍候"
+                SymbolLookupState.LOOKING_UP -> "正在校验${entityLabel}，请稍候"
                 SymbolLookupState.INVALID -> lookup.message ?: "未找到对应股票，请检查代码和市场"
-                else -> "请先输入有效股票代码并完成校验"
+                else -> "请先输入有效${entityLabel}并完成校验"
             }
         }
 
@@ -1809,7 +1909,11 @@ class LedgerViewModel(
         positions: Map<String, PositionComputation>,
         lookup: SymbolLookupUiModel,
     ): ResolvedSecurity? {
-        val raw = draft.symbolOrName.trim()
+        val raw = if (draft.assetType == "OPTION") {
+            draft.optionUnderlyingSymbol.trim()
+        } else {
+            draft.symbolOrName.trim()
+        }
         if (raw.isBlank()) return null
 
         resolveLookupSelection(rawInput = raw, market = draft.market, lookup = lookup)?.let { resolved ->

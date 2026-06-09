@@ -29,5 +29,10 @@ data class TransactionEntity(
     val createdAt: Long,
     val ledgerId: Long = 1L,
     val investorName: String? = null,
+    val assetType: String = "STOCK",
+    val underlyingSymbol: String? = null,
+    val expiryDate: String? = null,
+    val strikePrice: Double? = null,
+    val optionType: String? = null,
 )
 

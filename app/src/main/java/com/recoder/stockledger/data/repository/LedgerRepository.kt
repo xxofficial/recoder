@@ -89,6 +89,11 @@ data class TradeDraftInput(
     val createdAt: Long,
     val ledgerId: Long = 1L,
     val investorName: String? = null,
+    val assetType: String = "STOCK",
+    val underlyingSymbol: String? = null,
+    val expiryDate: String? = null,
+    val strikePrice: Double? = null,
+    val optionType: String? = null,
 )
 
 data class ImportedBackup(
@@ -277,6 +282,11 @@ class DefaultLedgerRepository(
                 createdAt = input.createdAt,
                 ledgerId = input.ledgerId,
                 investorName = input.investorName,
+                assetType = input.assetType,
+                underlyingSymbol = input.underlyingSymbol,
+                expiryDate = input.expiryDate,
+                strikePrice = input.strikePrice,
+                optionType = input.optionType,
             ),
         )
     }
@@ -305,6 +315,11 @@ class DefaultLedgerRepository(
             createdAt = input.createdAt,
             ledgerId = input.ledgerId,
             investorName = input.investorName,
+            assetType = input.assetType,
+            underlyingSymbol = input.underlyingSymbol,
+            expiryDate = input.expiryDate,
+            strikePrice = input.strikePrice,
+            optionType = input.optionType,
         )
         dao.updateTransaction(entity)
 
@@ -1111,7 +1126,8 @@ class DefaultLedgerRepository(
                 val tradeType = TradeType.valueOf(transaction.tradeType)
                 tradeType.isSecurityTrade &&
                     transaction.symbol.isNotBlank() &&
-                    transaction.market != Market.CASH.name
+                    transaction.market != Market.CASH.name &&
+                    transaction.assetType != "OPTION"
             }
         val requests = securityTransactions
             .groupBy { it.market to it.symbol }

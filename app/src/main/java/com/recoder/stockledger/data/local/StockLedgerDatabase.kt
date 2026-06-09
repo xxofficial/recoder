@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [TransactionEntity::class, QuoteSnapshotEntity::class, LedgerEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class StockLedgerDatabase : RoomDatabase() {
@@ -87,6 +87,36 @@ abstract class StockLedgerDatabase : RoomDatabase() {
                 database.execSQL(
                     """
                     CREATE INDEX IF NOT EXISTS `index_transactions_symbol_market` ON `transactions` (`symbol`, `market`)
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions ADD COLUMN assetType TEXT NOT NULL DEFAULT 'STOCK'
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions ADD COLUMN underlyingSymbol TEXT
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions ADD COLUMN expiryDate TEXT
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions ADD COLUMN strikePrice REAL
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    ALTER TABLE transactions ADD COLUMN optionType TEXT
                     """.trimIndent()
                 )
             }

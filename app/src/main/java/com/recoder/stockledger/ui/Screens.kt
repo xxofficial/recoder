@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
@@ -84,6 +85,7 @@ import com.recoder.stockledger.ui.theme.ForegroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundSecondary
 import com.recoder.stockledger.ui.theme.MarketDown
 import com.recoder.stockledger.ui.theme.MarketUp
+import com.recoder.stockledger.ui.theme.BorderSubtle
 import com.recoder.stockledger.ui.theme.StockLedgerTheme
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import java.time.LocalDate
@@ -1331,6 +1333,45 @@ fun TransactionsRoute(
     }
 }
 
+@Stable
+class InputFieldState(initialValue: String) {
+    var textFieldValue by mutableStateOf(TextFieldValue(initialValue, TextRange(initialValue.length)))
+        private set
+    private val sentHistory = mutableListOf<String>()
+    private var preProgrammaticValue: String? = null
+
+    fun updateFromUser(newValue: TextFieldValue, onValueChange: (String) -> Unit) {
+        val text = newValue.text
+        if (preProgrammaticValue != null && text == preProgrammaticValue) {
+            return
+        }
+        preProgrammaticValue = null
+
+        textFieldValue = newValue
+        if (sentHistory.isEmpty() || sentHistory.last() != text) {
+            sentHistory.add(text)
+            if (sentHistory.size > 15) {
+                sentHistory.removeAt(0)
+            }
+        }
+        onValueChange(text)
+    }
+
+    fun updateFromState(stateValue: String) {
+        if (stateValue != textFieldValue.text) {
+            if (stateValue in sentHistory) {
+                return
+            }
+            if (textFieldValue.text.isNotEmpty()) {
+                preProgrammaticValue = textFieldValue.text
+            }
+            textFieldValue = TextFieldValue(stateValue, TextRange(stateValue.length))
+            sentHistory.clear()
+            sentHistory.add(stateValue)
+        }
+    }
+}
+
 @Composable
 fun TradeEntryRoute(
     state: TradeFormState,
@@ -1362,50 +1403,32 @@ fun TradeEntryRoute(
     activeLedgerType: String = "",
     activeLedgerPartners: String = "",
     onInvestorSelected: ((String?) -> Unit)? = null,
+    onAssetTypeSelected: ((String) -> Unit)? = null,
+    onOptionUnderlyingSymbolChanged: ((String) -> Unit)? = null,
+    onOptionExpiryDateChanged: ((String) -> Unit)? = null,
+    onOptionTypeSelected: ((String) -> Unit)? = null,
+    onOptionStrikePriceChanged: ((String) -> Unit)? = null,
+    onOptionUnderlyingSuggestionSelected: ((SecuritySuggestionUiModel) -> Unit)? = null,
 ) {
-    var symbolValue by remember { mutableStateOf(TextFieldValue(state.symbolOrName, TextRange(state.symbolOrName.length))) }
-    var priceValue by remember { mutableStateOf(TextFieldValue(state.priceLabel, TextRange(state.priceLabel.length))) }
-    var quantityValue by remember { mutableStateOf(TextFieldValue(state.quantityLabel, TextRange(state.quantityLabel.length))) }
-    var commissionValue by remember { mutableStateOf(TextFieldValue(state.commissionLabel, TextRange(state.commissionLabel.length))) }
-    var taxValue by remember { mutableStateOf(TextFieldValue(state.taxLabel, TextRange(state.taxLabel.length))) }
-    var timeValue by remember { mutableStateOf(TextFieldValue(state.tradeTime, TextRange(state.tradeTime.length))) }
-    var noteValue by remember { mutableStateOf(TextFieldValue(state.note, TextRange(state.note.length))) }
+    val symbolState = remember { InputFieldState(state.symbolOrName) }
+    val priceState = remember { InputFieldState(state.priceLabel) }
+    val quantityState = remember { InputFieldState(state.quantityLabel) }
+    val commissionState = remember { InputFieldState(state.commissionLabel) }
+    val taxState = remember { InputFieldState(state.taxLabel) }
+    val timeState = remember { InputFieldState(state.tradeTime) }
+    val noteState = remember { InputFieldState(state.note) }
+    val optionUnderlyingState = remember { InputFieldState(state.optionUnderlyingSymbol) }
+    val optionStrikeState = remember { InputFieldState(state.optionStrikePriceLabel) }
 
-    LaunchedEffect(state.symbolOrName) {
-        if (symbolValue.text != state.symbolOrName) {
-            symbolValue = TextFieldValue(state.symbolOrName, TextRange(state.symbolOrName.length))
-        }
-    }
-    LaunchedEffect(state.priceLabel) {
-        if (priceValue.text != state.priceLabel) {
-            priceValue = TextFieldValue(state.priceLabel, TextRange(state.priceLabel.length))
-        }
-    }
-    LaunchedEffect(state.quantityLabel) {
-        if (quantityValue.text != state.quantityLabel) {
-            quantityValue = TextFieldValue(state.quantityLabel, TextRange(state.quantityLabel.length))
-        }
-    }
-    LaunchedEffect(state.commissionLabel) {
-        if (commissionValue.text != state.commissionLabel) {
-            commissionValue = TextFieldValue(state.commissionLabel, TextRange(state.commissionLabel.length))
-        }
-    }
-    LaunchedEffect(state.taxLabel) {
-        if (taxValue.text != state.taxLabel) {
-            taxValue = TextFieldValue(state.taxLabel, TextRange(state.taxLabel.length))
-        }
-    }
-    LaunchedEffect(state.tradeTime) {
-        if (timeValue.text != state.tradeTime) {
-            timeValue = TextFieldValue(state.tradeTime, TextRange(state.tradeTime.length))
-        }
-    }
-    LaunchedEffect(state.note) {
-        if (noteValue.text != state.note) {
-            noteValue = TextFieldValue(state.note, TextRange(state.note.length))
-        }
-    }
+    LaunchedEffect(state.symbolOrName) { symbolState.updateFromState(state.symbolOrName) }
+    LaunchedEffect(state.priceLabel) { priceState.updateFromState(state.priceLabel) }
+    LaunchedEffect(state.quantityLabel) { quantityState.updateFromState(state.quantityLabel) }
+    LaunchedEffect(state.commissionLabel) { commissionState.updateFromState(state.commissionLabel) }
+    LaunchedEffect(state.taxLabel) { taxState.updateFromState(state.taxLabel) }
+    LaunchedEffect(state.tradeTime) { timeState.updateFromState(state.tradeTime) }
+    LaunchedEffect(state.note) { noteState.updateFromState(state.note) }
+    LaunchedEffect(state.optionUnderlyingSymbol) { optionUnderlyingState.updateFromState(state.optionUnderlyingSymbol) }
+    LaunchedEffect(state.optionStrikePriceLabel) { optionStrikeState.updateFromState(state.optionStrikePriceLabel) }
 
     val isSecurityTrade = state.selectedType.isSecurityTrade
     val isSellTrade = state.selectedType == TradeType.SELL
@@ -1491,26 +1514,146 @@ fun TradeEntryRoute(
                     }
                 }
 
+                if (isSecurityTrade && !isEditing) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("资产类型", color = ForegroundSecondary, fontSize = 14.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf("STOCK" to "股票", "OPTION" to "期权").forEach { (typeVal, typeLbl) ->
+                                val selected = state.assetType == typeVal
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .background(
+                                            color = if (selected) SurfaceSecondary else BackgroundPrimary,
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .border(
+                                            width = if (selected) 0.dp else 1.dp,
+                                            color = BorderSubtle,
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { onAssetTypeSelected?.invoke(typeVal) }
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = typeLbl,
+                                        color = if (selected) ForegroundPrimary else ForegroundSecondary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (isSecurityTrade) {
-                    InputFieldBlock(
-                        label = "证券代码 / 名称",
-                        value = symbolValue,
-                        supportingText = symbolLookup.message,
-                        supportingColor = when (symbolLookup.state) {
-                            SymbolLookupState.INVALID -> MarketDown
-                            SymbolLookupState.RESOLVED -> MarketUp
-                            else -> ForegroundMuted
-                        },
-                        onValueChange = {
-                            symbolValue = it
-                            onSymbolChange(it.text)
-                        },
-                    )
-                    if (symbolSuggestions.isNotEmpty()) {
-                        SymbolSuggestionSection(
-                            suggestions = symbolSuggestions,
-                            onSelected = onSymbolSuggestionSelected,
+                    if (state.assetType == "OPTION") {
+                        InputFieldBlock(
+                            label = "正股代码",
+                            value = optionUnderlyingState.textFieldValue,
+                            supportingText = symbolLookup.message,
+                            supportingColor = when (symbolLookup.state) {
+                                SymbolLookupState.INVALID -> MarketDown
+                                SymbolLookupState.RESOLVED -> MarketUp
+                                else -> ForegroundMuted
+                            },
+                            onValueChange = {
+                                optionUnderlyingState.updateFromUser(it) { text ->
+                                    onOptionUnderlyingSymbolChanged?.invoke(text)
+                                }
+                            },
                         )
+                        if (symbolSuggestions.isNotEmpty()) {
+                            SymbolSuggestionSection(
+                                suggestions = symbolSuggestions,
+                                onSelected = onOptionUnderlyingSuggestionSelected ?: {},
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            TradeEntryDateField(
+                                label = "到期日",
+                                value = state.optionExpiryDate,
+                                onValueChange = { onOptionExpiryDateChanged?.invoke(it) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            InputFieldBlock(
+                                label = "行权价",
+                                value = optionStrikeState.textFieldValue,
+                                modifier = Modifier.weight(1f),
+                                keyboardType = KeyboardType.Decimal,
+                                onValueChange = {
+                                    optionStrikeState.updateFromUser(it) { text ->
+                                        onOptionStrikePriceChanged?.invoke(text)
+                                    }
+                                },
+                            )
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("期权类型", color = ForegroundSecondary, fontSize = 14.sp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf("CALL" to "看涨 Call", "PUT" to "看跌 Put").forEach { (typeVal, typeLbl) ->
+                                    val selected = state.optionType == typeVal
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .background(
+                                                color = if (selected) SurfaceSecondary else BackgroundPrimary,
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .border(
+                                                width = if (selected) 0.dp else 1.dp,
+                                                color = BorderSubtle,
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable { onOptionTypeSelected?.invoke(typeVal) }
+                                            .padding(vertical = 12.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = typeLbl,
+                                            color = if (selected) ForegroundPrimary else ForegroundSecondary,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        InputFieldBlock(
+                            label = "证券代码 / 名称",
+                            value = symbolState.textFieldValue,
+                            supportingText = symbolLookup.message,
+                            supportingColor = when (symbolLookup.state) {
+                                SymbolLookupState.INVALID -> MarketDown
+                                SymbolLookupState.RESOLVED -> MarketUp
+                                else -> ForegroundMuted
+                            },
+                            onValueChange = {
+                                symbolState.updateFromUser(it) { text ->
+                                    onSymbolChange(text)
+                                }
+                            },
+                        )
+                        if (symbolSuggestions.isNotEmpty()) {
+                            SymbolSuggestionSection(
+                                suggestions = symbolSuggestions,
+                                onSelected = onSymbolSuggestionSelected,
+                            )
+                        }
                     }
                 }
 
@@ -1524,10 +1667,11 @@ fun TradeEntryRoute(
                         modifier = Modifier.weight(1f),
                     )
                     TradeEntryTimeField(
-                        value = timeValue.text,
+                        value = timeState.textFieldValue.text,
                         onValueChange = { filtered ->
-                            timeValue = TextFieldValue(filtered, selection = TextRange(filtered.length))
-                            onTimeChange(filtered)
+                            timeState.updateFromUser(TextFieldValue(filtered, selection = TextRange(filtered.length))) { text ->
+                                onTimeChange(text)
+                            }
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1540,22 +1684,24 @@ fun TradeEntryRoute(
                     ) {
                         InputFieldBlock(
                             label = "成交价格",
-                            value = priceValue,
+                            value = priceState.textFieldValue,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Decimal,
                             onValueChange = {
-                                priceValue = it
-                                onPriceChange(it.text)
+                                priceState.updateFromUser(it) { text ->
+                                    onPriceChange(text)
+                                }
                             },
                         )
                         InputFieldBlock(
                             label = "成交数量",
-                            value = quantityValue,
+                            value = quantityState.textFieldValue,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Number,
                             onValueChange = {
-                                quantityValue = it
-                                onQuantityChange(it.text)
+                                quantityState.updateFromUser(it) { text ->
+                                    onQuantityChange(text)
+                                }
                             },
                         )
                     }
@@ -1647,41 +1793,45 @@ fun TradeEntryRoute(
                             TradeType.INTEREST -> "利息金额 ($cashCurrencyCode)"
                             else -> "出金金额 ($cashCurrencyCode)"
                         },
-                        value = priceValue,
+                        value = priceState.textFieldValue,
                         supportingText = "当前按${cashCurrencyLabel}录入，保存后会自动折算到资产汇总。",
                         keyboardType = KeyboardType.Decimal,
                         onValueChange = {
-                            priceValue = it
-                            onPriceChange(it.text)
+                            priceState.updateFromUser(it) { text ->
+                                onPriceChange(text)
+                            }
                         },
                     )
                 }
 
                 if (isSecurityTrade) {
                     TradeEntryFeeCard(
-                        commission = commissionValue,
-                        tax = taxValue,
+                        commission = commissionState.textFieldValue,
+                        tax = taxState.textFieldValue,
                         feeEstimateStatus = state.feeEstimateStatus,
                         feeEstimateSummary = state.feeEstimateSummary,
                         feeEstimateDetail = state.feeEstimateDetail,
                         canAutoEstimateFees = state.canAutoEstimateFees,
                         onCommissionChange = {
-                            commissionValue = it
-                            onCommissionChange(it.text)
+                            commissionState.updateFromUser(it) { text ->
+                                onCommissionChange(text)
+                            }
                         },
                         onTaxChange = {
-                            taxValue = it
-                            onTaxChange(it.text)
+                            taxState.updateFromUser(it) { text ->
+                                onTaxChange(text)
+                            }
                         },
                         onRecalculateFees = onRecalculateFees,
                     )
                 }
 
                 TradeEntryNoteField(
-                    note = noteValue,
+                    note = noteState.textFieldValue,
                     onValueChange = {
-                        noteValue = it
-                        onNoteChange(it.text)
+                        noteState.updateFromUser(it) { text ->
+                            onNoteChange(text)
+                        }
                     },
                 )
             }

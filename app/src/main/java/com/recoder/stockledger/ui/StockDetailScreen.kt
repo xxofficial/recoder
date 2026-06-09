@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -34,7 +35,8 @@ import androidx.compose.ui.unit.sp
 import com.recoder.stockledger.data.DisplayCurrency
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.ProfitAnalysisUiModel
-
+import com.recoder.stockledger.data.SecurityProfitPointUiModel
+import com.recoder.stockledger.data.local.TransactionEntity
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
@@ -100,10 +102,10 @@ fun StockDetailRoute(
     val rangeStart = rangePair.first
     val rangeEnd = rangePair.second
 
-    // Filter all transactions for this security (not just in range, for position calculation)
+    // Filter all transactions for this security (including options)
     val allSecurityTransactions = remember(analysis.transactions, symbol, marketLabel) {
         analysis.transactions.filter { txn ->
-            txn.symbol == symbol &&
+            (txn.symbol == symbol || (txn.assetType == "OPTION" && txn.underlyingSymbol == symbol)) &&
                 Market.fromString(txn.market)?.label == marketLabel
         }.sortedWith(compareBy({ it.tradeDate }, { it.tradeTime }, { it.createdAt }))
     }
@@ -113,6 +115,115 @@ fun StockDetailRoute(
         allSecurityTransactions.filter { txn ->
             txn.tradeDate >= rangeStart.toString() && txn.tradeDate <= rangeEnd.toString()
         }
+    }
+
+    val stockTransactions = remember(allSecurityTransactions) {
+        allSecurityTransactions.filter { it.assetType != "OPTION" }
+    }
+    val optionTransactions = remember(allSecurityTransactions) {
+        allSecurityTransactions.filter { it.assetType == "OPTION" }
+    }
+
+    // Compute stock PnL
+    val stockPnl = remember(stockTransactions, rangeStart, rangeEnd, allSecurityPoints) {
+        val rangeTxns = stockTransactions.filter { it.tradeDate >= rangeStart.toString() && it.tradeDate <= rangeEnd.toString() }
+        val commission = rangeTxns.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true
+        }.sumOf { it.commission }
+        val tax = rangeTxns.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true
+        }.sumOf { it.tax }
+        val sellProceeds = rangeTxns.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.SELL
+        }.sumOf { it.price * it.quantity }
+        val buyCost = rangeTxns.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
+        }.sumOf { it.price * it.quantity }
+
+        val closingQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+            when (tradeType) {
+                TradeType.BUY -> qty + txn.quantity
+                TradeType.SELL -> qty - txn.quantity
+                else -> qty
+            }
+        }
+        val openingQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+            when (tradeType) {
+                TradeType.BUY -> qty + txn.quantity
+                TradeType.SELL -> qty - txn.quantity
+                else -> qty
+            }
+        }
+        val closingPrice = allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
+            ?: rangeTxns.lastOrNull { runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
+            ?: 0.0
+        val openingPrice = allSecurityPoints.lastOrNull { it.date.isBefore(rangeStart) }?.closePrice
+            ?: stockTransactions.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
+            ?: closingPrice
+
+        val closingMarketValue = closingPrice * closingQty
+        val openingMarketValue = openingPrice * openingQty
+        closingMarketValue - openingMarketValue + sellProceeds - buyCost - commission - tax
+    }
+
+    // Compute options PnL
+    val optionPnl = remember(optionTransactions, rangeStart, rangeEnd) {
+        var pnl = 0.0
+        val grouped = optionTransactions.groupBy { it.symbol }
+        for ((optSymbol, optTxns) in grouped) {
+            val optRangeTxns = optTxns.filter { it.tradeDate >= rangeStart.toString() && it.tradeDate <= rangeEnd.toString() }
+            val optCommission = optRangeTxns.filter {
+                runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true
+            }.sumOf { it.commission }
+            val optTax = optRangeTxns.filter {
+                runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true
+            }.sumOf { it.tax }
+            val optSellProceeds = optRangeTxns.filter {
+                runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.SELL
+            }.sumOf { it.price * it.quantity }
+            val optBuyCost = optRangeTxns.filter {
+                runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
+            }.sumOf { it.price * it.quantity }
+
+            val firstTxn = optTxns.firstOrNull()
+            val expiryStr = firstTxn?.expiryDate?.takeIf { it.isNotBlank() } ?: ""
+            val expiryDate = runCatching { LocalDate.parse(expiryStr) }.getOrNull()
+
+            val optClosingQty = optTxns.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+                val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+                when (tradeType) {
+                    TradeType.BUY -> qty + txn.quantity
+                    TradeType.SELL -> qty - txn.quantity
+                    else -> qty
+                }
+            }
+            val optOpeningQty = optTxns.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+                val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+                when (tradeType) {
+                    TradeType.BUY -> qty + txn.quantity
+                    TradeType.SELL -> qty - txn.quantity
+                    else -> qty
+                }
+            }
+
+            val isExpiredAtEnd = expiryDate != null && rangeEnd.isAfter(expiryDate)
+            val isExpiredAtStart = expiryDate != null && rangeStart.minusDays(1).isAfter(expiryDate)
+
+            val optClosingPrice = if (isExpiredAtEnd) 0.0 else {
+                optTxns.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: 0.0
+            }
+            val optOpeningPrice = if (isExpiredAtStart) 0.0 else {
+                optTxns.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: optClosingPrice
+            }
+
+            val optClosingValue = optClosingPrice * optClosingQty
+            val optOpeningValue = optOpeningPrice * optOpeningQty
+
+            pnl += (optClosingValue - optOpeningValue + optSellProceeds - optBuyCost - optCommission - optTax)
+        }
+        pnl
     }
 
     val rangeCommission = rangeTransactions.filter {
@@ -128,39 +239,69 @@ fun StockDetailRoute(
         runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
     }.sumOf { it.price * it.quantity }
 
-    // Compute position quantity at range end from all transactions up to range end
-    val closingPositionQty = remember(allSecurityTransactions, rangeEnd) {
-        allSecurityTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
-            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
-            when (tradeType) {
-                TradeType.BUY -> qty + txn.quantity
-                TradeType.SELL -> qty - txn.quantity
-                else -> qty
-            }
+    val closingStockQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+        val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+        when (tradeType) {
+            TradeType.BUY -> qty + txn.quantity
+            TradeType.SELL -> qty - txn.quantity
+            else -> qty
         }
     }
-    // Compute position quantity at range start
-    val openingPositionQty = remember(allSecurityTransactions, rangeStart) {
-        allSecurityTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
-            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
-            when (tradeType) {
-                TradeType.BUY -> qty + txn.quantity
-                TradeType.SELL -> qty - txn.quantity
-                else -> qty
-            }
+    val openingStockQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+        val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+        when (tradeType) {
+            TradeType.BUY -> qty + txn.quantity
+            TradeType.SELL -> qty - txn.quantity
+            else -> qty
         }
     }
-    // Get closing price at range end from daily points (prefer closePrice, fallback to last transaction price)
-    val closingPrice = allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
-        ?: rangeTransactions.lastOrNull { runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
+    val closingStockPrice = allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
+        ?: stockTransactions.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
         ?: 0.0
-    // Get opening price at range start from daily points
-    val openingPrice = allSecurityPoints.lastOrNull { it.date.isBefore(rangeStart) }?.closePrice
-        ?: allSecurityTransactions.lastOrNull { it.tradeDate < rangeStart.toString() }?.price
-        ?: closingPrice
-    val closingMarketValue = closingPrice * closingPositionQty
-    val openingMarketValue = openingPrice * openingPositionQty
-    // 区间累计盈亏 = 期末持仓市值 - 期初持仓市值 + 累计入账金额 - 累计出账金额 - 佣金 - 税费
+    val openingStockPrice = allSecurityPoints.lastOrNull { it.date.isBefore(rangeStart) }?.closePrice
+        ?: stockTransactions.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
+        ?: closingStockPrice
+    val closingStockMarketValue = closingStockPrice * closingStockQty
+    val openingStockMarketValue = openingStockPrice * openingStockQty
+
+    var closingOptionMarketValue = 0.0
+    var openingOptionMarketValue = 0.0
+    optionTransactions.groupBy { it.symbol }.forEach { (optSymbol, optTxns) ->
+        val firstTxn = optTxns.firstOrNull()
+        val expiryStr = firstTxn?.expiryDate?.takeIf { it.isNotBlank() } ?: ""
+        val expiryDate = runCatching { LocalDate.parse(expiryStr) }.getOrNull()
+        val isExpiredAtEnd = expiryDate != null && rangeEnd.isAfter(expiryDate)
+        val isExpiredAtStart = expiryDate != null && rangeStart.minusDays(1).isAfter(expiryDate)
+
+        val optClosingQty = optTxns.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+            when (tradeType) {
+                TradeType.BUY -> qty + txn.quantity
+                TradeType.SELL -> qty - txn.quantity
+                else -> qty
+            }
+        }
+        val optOpeningQty = optTxns.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+            when (tradeType) {
+                TradeType.BUY -> qty + txn.quantity
+                TradeType.SELL -> qty - txn.quantity
+                else -> qty
+            }
+        }
+        val optClosingPrice = if (isExpiredAtEnd) 0.0 else {
+            optTxns.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: 0.0
+        }
+        val optOpeningPrice = if (isExpiredAtStart) 0.0 else {
+            optTxns.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: optClosingPrice
+        }
+
+        closingOptionMarketValue += optClosingPrice * optClosingQty
+        openingOptionMarketValue += optOpeningPrice * optOpeningQty
+    }
+
+    val closingMarketValue = closingStockMarketValue + closingOptionMarketValue
+    val openingMarketValue = openingStockMarketValue + openingOptionMarketValue
     val rangePnl = closingMarketValue - openingMarketValue + totalSellProceeds - totalBuyCost - rangeCommission - rangeTax
 
     Box(
@@ -281,6 +422,37 @@ fun StockDetailRoute(
                             fontWeight = FontWeight.Medium,
                         )
                     }
+                    if (optionTransactions.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text("├─ 正股 ($symbol)", color = ForegroundSecondary, fontSize = 13.sp)
+                            val sign = if (stockPnl >= 0) "+" else ""
+                            Text(
+                                text = "$sign${displayCurrency.symbol}${detailNumberFormatter.format(stockPnl.absoluteValue)}",
+                                color = if (stockPnl >= 0) MarketUp else MarketDown,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text("└─ 衍生品期权", color = ForegroundSecondary, fontSize = 13.sp)
+                            val sign = if (optionPnl >= 0) "+" else ""
+                            Text(
+                                text = "$sign${displayCurrency.symbol}${detailNumberFormatter.format(optionPnl.absoluteValue)}",
+                                color = if (optionPnl >= 0) MarketUp else MarketDown,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
                 }
 
                 // Section 2: 盈亏构成
@@ -337,12 +509,23 @@ fun StockDetailRoute(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column {
-                                    Text(
-                                        text = tradeType?.label ?: txn.tradeType,
-                                        color = ForegroundPrimary,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium,
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = tradeType?.label ?: txn.tradeType,
+                                            color = ForegroundPrimary,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                        if (txn.assetType == "OPTION") {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = txn.symbol,
+                                                color = ForegroundSecondary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Normal,
+                                            )
+                                        }
+                                    }
                                     Text(
                                         text = "${txn.tradeDate} ${txn.tradeTime}",
                                         color = ForegroundMuted,
@@ -354,7 +537,9 @@ fun StockDetailRoute(
                                         val formulaText = buildString {
                                             append(if (isBuy) "+" else "-")
                                             append(txn.quantity)
-                                            append("股 × ")
+                                            val unit = if (txn.assetType == "OPTION") "张" else "股"
+                                            append(unit)
+                                            append(" × ")
                                             append(displayCurrency.symbol)
                                             append(detailNumberFormatter.format(txn.price))
                                             if (feeTotal > 0.0) {

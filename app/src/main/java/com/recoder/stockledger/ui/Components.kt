@@ -1259,13 +1259,14 @@ fun TradeEntryDateField(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    label: String = "交易日期",
 ) {
     val context = LocalContext.current
     val selectedDate = remember(value) {
         runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
     }
     InputFieldBlock(
-        label = "交易日期",
+        label = label,
         value = value,
         modifier = modifier,
         trailingIcon = Icons.Filled.DateRange,

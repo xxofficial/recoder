@@ -206,6 +206,7 @@ data class HoldingUiModel(
     val totalProfitPercentLabel: String,
     val dayTrend: PriceTrend,
     val totalTrend: PriceTrend,
+    val isOption: Boolean = false,
 )
 
 data class SellCandidateUiModel(
@@ -265,6 +266,11 @@ data class TradeFormState(
     val feeEstimateDetail: String? = null,
     val canAutoEstimateFees: Boolean = false,
     val investorName: String? = null,
+    val assetType: String = "STOCK",
+    val optionUnderlyingSymbol: String = "",
+    val optionExpiryDate: String = "",
+    val optionType: String = "CALL",
+    val optionStrikePriceLabel: String = "",
 )
 
 data class SymbolLookupUiModel(
