@@ -126,8 +126,8 @@ object USmartStatementPdfParser {
     )
 
     // ===== Horizontal State-Machine Parser Patterns =====
-    private val symbolRegex = Regex("""^([A-Z.]{1,6}|[0-9]{1,6})(?:\s+|\s*\()(.*)""")
-    private val tradeRegex = Regex("""(港股|美股|A股通)\s+(买入|买\u02c5|买⼊|卖出|賣出)\s+([\d,]+)\s+(HKD|USD|CNY)\s+([\d,.]+)\s+([\d,.]+)\s+(\d{4}-\d{2}-\d{2})\s+(是|否)\s+(\d{4}-\d{2}-\d{2})""")
+    private val symbolRegex = Regex("""^([A-Z.]{1,6}|[0-9]{1,6})(?:\s+|\s*[\(（])(.*)""")
+    private val tradeRegex = Regex("""(港.{0,1}|美股|A股通)\s*(买入|买\u02c5|买⼊|卖出|賣出)\s*(\d[\d,]*)\s+(HKD|USD|CNY)\s+([\d,.]+)\s+([\d,.]+)\s+(\d{4}-\d{2}-\d{2})(?:\s+(?:是|否))?\s+(\d{4}-\d{2}-\d{2})""")
     private val feePairRegex = Regex("""(印花税|交收费|交易费|证监会交易征费|财汇局交易征费|交易系统使用费用|交易活动费|证监会规费|佣金|平台费)\s+([\d,.-]+)""")
     private val tradeAmountSummaryRegex = Regex("""(?:交易金额合计|交易金额|交易金額|交易金額合計)\s+([\d,.-]+)""")
 
@@ -172,7 +172,11 @@ object USmartStatementPdfParser {
             if (engine != null) {
                 val ocrText = engine.recognizeText(bytes.inputStream())
                 if (!ocrText.isNullOrBlank() && !isGarbledOrEmpty(ocrText)) {
-                    Log.d(TAG, "OCR successfully extracted text")
+                    Log.d(TAG, "OCR successfully extracted text (${ocrText.length} chars)")
+                    // Dump full OCR text for debugging (split into chunks for logcat line limit)
+                    ocrText.lines().forEachIndexed { idx, line ->
+                        if (line.isNotBlank()) Log.d(TAG, "OCR[$idx]: $line")
+                    }
                     return parseText(ocrText)
                 }
             }
@@ -397,8 +401,8 @@ object USmartStatementPdfParser {
                         val dirStr = tradeMatch.groupValues[2]
                         val qty = tradeMatch.groupValues[3].replace(",", "").toInt()
                         val curr = tradeMatch.groupValues[4]
-                        val price = tradeMatch.groupValues[5].replace(",", "").toDouble()
-                        val amount = tradeMatch.groupValues[6].replace(",", "").toDouble()
+                        val price = parseOcrNumber(tradeMatch.groupValues[5])
+                        val amount = parseOcrNumber(tradeMatch.groupValues[6])
                         val tradeDate = LocalDate.parse(tradeMatch.groupValues[7])
                         
                         val market = when (marketStr) {
@@ -448,8 +452,8 @@ object USmartStatementPdfParser {
                     val dirStr = tradeMatch.groupValues[2]
                     val qty = tradeMatch.groupValues[3].replace(",", "").toInt()
                     val curr = tradeMatch.groupValues[4]
-                    val price = tradeMatch.groupValues[5].replace(",", "").toDouble()
-                    val amount = tradeMatch.groupValues[6].replace(",", "").toDouble()
+                    val price = parseOcrNumber(tradeMatch.groupValues[5])
+                    val amount = parseOcrNumber(tradeMatch.groupValues[6])
                     val tradeDate = LocalDate.parse(tradeMatch.groupValues[7])
                     
                     val market = when (marketStr) {
@@ -587,6 +591,41 @@ object USmartStatementPdfParser {
             s = s.substring(0, s.length - 1).trim()
         }
         return s
+    }
+
+    /**
+     * Parse a number string that may have OCR-induced confusion between
+     * commas (thousand separators) and decimal points.
+     *
+     * Rules:
+     * - If the string contains a '.', use it as the decimal separator and strip commas.
+     * - If the string has NO '.', check the LAST comma:
+     *   - If followed by exactly 3 digits → standard thousand separator → strip all commas.
+     *   - Otherwise (e.g. 2 or 4 digits after last comma) → treat last comma as decimal point.
+     * Examples:
+     *   "59,1000"   → 59.1000  (last comma + 4 digits → decimal)
+     *   "11,820,00" → 11820.00 (last comma + 2 digits → decimal)
+     *   "1,009"     → 1009.0   (last comma + 3 digits → thousand sep)
+     *   "420.40"    → 420.40   (has dot → normal)
+     */
+    private fun parseOcrNumber(raw: String): Double {
+        val s = raw.trim()
+        if (s.contains('.')) {
+            return s.replace(",", "").toDouble()
+        }
+        val lastComma = s.lastIndexOf(',')
+        if (lastComma < 0) {
+            return s.toDouble()
+        }
+        val afterLast = s.substring(lastComma + 1)
+        return if (afterLast.length == 3) {
+            // Standard thousand separator
+            s.replace(",", "").toDouble()
+        } else {
+            // Last comma is really a decimal point
+            val beforeLast = s.substring(0, lastComma).replace(",", "")
+            "$beforeLast.$afterLast".toDouble()
+        }
     }
 
     private fun isValidNameFragment(frag: String): Boolean {
