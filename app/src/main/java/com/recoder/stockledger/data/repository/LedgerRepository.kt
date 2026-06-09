@@ -56,6 +56,7 @@ data class QuoteRequest(
     val symbol: String,
     val name: String,
     val market: Market,
+    val assetType: String = "STOCK",
 )
 
 data class SecurityLookupResult(
@@ -1126,8 +1127,7 @@ class DefaultLedgerRepository(
                 val tradeType = TradeType.valueOf(transaction.tradeType)
                 tradeType.isSecurityTrade &&
                     transaction.symbol.isNotBlank() &&
-                    transaction.market != Market.CASH.name &&
-                    transaction.assetType != "OPTION"
+                    transaction.market != Market.CASH.name
             }
         val requests = securityTransactions
             .groupBy { it.market to it.symbol }
@@ -1137,6 +1137,7 @@ class DefaultLedgerRepository(
                     symbol = head.symbol,
                     name = head.name,
                     market = Market.fromString(head.market) ?: Market.CASH,
+                    assetType = head.assetType,
                 )
             }
 
@@ -1556,6 +1557,163 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
     override val isConfigured: Boolean = true
     override val providerLabel: String = "腾讯主源 / 新浪兜底"
 
+    private var cachedCookie: String? = null
+    private var cachedCrumb: String? = null
+
+    private fun isOptionSymbol(symbol: String): Boolean {
+        val parts = symbol.trim().split(" ")
+        if (parts.size != 2) return false
+        val optPart = parts[1]
+        if (optPart.length < 8) return false
+        val datePart = optPart.substring(0, 6)
+        if (!datePart.all { it.isDigit() }) return false
+        val typeChar = optPart[6]
+        if (typeChar != 'C' && typeChar != 'P') return false
+        return true
+    }
+
+    private fun toYahooOptionSymbol(symbol: String): String? {
+        val parts = symbol.trim().split(" ")
+        if (parts.size != 2) return null
+        val underlying = parts[0].uppercase()
+        val optPart = parts[1]
+        if (optPart.length < 8) return null
+        val datePart = optPart.substring(0, 6)
+        val typeChar = optPart[6]
+        val strikeStr = optPart.substring(7)
+        val strikeDouble = strikeStr.toDoubleOrNull() ?: return null
+        val strikeInt = (strikeDouble * 1000).toLong()
+        val strikePadded = String.format("%08d", strikeInt)
+        return "$underlying$datePart$typeChar$strikePadded"
+    }
+
+    private fun fetchYahooCookie(): String? {
+        val url = URL("https://fc.yahoo.com")
+        var connection: HttpURLConnection? = null
+        try {
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            
+            val cookies = connection.headerFields["Set-Cookie"]
+            if (cookies != null) {
+                for (cookie in cookies) {
+                    if (cookie.contains("A3=")) {
+                        val a3Cookie = cookie.substringBefore(";")
+                        Log.d("YahooOption", "Successfully retrieved Yahoo cookie: $a3Cookie")
+                        return a3Cookie
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("YahooOption", "Failed to fetch Yahoo cookie: ${e.message}", e)
+        } finally {
+            connection?.disconnect()
+        }
+        return null
+    }
+
+    private fun fetchYahooCrumb(cookie: String): String? {
+        val url = URL("https://query2.finance.yahoo.com/v1/test/getcrumb")
+        var connection: HttpURLConnection? = null
+        try {
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            connection.setRequestProperty("Cookie", cookie)
+            
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                val crumb = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }.trim()
+                Log.d("YahooOption", "Successfully retrieved Yahoo crumb: $crumb")
+                return crumb
+            }
+        } catch (e: Exception) {
+            Log.e("YahooOption", "Failed to fetch Yahoo crumb: ${e.message}", e)
+        } finally {
+            connection?.disconnect()
+        }
+        return null
+    }
+
+    private fun fetchYahooOptionQuotes(
+        yahooSymbols: List<String>,
+        cookie: String,
+        crumb: String
+    ): String? {
+        val symbolsStr = yahooSymbols.joinToString(",")
+        val url = URL("https://query2.finance.yahoo.com/v7/finance/quote?symbols=$symbolsStr&crumb=$crumb")
+        var connection: HttpURLConnection? = null
+        try {
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            connection.setRequestProperty("Cookie", cookie)
+            
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                val errorBody = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                Log.e("YahooOption", "Yahoo quote request failed with status $responseCode: $errorBody")
+            }
+        } catch (e: Exception) {
+            Log.e("YahooOption", "Failed to fetch Yahoo quotes: ${e.message}", e)
+        } finally {
+            connection?.disconnect()
+        }
+        return null
+    }
+
+    private fun parseYahooQuotes(
+        responseJson: String,
+        yahooToOriginal: Map<String, QuoteRequest>
+    ): List<QuoteSnapshotEntity> {
+        val list = mutableListOf<QuoteSnapshotEntity>()
+        try {
+            val json = JSONObject(responseJson)
+            val resultList = json.optJSONObject("quoteResponse")?.optJSONArray("result")
+            if (resultList != null) {
+                for (i in 0 until resultList.length()) {
+                    val item = resultList.optJSONObject(i) ?: continue
+                    val yahooSymbol = item.optString("symbol")
+                    val originalReq = yahooToOriginal[yahooSymbol] ?: continue
+                    
+                    val currentPrice = if (item.has("regularMarketPrice")) {
+                        item.optDouble("regularMarketPrice").takeIf { !it.isNaN() }
+                    } else null
+                    
+                    val previousClose = if (item.has("regularMarketPreviousClose")) {
+                        item.optDouble("regularMarketPreviousClose").takeIf { !it.isNaN() }
+                    } else null
+                    
+                    val shortName = item.optString("shortName", originalReq.name)
+                    
+                    list.add(
+                        QuoteSnapshotEntity(
+                            symbol = originalReq.symbol,
+                            market = originalReq.market.name,
+                            name = shortName,
+                            currentPrice = currentPrice,
+                            previousClose = previousClose,
+                            lastUpdatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("YahooOption", "Failed to parse Yahoo quotes response: ${e.message}", e)
+        }
+        return list
+    }
+
     override suspend fun refreshQuotes(requests: List<QuoteRequest>): List<QuoteSnapshotEntity> =
         withContext(Dispatchers.IO) {
             if (requests.isEmpty()) return@withContext emptyList()
@@ -1563,39 +1721,88 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             val deduped = requests.distinctBy { requestKey(it.symbol, it.market) }
             Log.d(TAG, "Refreshing ${deduped.size} quote(s) from $providerLabel")
 
-            val (tencentEligible, sinaOnly) = deduped.partition { request ->
-                request.market != Market.US
+            val (optionRequests, stockRequests) = deduped.partition {
+                it.assetType == "OPTION" || isOptionSymbol(it.symbol)
             }
 
-            val tencentQuotes = runCatching { fetchTencentQuotes(tencentEligible) }
-                .onFailure { Log.e(TAG, "Tencent quote fetch failed", it) }
-                .getOrElse { emptyMap() }
-
-            val missing = tencentEligible.filterNot { request ->
-                tencentQuotes.containsKey(requestKey(request.symbol, request.market))
-            }
-            val fallbackRequests = missing + sinaOnly
-
-            if (fallbackRequests.isEmpty()) {
-                Log.d(TAG, "Tencent returned all ${tencentQuotes.size} quote(s)")
-                return@withContext deduped.mapNotNull { request ->
-                    tencentQuotes[requestKey(request.symbol, request.market)]
+            val stockQuotes = if (stockRequests.isNotEmpty()) {
+                val (tencentEligible, sinaOnly) = stockRequests.partition { request ->
+                    request.market != Market.US
                 }
-            }
 
-            Log.w(TAG, "Tencent missed ${missing.size} quote(s), fallback to Sina for ${fallbackRequests.size} quote(s)")
-            val sinaQuotes = runCatching { fetchSinaQuotes(fallbackRequests) }
-                .onFailure { Log.e(TAG, "Sina quote fetch failed", it) }
-                .getOrElse { emptyMap() }
+                val tencentQuotes = runCatching { fetchTencentQuotes(tencentEligible) }
+                    .onFailure { Log.e(TAG, "Tencent quote fetch failed", it) }
+                    .getOrElse { emptyMap() }
 
-            val merged = deduped.mapNotNull { request ->
-                val key = requestKey(request.symbol, request.market)
-                tencentQuotes[key] ?: sinaQuotes[key]
-            }
+                val missing = tencentEligible.filterNot { request ->
+                    tencentQuotes.containsKey(requestKey(request.symbol, request.market))
+                }
+                val fallbackRequests = missing + sinaOnly
 
+                val sinaQuotes = if (fallbackRequests.isNotEmpty()) {
+                    Log.w(TAG, "Tencent missed ${missing.size} quote(s), fallback to Sina for ${fallbackRequests.size} quote(s)")
+                    runCatching { fetchSinaQuotes(fallbackRequests) }
+                        .onFailure { Log.e(TAG, "Sina quote fetch failed", it) }
+                        .getOrElse { emptyMap() }
+                } else emptyMap()
+
+                stockRequests.mapNotNull { request ->
+                    val key = requestKey(request.symbol, request.market)
+                    tencentQuotes[key] ?: sinaQuotes[key]
+                }
+            } else emptyList()
+
+            val optionQuotes = if (optionRequests.isNotEmpty()) {
+                val yahooToOriginal = optionRequests.mapNotNull { req ->
+                    val yahooSym = toYahooOptionSymbol(req.symbol) ?: return@mapNotNull null
+                    yahooSym to req
+                }.toMap()
+
+                val yahooSymbols = yahooToOriginal.keys.toList()
+                if (yahooSymbols.isNotEmpty()) {
+                    var cookie = cachedCookie
+                    var crumb = cachedCrumb
+                    if (cookie == null || crumb == null) {
+                        val newCookie = fetchYahooCookie()
+                        if (newCookie != null) {
+                            val newCrumb = fetchYahooCrumb(newCookie)
+                            if (newCrumb != null) {
+                                cookie = newCookie
+                                crumb = newCrumb
+                                cachedCookie = newCookie
+                                cachedCrumb = newCrumb
+                            }
+                        }
+                    }
+
+                    if (cookie != null && crumb != null) {
+                        var response = fetchYahooOptionQuotes(yahooSymbols, cookie, crumb)
+                        if (response == null) {
+                            // Clear cache and retry once
+                            val newCookie = fetchYahooCookie()
+                            if (newCookie != null) {
+                                val newCrumb = fetchYahooCrumb(newCookie)
+                                if (newCrumb != null) {
+                                    cookie = newCookie
+                                    crumb = newCrumb
+                                    cachedCookie = newCookie
+                                    cachedCrumb = newCrumb
+                                    response = fetchYahooOptionQuotes(yahooSymbols, cookie, crumb)
+                                }
+                            }
+                        }
+
+                        if (response != null) {
+                            parseYahooQuotes(response, yahooToOriginal)
+                        } else emptyList()
+                    } else emptyList()
+                } else emptyList()
+            } else emptyList()
+
+            val merged = stockQuotes + optionQuotes
             Log.d(
                 TAG,
-                "Quote refresh completed: tencent=${tencentQuotes.size}, sina=${sinaQuotes.size}, merged=${merged.size}",
+                "Quote refresh completed: stock=${stockQuotes.size}, option=${optionQuotes.size}, merged=${merged.size}",
             )
             merged
         }
@@ -1604,7 +1811,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         requests: List<QuoteRequest>,
         lookbackDays: Int,
     ): List<HistoricalClosePoint> = withContext(Dispatchers.IO) {
-        requests.flatMap { request ->
+        requests.filter { it.assetType != "OPTION" }.flatMap { request ->
             runCatching {
                 fetchHistoricalClosesForRequest(
                     request = request,

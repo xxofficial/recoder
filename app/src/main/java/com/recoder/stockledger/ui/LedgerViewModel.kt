@@ -95,6 +95,8 @@ private data class PositionComputation(
     val averageCost: Double,
     val remainingCost: Double,
     val realizedProfit: Double,
+    val assetType: String? = null,
+    val underlyingSymbol: String? = null,
 )
 
 private data class DailyTradeStats(
@@ -791,11 +793,21 @@ class LedgerViewModel(
             val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
             val market = Market.fromString(transaction.market) ?: Market.CASH
             val resolvedLookup = if (tradeType.isSecurityTrade) {
+                val resolvedSymbol = if (transaction.assetType == "OPTION") {
+                    transaction.underlyingSymbol ?: ""
+                } else {
+                    transaction.symbol
+                }
+                val resolvedName = if (transaction.assetType == "OPTION") {
+                    transactions.firstOrNull { it.symbol == resolvedSymbol && it.assetType != "OPTION" }?.name ?: resolvedSymbol
+                } else {
+                    transaction.name
+                }
                 SymbolLookupUiModel(
                     state = SymbolLookupState.RESOLVED,
-                    message = "已带出 ${transaction.name} ${transaction.symbol}",
-                    resolvedSymbol = transaction.symbol,
-                    resolvedName = transaction.name,
+                    message = "已带出 $resolvedName $resolvedSymbol",
+                    resolvedSymbol = resolvedSymbol,
+                    resolvedName = resolvedName,
                     resolvedMarket = market,
                 )
             } else {
@@ -822,7 +834,17 @@ class LedgerViewModel(
                     platform = platform,
                     market = market,
                     symbolOrName = if (tradeType.isSecurityTrade) {
-                        "${transaction.name} ${transaction.symbol}".trim()
+                        val resolvedSymbol = if (transaction.assetType == "OPTION") {
+                            transaction.underlyingSymbol ?: ""
+                        } else {
+                            transaction.symbol
+                        }
+                        val resolvedName = if (transaction.assetType == "OPTION") {
+                            transactions.firstOrNull { it.symbol == resolvedSymbol && it.assetType != "OPTION" }?.name ?: resolvedSymbol
+                        } else {
+                            transaction.name
+                        }
+                        "${resolvedName} ${resolvedSymbol}".trim()
                     } else {
                         ""
                     },
@@ -835,6 +857,11 @@ class LedgerViewModel(
                     note = transaction.note,
                     feeEstimateStatus = FeeEstimateStatus.MANUAL_OVERRIDE,
                     investorName = transaction.investorName ?: defaultInvestor,
+                    assetType = transaction.assetType,
+                    optionUnderlyingSymbol = transaction.underlyingSymbol ?: "",
+                    optionExpiryDate = transaction.expiryDate ?: "",
+                    optionType = transaction.optionType ?: "CALL",
+                    optionStrikePriceLabel = transaction.strikePrice?.let { formatEditableAmount(it) } ?: "",
                 ),
                 lookup = resolvedLookup,
                 positions = referencePortfolio.positions,
@@ -2250,13 +2277,27 @@ class LedgerViewModel(
     ): ProfitAnalysisUiModel {
         val securityMeta = transactions
             .filter { TradeType.valueOf(it.tradeType).isSecurityTrade && it.symbol.isNotBlank() }
-            .distinctBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
-            .associate { transaction ->
+            .map { transaction ->
                 val market = Market.fromString(transaction.market) ?: Market.CASH
-
-                positionKey(transaction.symbol, market) to ResolvedSecurity(
-                    symbol = transaction.symbol,
-                    name = transaction.name,
+                val resolvedSymbol = if (transaction.assetType == "OPTION") {
+                    transaction.underlyingSymbol?.takeIf { it.isNotBlank() } ?: transaction.symbol
+                } else {
+                    transaction.symbol
+                }
+                val name = if (transaction.assetType == "OPTION") {
+                    val stockTxn = transactions.firstOrNull { it.symbol == resolvedSymbol && it.assetType != "OPTION" }
+                    stockTxn?.name ?: resolvedSymbol
+                } else {
+                    transaction.name
+                }
+                Triple(positionKey(resolvedSymbol, market), resolvedSymbol, name)
+            }
+            .distinctBy { it.first }
+            .associate { (key, resolvedSymbol, name) ->
+                val market = runCatching { Market.valueOf(key.substringBefore(":")) }.getOrNull() ?: Market.CASH
+                key to ResolvedSecurity(
+                    symbol = resolvedSymbol,
+                    name = name,
                     market = market,
                 )
             }
@@ -2355,7 +2396,9 @@ class LedgerViewModel(
                                     quantity = 0,
                                     averageCost = 0.0,
                                     remainingCost = 0.0,
-                                    realizedProfit = 0.0
+                                    realizedProfit = 0.0,
+                                    assetType = transaction.assetType,
+                                    underlyingSymbol = transaction.underlyingSymbol,
                                 )
                                 val nextQuantity = current.quantity + (sign * transaction.quantity)
                                 val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (sign * (transaction.price * transaction.quantity))
@@ -2382,6 +2425,8 @@ class LedgerViewModel(
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                         if (tradeType == TradeType.BUY) {
                             if (current.quantity < 0) {
@@ -2401,6 +2446,8 @@ class LedgerViewModel(
                                         remainingCost = transaction.price * remainingBuyQty,
                                         averageCost = transaction.price,
                                         realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                        assetType = transaction.assetType,
+                                        underlyingSymbol = transaction.underlyingSymbol,
                                     )
                                 } else {
                                     val nextQuantity = current.quantity + transaction.quantity
@@ -2442,6 +2489,8 @@ class LedgerViewModel(
                                         remainingCost = -(transaction.price * remainingSellQty),
                                         averageCost = transaction.price,
                                         realizedProfit = current.realizedProfit + closeProfit,
+                                        assetType = transaction.assetType,
+                                        underlyingSymbol = transaction.underlyingSymbol,
                                     )
                                 } else {
                                     val nextQuantity = current.quantity - closeQuantity
@@ -2520,12 +2569,21 @@ class LedgerViewModel(
                 dailyTaxCny = tradeStats.taxCny,
             )
             securityMeta.forEach { (key, security) ->
-                val position = positions[key]
-                val realizedCny = position?.let { convertToCny(it.realizedProfit, it.market, exchangeRates) } ?: 0.0
-                val unrealizedCny = position?.takeIf { it.quantity != 0 }?.let {
-                    val closePrice = latestCloseByPosition[key] ?: it.averageCost
-                    convertToCny((closePrice - it.averageCost) * it.quantity, it.market, exchangeRates)
-                } ?: 0.0
+                val associatedPositions = positions.values.filter { position ->
+                    position.market == security.market && (
+                        position.symbol == security.symbol || (position.assetType == "OPTION" && position.underlyingSymbol == security.symbol)
+                    )
+                }
+                var realizedCny = 0.0
+                var unrealizedCny = 0.0
+                associatedPositions.forEach { position ->
+                    val posKey = positionKey(position.symbol, position.market)
+                    realizedCny += convertToCny(position.realizedProfit, position.market, exchangeRates)
+                    if (position.quantity != 0) {
+                        val closePrice = latestCloseByPosition[posKey] ?: position.averageCost
+                        unrealizedCny += convertToCny((closePrice - position.averageCost) * position.quantity, position.market, exchangeRates)
+                    }
+                }
                 val cumulativeSecurityProfit = realizedCny + unrealizedCny
                 val previousSecurityCumulative = previousSecurityProfit[key] ?: 0.0
                 securitySeries.getValue(key) += SecurityProfitPointUiModel(
@@ -2591,6 +2649,13 @@ class LedgerViewModel(
 
         ordered.forEach { transaction ->
             val market = Market.fromString(transaction.market) ?: return@forEach
+            val key = positionKey(transaction.symbol, market)
+            val resolvedSymbol = if (transaction.assetType == "OPTION") {
+                transaction.underlyingSymbol?.takeIf { it.isNotBlank() } ?: transaction.symbol
+            } else {
+                transaction.symbol
+            }
+            val effectiveKey = positionKey(resolvedSymbol, market)
             val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
             activityDates += date
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
@@ -2598,7 +2663,6 @@ class LedgerViewModel(
                     tradeStatsByDate[date] = tradeStatsByDate
                         .getOrDefault(date, DailyTradeStats())
                         .plus(transaction, tradeType, market, exchangeRates)
-                    val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
                         ?: PositionComputation(
                             symbol = transaction.symbol,
@@ -2608,6 +2672,8 @@ class LedgerViewModel(
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
                         )
                     if (current.quantity < 0) {
                         // Covering short position
@@ -2616,7 +2682,7 @@ class LedgerViewModel(
                         val coverFees = transaction.commission + transaction.tax
                         val coverProfitCny = convertToCny(coverProfit - coverFees, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
-                        val securityDailyProfit = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                        val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
                         securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + coverProfitCny
                         val remainingBuyQty = transaction.quantity - coverQuantity
                         if (remainingBuyQty > 0) {
@@ -2628,6 +2694,8 @@ class LedgerViewModel(
                                 remainingCost = transaction.price * remainingBuyQty,
                                 averageCost = transaction.price,
                                 realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                         } else {
                             val nextQuantity = current.quantity + transaction.quantity
@@ -2655,7 +2723,6 @@ class LedgerViewModel(
                     tradeStatsByDate[date] = tradeStatsByDate
                         .getOrDefault(date, DailyTradeStats())
                         .plus(transaction, tradeType, market, exchangeRates)
-                    val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
                         ?: PositionComputation(
                             symbol = transaction.symbol,
@@ -2665,6 +2732,8 @@ class LedgerViewModel(
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
                         )
                     if (current.quantity > 0) {
                         // Has long position: sell to close, may open short
@@ -2674,7 +2743,7 @@ class LedgerViewModel(
                         val closeProfit = closeProceeds - removedCost
                         val closeProfitCny = convertToCny(closeProfit, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + closeProfitCny
-                        val securityDailyProfit = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                        val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
                         securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + closeProfitCny
                         val remainingSellQty = transaction.quantity - closeQuantity
                         if (remainingSellQty > 0) {
@@ -2686,6 +2755,8 @@ class LedgerViewModel(
                                 remainingCost = -(transaction.price * remainingSellQty),
                                 averageCost = transaction.price,
                                 realizedProfit = current.realizedProfit + closeProfit,
+                                assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                         } else {
                             val nextQuantity = current.quantity - closeQuantity
@@ -2734,7 +2805,9 @@ class LedgerViewModel(
                                 quantity = 0,
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
-                                realizedProfit = 0.0
+                                realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                             val nextQuantity = current.quantity + (transaction.quantity * multiplier)
                             val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * multiplier)
@@ -2764,7 +2837,13 @@ class LedgerViewModel(
                     position.market,
                     exchangeRates,
                 )
-                val seriesForSecurity = securityProfitByDate.getOrPut(key) { linkedMapOf() }
+                val resolvedSymbol = if (position.assetType == "OPTION") {
+                    position.underlyingSymbol?.takeIf { it.isNotBlank() } ?: position.symbol
+                } else {
+                    position.symbol
+                }
+                val effectiveKey = positionKey(resolvedSymbol, position.market)
+                val seriesForSecurity = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
                 seriesForSecurity[realtimeDate] = seriesForSecurity.getOrDefault(realtimeDate, 0.0) + unrealizedCny
             }
         }
@@ -2978,6 +3057,8 @@ class LedgerViewModel(
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
                         )
                         val nextQuantity = current.quantity + transaction.quantity
                         val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
@@ -3010,6 +3091,8 @@ class LedgerViewModel(
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
                         )
 
                     positions[key] = if (tradeType == TradeType.BUY) {
@@ -3031,6 +3114,8 @@ class LedgerViewModel(
                                     remainingCost = transaction.price * remainingBuyQty,
                                     averageCost = transaction.price,
                                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                                    assetType = transaction.assetType,
+                                    underlyingSymbol = transaction.underlyingSymbol,
                                 )
                             } else {
                                 // Partial or full cover, no new position
@@ -3076,6 +3161,8 @@ class LedgerViewModel(
                                     remainingCost = -(transaction.price * remainingSellQty),
                                     averageCost = transaction.price,
                                     realizedProfit = current.realizedProfit + closeProfit,
+                                    assetType = transaction.assetType,
+                                    underlyingSymbol = transaction.underlyingSymbol,
                                 )
                             } else {
                                 // Partial or full close of long
