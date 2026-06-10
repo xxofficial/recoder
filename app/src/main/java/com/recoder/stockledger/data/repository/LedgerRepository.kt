@@ -1594,18 +1594,25 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
             connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.instanceFollowRedirects = true
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            connection.setRequestProperty("Accept", "*/*")
             
-            val cookies = connection.headerFields["Set-Cookie"]
-            if (cookies != null) {
-                for (cookie in cookies) {
-                    if (cookie.contains("A3=")) {
-                        val a3Cookie = cookie.substringBefore(";")
-                        Log.d("YahooOption", "Successfully retrieved Yahoo cookie: $a3Cookie")
-                        return a3Cookie
-                    }
+            // Connect and check status code first
+            val responseCode = connection.responseCode
+            Log.d("YahooOption", "Cookie page response code: $responseCode")
+            
+            val headerFields = connection.headerFields
+            val cookies = headerFields.entries
+                .filter { it.key?.equals("Set-Cookie", ignoreCase = true) == true }
+                .flatMap { it.value }
+                
+            for (cookie in cookies) {
+                if (cookie.contains("A3=")) {
+                    val a3Cookie = cookie.substringBefore(";")
+                    Log.d("YahooOption", "Successfully retrieved Yahoo cookie: $a3Cookie")
+                    return a3Cookie
                 }
             }
         } catch (e: Exception) {
@@ -1622,16 +1629,21 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         try {
             connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             connection.setRequestProperty("Cookie", cookie)
+            connection.setRequestProperty("Accept", "*/*")
             
             val responseCode = connection.responseCode
+            Log.d("YahooOption", "Crumb response code: $responseCode")
             if (responseCode in 200..299) {
                 val crumb = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }.trim()
                 Log.d("YahooOption", "Successfully retrieved Yahoo crumb: $crumb")
                 return crumb
+            } else {
+                val errorMsg = connection.errorStream?.bufferedReader()?.use { it.readText() }
+                Log.e("YahooOption", "Crumb failed with code $responseCode: $errorMsg")
             }
         } catch (e: Exception) {
             Log.e("YahooOption", "Failed to fetch Yahoo crumb: ${e.message}", e)
@@ -1652,12 +1664,14 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         try {
             connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             connection.setRequestProperty("Cookie", cookie)
+            connection.setRequestProperty("Accept", "*/*")
             
             val responseCode = connection.responseCode
+            Log.d("YahooOption", "Quotes response code: $responseCode")
             if (responseCode in 200..299) {
                 return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             } else {

@@ -208,7 +208,12 @@ fun StockLedgerApp(
                             }
                         },
                         onHoldingClick = { holding ->
-                            navController.navigate(Routes.stockDetail(holding.code, holding.market.label))
+                            val targetCode = if (holding.isOption) {
+                                holding.underlyingSymbol ?: holding.code.trim().split(" ").firstOrNull() ?: holding.code
+                            } else {
+                                holding.code
+                            }
+                            navController.navigate(Routes.stockDetail(targetCode, holding.market.label))
                         },
                     )
                 }
@@ -527,6 +532,7 @@ fun StockLedgerApp(
                         marketLabel = market,
                         analysis = uiState.profitAnalysis,
                         displayCurrency = uiState.displayCurrency,
+                        quotes = uiState.quotes,
                         onBack = { navController.popBackStack() },
                     )
                 }

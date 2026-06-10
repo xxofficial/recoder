@@ -28,29 +28,51 @@
 app/src/main/java/com/recoder/stockledger/
 ├── MainActivity.kt                  # 入口 Activity
 ├── StockLedgerApplication.kt        # Application 类
+├── AppContainer.kt                  # 依赖注入容器
+├── StockLedgerPreferences.kt        # 偏好设置管理
 ├── data/
-│   ├── Models.kt                    # 数据模型
+│   ├── Models.kt                    # 通用数据模型
 │   ├── ProfitAnalysisModels.kt      # 盈亏分析模型
-│   ├── ExchangeRates.kt             # 汇率数据
-│   ├── SampleData.kt                # 示例数据
+│   ├── ExchangeRates.kt             # 汇率定义
+│   ├── SampleData.kt                # 示例/测试数据
+│   ├── TradeFeeEstimator.kt         # 交易费用估算器
+│   ├── ZhuoruiEmailSyncModels.kt    # 邮件同步模型
 │   ├── local/
-│   │   ├── StockLedgerDatabase.kt   # Room 数据库
-│   │   ├── LedgerDao.kt             # 数据访问对象
-│   │   ├── TransactionEntity.kt     # 交易实体
-│   │   └── QuoteSnapshotEntity.kt   # 行情快照实体
-│   └── repository/
-│       ├── LedgerRepository.kt      # 数据仓库
-│       └── ExchangeRateDataSource.kt # 汇率数据源
+│   │   ├── StockLedgerDatabase.kt   # Room 本地数据库
+│   │   ├── LedgerDao.kt             # 数据库 DAO
+│   │   ├── TransactionEntity.kt     # 交易记录实体
+│   │   └── QuoteSnapshotEntity.kt   # 行情价格快照实体
+│   ├── repository/
+│   │   ├── LedgerRepository.kt      # 核心数据仓库
+│   │   └── ExchangeRateDataSource.kt # 汇率数据源
+│   ├── importer/
+│   │   ├── TradeImporter.kt         # 交易导入接口
+│   │   ├── HsbcNotificationParser.kt # 汇丰交易通知解析
+│   │   ├── HsbcStatementPdfParser.kt # 汇丰结单 PDF 解析
+│   │   ├── USmartStatementPdfParser.kt # 盈立结单 PDF 解析
+│   │   ├── ZhuoruiStatementPdfParser.kt # 华盛结单 PDF 解析
+│   │   └── AndroidOcrEngine.kt      # OCR 文本识别引擎
+│   └── settings/
+│       └── StockLedgerSettingsStore.kt # 应用设置中心
+├── domain/
+│   ├── market/
+│   │   └── MarketTradingSessions.kt # 交易时段判定逻辑
+│   └── portfolio/
+│       └── PortfolioCalculator.kt   # 组合资产/盈亏计算引擎
+├── importer/
+│   └── ZhuoruiEmailSyncWorker.kt    # 华盛账单邮件同步 WorkManager
+├── platform/
+│   └── BrokerPlatformRegistry.kt    # 券商平台元数据注册中心
 └── ui/
-    ├── StockLedgerApp.kt            # 应用主入口 Composable
-    ├── Screens.kt                   # 页面组件
-    ├── ProfitAnalysisScreen.kt      # 盈亏分析页面
+    ├── StockLedgerApp.kt            # 路由与导航主入口 Composable
+    ├── Screens.kt                   # 交易编辑与表单页面
+    ├── ProfitAnalysisScreen.kt      # 盈亏分析趋势页面
     ├── Components.kt                # 通用 UI 组件
-    ├── LedgerViewModel.kt           # ViewModel
+    ├── LedgerViewModel.kt           # 核心业务 UI ViewModel
     └── theme/
-        ├── Color.kt                 # 颜色定义
-        ├── Theme.kt                 # 主题配置
-        └── Type.kt                  # 字体排版
+        ├── Color.kt                 # 颜色调色板
+        ├── Theme.kt                 # Material 3 主题配置
+        └── Type.kt                  # 字体排版样式
 ```
 
 ## 快速开始

@@ -160,6 +160,7 @@ data class LedgerUiState(
     val editingTransactionId: Long? = null,
     val displayCurrency: DisplayCurrency = DisplayCurrency.CNY,
     val exchangeRates: ExchangeRates = ExchangeRates(),
+    val quotes: List<QuoteSnapshotEntity> = emptyList(),
     val backupStatusMessage: String? = null,
     val parsedBackupData: ImportedBackup? = null,
     val showImportDialog: Boolean = false,
@@ -520,13 +521,15 @@ class LedgerViewModel(
                         val currentPrice = quote?.currentPrice
                         val previousClose = quote?.previousClose
                         
+                        val isOpt = position.assetType == "OPTION" || isOptionSymbol(position.symbol)
+                        val mult = if (isOpt) 100.0 else 1.0
                         val scaledQty = position.quantity * ratio
                         val scaledCost = position.remainingCost * ratio
-                        val scaledAvgCost = if (position.quantity != 0) position.remainingCost / position.quantity else 0.0
+                        val scaledAvgCost = if (position.quantity != 0) position.remainingCost / (position.quantity * mult) else 0.0
                         
-                        val unrealized = currentPrice?.let { (it - scaledAvgCost) * scaledQty }
+                        val unrealized = currentPrice?.let { (it - scaledAvgCost) * scaledQty * mult }
                         val dayProfit = if (currentPrice != null && previousClose != null) {
-                            (currentPrice - previousClose) * scaledQty
+                            (currentPrice - previousClose) * scaledQty * mult
                         } else {
                             null
                         }
@@ -540,15 +543,17 @@ class LedgerViewModel(
                         } else {
                             null
                         }
-                        val marketValue = (currentPrice ?: scaledAvgCost) * scaledQty
+                        val marketValue = (currentPrice ?: scaledAvgCost) * scaledQty * mult
                         
-                        val formattedQty = String.format("%.2f", scaledQty).removeSuffix(".00").removeSuffix("0").removeSuffix(".")
+                        val unit = if (isOpt) "张" else "股"
+                        val qtyVal = scaledQty
+                        val formattedQty = String.format("%.2f", qtyVal).removeSuffix(".00").removeSuffix("0").removeSuffix(".")
                         
                         HoldingUiModel(
                             name = position.name,
                             code = position.symbol,
                             market = position.market,
-                            quantityLabel = "$formattedQty 股",
+                            quantityLabel = "$formattedQty $unit",
                             costLabel = "成本 ${formatMarketAmount(scaledAvgCost, position.market)}",
                             priceLabel = currentPrice?.let { formatMarketAmount(it, position.market) } ?: "--",
                             changeLabel = dayPercent?.let(::formatSignedPercent) ?: "价格暂不可用",
@@ -575,6 +580,8 @@ class LedgerViewModel(
                                 unrealized < 0 -> PriceTrend.DOWN
                                 else -> PriceTrend.NEUTRAL
                             },
+                            isOption = isOpt,
+                            underlyingSymbol = position.underlyingSymbol,
                         ) to marketValue
                     }
                     .sortedByDescending { it.second }
@@ -666,6 +673,7 @@ class LedgerViewModel(
                 displayCurrency = selectedDisplayCurrency,
                 exchangeRates = repository.exchangeRates.value,
                 selectedPartnerPerspective = perspective,
+                quotes = context.quotes,
             )
         }
     }.combine(symbolSuggestions) { state, suggestions ->
@@ -2175,9 +2183,13 @@ class LedgerViewModel(
                 name = position.name,
                 market = position.market,
                 quantityLabel = if (position.quantity > 0) {
-                    "可卖 ${position.quantity} 股"
+                    val isOpt = position.assetType == "OPTION" || isOptionSymbol(position.symbol)
+                    val unit = if (isOpt) "张" else "股"
+                    "可卖 ${position.quantity} $unit"
                 } else {
-                    "空仓 ${-position.quantity} 股"
+                    val isOpt = position.assetType == "OPTION" || isOptionSymbol(position.symbol)
+                    val unit = if (isOpt) "张" else "股"
+                    "空仓 ${-position.quantity} $unit"
                 },
                 costLabel = "成本 ${formatMarketAmount(position.averageCost, position.market)}",
             )
@@ -2247,7 +2259,9 @@ class LedgerViewModel(
                                 platform.label
                             },
                             secondaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
-                                "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} 股"
+                                val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
+                                val unit = if (isOpt) "张" else "股"
+                                "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
                             } else if (tradeType == TradeType.INTEREST) {
                                 transaction.note.ifBlank { "融资利息支出" }
                             } else {
@@ -2377,7 +2391,8 @@ class LedgerViewModel(
                             val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
                             cashBalanceCny -= amountCny
                         } else {
-                            val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                            val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
                             if (sign > 0) {
                                 totalDepositCny += amountCny
                                 dailyNetFlowCny += amountCny
@@ -2401,11 +2416,11 @@ class LedgerViewModel(
                                     underlyingSymbol = transaction.underlyingSymbol,
                                 )
                                 val nextQuantity = current.quantity + (sign * transaction.quantity)
-                                val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (sign * (transaction.price * transaction.quantity))
+                                val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (sign * (transaction.price * transaction.quantity * mult))
                                 positions[key] = current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity,
+                                    averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
                         }
@@ -2428,14 +2443,15 @@ class LedgerViewModel(
                                 assetType = transaction.assetType,
                                 underlyingSymbol = transaction.underlyingSymbol,
                             )
+                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         if (tradeType == TradeType.BUY) {
                             if (current.quantity < 0) {
                                 // Covering short position
                                 val coverQuantity = minOf(-current.quantity, transaction.quantity)
-                                val coverProfit = (current.averageCost - transaction.price) * coverQuantity
+                                val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
                                 val coverFees = transaction.commission + transaction.tax
                                 val remainingBuyQty = transaction.quantity - coverQuantity
-                                val totalCost = transaction.price * transaction.quantity + coverFees
+                                val totalCost = transaction.price * transaction.quantity * mult + coverFees
                                 cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
                                 if (remainingBuyQty > 0) {
                                     positions[key] = PositionComputation(
@@ -2443,7 +2459,7 @@ class LedgerViewModel(
                                         name = transaction.name,
                                         market = market,
                                         quantity = remainingBuyQty,
-                                        remainingCost = transaction.price * remainingBuyQty,
+                                        remainingCost = transaction.price * remainingBuyQty * mult,
                                         averageCost = transaction.price,
                                         realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                         assetType = transaction.assetType,
@@ -2455,30 +2471,30 @@ class LedgerViewModel(
                                     positions[key] = current.copy(
                                         quantity = nextQuantity,
                                         remainingCost = nextRemaining,
-                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                         realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                     )
                                 }
                             } else {
-                                val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
+                                val buyCost = transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax
                                 val nextQuantity = current.quantity + transaction.quantity
                                 val nextRemaining = current.remainingCost + buyCost
                                 cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
                                 positions[key] = current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
                         } else {
                             // SELL
                             if (current.quantity > 0) {
                                 val closeQuantity = minOf(current.quantity, transaction.quantity)
-                                val removedCost = current.averageCost * closeQuantity
-                                val closeProceeds = transaction.price * closeQuantity
+                                val removedCost = current.averageCost * closeQuantity * mult
+                                val closeProceeds = transaction.price * closeQuantity * mult
                                 val closeProfit = closeProceeds - removedCost
                                 val remainingSellQty = transaction.quantity - closeQuantity
-                                val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                                val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                                 cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
                                 if (remainingSellQty > 0) {
                                     positions[key] = PositionComputation(
@@ -2486,7 +2502,7 @@ class LedgerViewModel(
                                         name = transaction.name,
                                         market = market,
                                         quantity = -remainingSellQty,
-                                        remainingCost = -(transaction.price * remainingSellQty),
+                                        remainingCost = -(transaction.price * remainingSellQty * mult),
                                         averageCost = transaction.price,
                                         realizedProfit = current.realizedProfit + closeProfit,
                                         assetType = transaction.assetType,
@@ -2498,19 +2514,19 @@ class LedgerViewModel(
                                     positions[key] = current.copy(
                                         quantity = nextQuantity,
                                         remainingCost = nextRemaining,
-                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                         realizedProfit = current.realizedProfit + closeProfit,
                                     )
                                 }
                             } else {
-                                val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                                val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                                 cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
                                 val nextQuantity = current.quantity - transaction.quantity
-                                val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                                val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity * mult)
                                 positions[key] = current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
                         }
@@ -2533,7 +2549,8 @@ class LedgerViewModel(
                 if (position.quantity == 0) return@sumOf 0.0
                 val key = positionKey(position.symbol, position.market)
                 val closePrice = latestCloseByPosition[key] ?: position.averageCost
-                convertToCny(closePrice * position.quantity, position.market, exchangeRates)
+                val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
+                convertToCny(closePrice * position.quantity * mult, position.market, exchangeRates)
             }
             val netInflowCny = totalDepositCny - totalWithdrawCny
             val totalAssetsCny = holdingsValueCny + cashBalanceCny
@@ -2675,10 +2692,11 @@ class LedgerViewModel(
                             assetType = transaction.assetType,
                             underlyingSymbol = transaction.underlyingSymbol,
                         )
+                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                     if (current.quantity < 0) {
                         // Covering short position
                         val coverQuantity = minOf(-current.quantity, transaction.quantity)
-                        val coverProfit = (current.averageCost - transaction.price) * coverQuantity
+                        val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
                         val coverFees = transaction.commission + transaction.tax
                         val coverProfitCny = convertToCny(coverProfit - coverFees, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
@@ -2691,7 +2709,7 @@ class LedgerViewModel(
                                 name = transaction.name,
                                 market = market,
                                 quantity = remainingBuyQty,
-                                remainingCost = transaction.price * remainingBuyQty,
+                                remainingCost = transaction.price * remainingBuyQty * mult,
                                 averageCost = transaction.price,
                                 realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                 assetType = transaction.assetType,
@@ -2703,18 +2721,18 @@ class LedgerViewModel(
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 realizedProfit = current.realizedProfit + coverProfit - coverFees,
                             )
                         }
                     } else {
-                        val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
+                        val buyCost = transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax
                         val nextQuantity = current.quantity + transaction.quantity
                         val nextRemaining = current.remainingCost + buyCost
                         positions[key] = current.copy(
                             quantity = nextQuantity,
                             remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                         )
                     }
                 }
@@ -2735,11 +2753,12 @@ class LedgerViewModel(
                             assetType = transaction.assetType,
                             underlyingSymbol = transaction.underlyingSymbol,
                         )
+                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                     if (current.quantity > 0) {
                         // Has long position: sell to close, may open short
                         val closeQuantity = minOf(current.quantity, transaction.quantity)
-                        val removedCost = current.averageCost * closeQuantity
-                        val closeProceeds = transaction.price * closeQuantity
+                        val removedCost = current.averageCost * closeQuantity * mult
+                        val closeProceeds = transaction.price * closeQuantity * mult
                         val closeProfit = closeProceeds - removedCost
                         val closeProfitCny = convertToCny(closeProfit, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + closeProfitCny
@@ -2752,7 +2771,7 @@ class LedgerViewModel(
                                 name = transaction.name,
                                 market = market,
                                 quantity = -remainingSellQty,
-                                remainingCost = -(transaction.price * remainingSellQty),
+                                remainingCost = -(transaction.price * remainingSellQty * mult),
                                 averageCost = transaction.price,
                                 realizedProfit = current.realizedProfit + closeProfit,
                                 assetType = transaction.assetType,
@@ -2764,19 +2783,19 @@ class LedgerViewModel(
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 realizedProfit = current.realizedProfit + closeProfit,
                             )
                         }
                     } else {
                         // No long position: open/extend short, no realized profit yet
-                        val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                        val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                         val nextQuantity = current.quantity - transaction.quantity
-                        val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                        val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity * mult)
                         positions[key] = current.copy(
                             quantity = nextQuantity,
                             remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                         )
                     }
                 }
@@ -2794,7 +2813,8 @@ class LedgerViewModel(
                 TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT, TradeType.INTEREST -> {
                     if (tradeType == TradeType.TRANSFER_IN || tradeType == TradeType.TRANSFER_OUT) {
                         val multiplier = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
-                        val amountCny = convertToCny(transaction.price * transaction.quantity * multiplier, market, exchangeRates)
+                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                        val amountCny = convertToCny(transaction.price * transaction.quantity * multiplier * mult, market, exchangeRates)
                         netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
                         if (transaction.symbol != CASH_ACCOUNT_SYMBOL) {
                             val key = positionKey(transaction.symbol, market)
@@ -2810,11 +2830,11 @@ class LedgerViewModel(
                                 underlyingSymbol = transaction.underlyingSymbol,
                             )
                             val nextQuantity = current.quantity + (transaction.quantity * multiplier)
-                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * multiplier)
+                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * multiplier * mult)
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity,
+                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                     } else {
@@ -2832,8 +2852,9 @@ class LedgerViewModel(
                 if (position.quantity == 0) return@forEach
                 val key = positionKey(position.symbol, position.market)
                 val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
+                val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
                 val unrealizedCny = convertToCny(
-                    (currentPrice - position.averageCost) * position.quantity,
+                    (currentPrice - position.averageCost) * position.quantity * mult,
                     position.market,
                     exchangeRates,
                 )
@@ -3024,7 +3045,8 @@ class LedgerViewModel(
                 }
 
                 TradeType.TRANSFER_OUT -> {
-                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
                     if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
                         cashBalanceCny -= amountCny
                     } else {
@@ -3036,7 +3058,7 @@ class LedgerViewModel(
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity
+                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
                             )
                         }
                     }
@@ -3044,7 +3066,8 @@ class LedgerViewModel(
                 }
 
                 TradeType.TRANSFER_IN -> {
-                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
                     if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
                         cashBalanceCny += amountCny
                     } else {
@@ -3061,11 +3084,11 @@ class LedgerViewModel(
                             underlyingSymbol = transaction.underlyingSymbol,
                         )
                         val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity)
+                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity * mult)
                         positions[key] = current.copy(
                             quantity = nextQuantity,
                             remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / nextQuantity
+                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
                         )
                     }
                     totalDepositCny += amountCny
@@ -3095,14 +3118,15 @@ class LedgerViewModel(
                             underlyingSymbol = transaction.underlyingSymbol,
                         )
 
+                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                     positions[key] = if (tradeType == TradeType.BUY) {
                         if (current.quantity < 0) {
                             // Covering short position
                             val coverQuantity = minOf(-current.quantity, transaction.quantity)
-                            val coverProfit = (current.averageCost - transaction.price) * coverQuantity
+                            val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
                             val coverFees = transaction.commission + transaction.tax
                             val remainingBuyQty = transaction.quantity - coverQuantity
-                            val totalCost = transaction.price * transaction.quantity + coverFees
+                            val totalCost = transaction.price * transaction.quantity * mult + coverFees
                             cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
                             if (remainingBuyQty > 0) {
                                 // Covered fully, opened long with remainder
@@ -3111,7 +3135,7 @@ class LedgerViewModel(
                                     name = transaction.name,
                                     market = market,
                                     quantity = remainingBuyQty,
-                                    remainingCost = transaction.price * remainingBuyQty,
+                                    remainingCost = transaction.price * remainingBuyQty * mult,
                                     averageCost = transaction.price,
                                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                     assetType = transaction.assetType,
@@ -3124,20 +3148,20 @@ class LedgerViewModel(
                                 current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                 )
                             }
                         } else {
                             // Normal buy
-                            val buyCost = transaction.price * transaction.quantity + transaction.commission + transaction.tax
+                            val buyCost = transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax
                             val nextQuantity = current.quantity + transaction.quantity
                             val nextRemaining = current.remainingCost + buyCost
                             cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
                             current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                     } else {
@@ -3145,11 +3169,11 @@ class LedgerViewModel(
                         if (current.quantity > 0) {
                             // Has long position: sell to close, may open short if oversold
                             val closeQuantity = minOf(current.quantity, transaction.quantity)
-                            val removedCost = current.averageCost * closeQuantity
-                            val closeProceeds = transaction.price * closeQuantity
+                            val removedCost = current.averageCost * closeQuantity * mult
+                            val closeProceeds = transaction.price * closeQuantity * mult
                             val closeProfit = closeProceeds - removedCost
                             val remainingSellQty = transaction.quantity - closeQuantity
-                            val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                            val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                             cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
                             if (remainingSellQty > 0) {
                                 // Closed long, opened short with remainder
@@ -3158,7 +3182,7 @@ class LedgerViewModel(
                                     name = transaction.name,
                                     market = market,
                                     quantity = -remainingSellQty,
-                                    remainingCost = -(transaction.price * remainingSellQty),
+                                    remainingCost = -(transaction.price * remainingSellQty * mult),
                                     averageCost = transaction.price,
                                     realizedProfit = current.realizedProfit + closeProfit,
                                     assetType = transaction.assetType,
@@ -3171,20 +3195,20 @@ class LedgerViewModel(
                                 current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                     realizedProfit = current.realizedProfit + closeProfit,
                                 )
                             }
                         } else {
                             // No long position (quantity <= 0): open/extend short
-                            val totalProceeds = transaction.price * transaction.quantity - transaction.commission - transaction.tax
+                            val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                             cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
                             val nextQuantity = current.quantity - transaction.quantity
-                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity)
+                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity * mult)
                             current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / nextQuantity,
+                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                     }
@@ -3199,9 +3223,11 @@ class LedgerViewModel(
                 val quote = quoteMap[positionKey(position.symbol, position.market)]
                 val currentPrice = quote?.currentPrice
                 val previousClose = quote?.previousClose
-                val unrealized = currentPrice?.let { (it - position.averageCost) * position.quantity }
+                val isOpt = position.assetType == "OPTION" || isOptionSymbol(position.symbol)
+                val mult = if (isOpt) 100.0 else 1.0
+                val unrealized = currentPrice?.let { (it - position.averageCost) * position.quantity * mult }
                 val dayProfit = if (currentPrice != null && previousClose != null) {
-                    (currentPrice - previousClose) * position.quantity
+                    (currentPrice - previousClose) * position.quantity * mult
                 } else {
                     null
                 }
@@ -3215,13 +3241,17 @@ class LedgerViewModel(
                 } else {
                     null
                 }
-                val marketValue = (currentPrice ?: position.averageCost) * position.quantity
+                val marketValue = (currentPrice ?: position.averageCost) * position.quantity * mult
+
+                val unit = if (isOpt) "张" else "股"
+                val qtyVal = position.quantity.toDouble()
+                val formattedQty = String.format("%.2f", qtyVal).removeSuffix(".00").removeSuffix("0").removeSuffix(".")
 
                 HoldingUiModel(
                     name = position.name,
                     code = position.symbol,
                     market = position.market,
-                    quantityLabel = "${position.quantity} 股",
+                    quantityLabel = "$formattedQty $unit",
                     costLabel = "成本 ${formatMarketAmount(position.averageCost, position.market)}",
                     priceLabel = currentPrice?.let { formatMarketAmount(it, position.market) } ?: "--",
                     changeLabel = dayPercent?.let(::formatSignedPercent) ?: "价格暂不可用",
@@ -3248,6 +3278,8 @@ class LedgerViewModel(
                         unrealized < 0 -> PriceTrend.DOWN
                         else -> PriceTrend.NEUTRAL
                     },
+                    isOption = isOpt,
+                    underlyingSymbol = position.underlyingSymbol,
                 ) to marketValue
             }
             .sortedByDescending { it.second }
@@ -3255,7 +3287,8 @@ class LedgerViewModel(
 
         val holdingsValueCny = positions.values.sumOf { position ->
             val quote = quoteMap[positionKey(position.symbol, position.market)]
-            convertToCny(position.quantity * (quote?.currentPrice ?: position.averageCost), position.market, exchangeRates)
+            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
+            convertToCny(position.quantity * (quote?.currentPrice ?: position.averageCost) * mult, position.market, exchangeRates)
         }
         val holdingsCostCny = positions.values.sumOf { position ->
             convertToCny(position.remainingCost, position.market, exchangeRates)
@@ -3265,12 +3298,14 @@ class LedgerViewModel(
             val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
             val current = quote.currentPrice ?: return@sumOf 0.0
             val previous = quote.previousClose ?: return@sumOf 0.0
-            convertToCny((current - previous) * position.quantity, position.market, exchangeRates)
+            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
+            convertToCny((current - previous) * position.quantity * mult, position.market, exchangeRates)
         }
         val previousHoldingsValueCny = positions.values.sumOf { position ->
             val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
             val previous = quote.previousClose ?: return@sumOf 0.0
-            convertToCny(previous * position.quantity, position.market, exchangeRates)
+            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
+            convertToCny(previous * position.quantity * mult, position.market, exchangeRates)
         }
         val netInflowCny = totalDepositCny - totalWithdrawCny
         val totalAssetsCny = holdingsValueCny + cashBalanceCny
@@ -3611,26 +3646,30 @@ class LedgerViewModel(
         Market.A_SHARE -> Market.CASH
     }
 
-    private fun transactionCashFlow(transaction: TransactionEntity, tradeType: TradeType): Double = when (tradeType) {
-        TradeType.BUY -> -(transaction.price * transaction.quantity + transaction.commission + transaction.tax)
-        TradeType.SELL -> transaction.price * transaction.quantity - transaction.commission - transaction.tax
-        TradeType.DEPOSIT -> transaction.price * transaction.quantity
-        TradeType.WITHDRAW -> -(transaction.price * transaction.quantity)
-        TradeType.TRANSFER_OUT -> {
-            if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                -(transaction.price * transaction.quantity)
-            } else {
-                0.0
+    private fun transactionCashFlow(transaction: TransactionEntity, tradeType: TradeType): Double {
+        val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
+        val mult = if (isOpt) 100.0 else 1.0
+        return when (tradeType) {
+            TradeType.BUY -> -(transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax)
+            TradeType.SELL -> transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
+            TradeType.DEPOSIT -> transaction.price * transaction.quantity * mult
+            TradeType.WITHDRAW -> -(transaction.price * transaction.quantity * mult)
+            TradeType.TRANSFER_OUT -> {
+                if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                    -(transaction.price * transaction.quantity * mult)
+                } else {
+                    0.0
+                }
             }
-        }
-        TradeType.TRANSFER_IN -> {
-            if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                transaction.price * transaction.quantity
-            } else {
-                0.0
+            TradeType.TRANSFER_IN -> {
+                if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                    transaction.price * transaction.quantity * mult
+                } else {
+                    0.0
+                }
             }
+            TradeType.INTEREST -> -(transaction.price * transaction.quantity * mult)
         }
-        TradeType.INTEREST -> -(transaction.price * transaction.quantity)
     }
 
     private enum class RefreshTrigger {
@@ -4423,6 +4462,18 @@ private data class RefreshMeta(
                 pnlShareCny = pnlShareConverted
             )
         }
+    }
+
+    private fun isOptionSymbol(symbol: String): Boolean {
+        val parts = symbol.trim().split(" ")
+        if (parts.size != 2) return false
+        val optPart = parts[1]
+        if (optPart.length < 8) return false
+        val datePart = optPart.substring(0, 6)
+        if (!datePart.all { it.isDigit() }) return false
+        val typeChar = optPart[6]
+        if (typeChar != 'C' && typeChar != 'P') return false
+        return true
     }
 
     private companion object {

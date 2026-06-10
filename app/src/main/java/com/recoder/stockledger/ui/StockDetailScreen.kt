@@ -37,6 +37,7 @@ import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.ProfitAnalysisUiModel
 import com.recoder.stockledger.data.SecurityProfitPointUiModel
 import com.recoder.stockledger.data.local.TransactionEntity
+import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
@@ -59,6 +60,11 @@ private enum class DetailRange(val label: String) {
     CUSTOM("自定义"),
 }
 
+private enum class DetailTab(val label: String) {
+    STOCK("正股"),
+    OPTION("衍生品")
+}
+
 private val detailNumberFormatter = DecimalFormat("#,##0.00")
 
 @Composable
@@ -67,11 +73,13 @@ fun StockDetailRoute(
     marketLabel: String,
     analysis: ProfitAnalysisUiModel,
     displayCurrency: DisplayCurrency,
+    quotes: List<QuoteSnapshotEntity>,
     onBack: () -> Unit,
 ) {
     var selectedRange by rememberSaveable { mutableStateOf(DetailRange.ALL) }
     var customStartDate by rememberSaveable { mutableStateOf("") }
     var customEndDate by rememberSaveable { mutableStateOf("") }
+    var activeTab by rememberSaveable { mutableStateOf(DetailTab.STOCK) }
 
     val security = remember(analysis.securityAnalyses, symbol, marketLabel) {
         analysis.securityAnalyses.firstOrNull {
@@ -84,6 +92,7 @@ fun StockDetailRoute(
     }
     val latestDate = analysis.latestDate
     val context = LocalContext.current
+    val quoteMap = remember(quotes) { quotes.associateBy { it.symbol } }
 
     val rangePair: Pair<LocalDate, LocalDate> = remember(selectedRange, latestDate, customStartDate, customEndDate) {
         when (selectedRange) {
@@ -156,9 +165,13 @@ fun StockDetailRoute(
                 else -> qty
             }
         }
-        val closingPrice = allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
-            ?: rangeTxns.lastOrNull { runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
-            ?: 0.0
+        val closingPrice = if (rangeEnd == latestDate && quoteMap[symbol]?.currentPrice != null) {
+            quoteMap[symbol]!!.currentPrice!!
+        } else {
+            allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
+                ?: rangeTxns.lastOrNull { runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
+                ?: 0.0
+        }
         val openingPrice = allSecurityPoints.lastOrNull { it.date.isBefore(rangeStart) }?.closePrice
             ?: stockTransactions.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
             ?: closingPrice
@@ -182,10 +195,10 @@ fun StockDetailRoute(
             }.sumOf { it.tax }
             val optSellProceeds = optRangeTxns.filter {
                 runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.SELL
-            }.sumOf { it.price * it.quantity }
+            }.sumOf { it.price * it.quantity * 100.0 }
             val optBuyCost = optRangeTxns.filter {
                 runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
-            }.sumOf { it.price * it.quantity }
+            }.sumOf { it.price * it.quantity * 100.0 }
 
             val firstTxn = optTxns.firstOrNull()
             val expiryStr = firstTxn?.expiryDate?.takeIf { it.isNotBlank() } ?: ""
@@ -212,14 +225,18 @@ fun StockDetailRoute(
             val isExpiredAtStart = expiryDate != null && rangeStart.minusDays(1).isAfter(expiryDate)
 
             val optClosingPrice = if (isExpiredAtEnd) 0.0 else {
-                optTxns.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: 0.0
+                if (rangeEnd == latestDate && quoteMap[optSymbol]?.currentPrice != null) {
+                    quoteMap[optSymbol]!!.currentPrice!!
+                } else {
+                    optTxns.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: 0.0
+                }
             }
             val optOpeningPrice = if (isExpiredAtStart) 0.0 else {
                 optTxns.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: optClosingPrice
             }
 
-            val optClosingValue = optClosingPrice * optClosingQty
-            val optOpeningValue = optOpeningPrice * optOpeningQty
+            val optClosingValue = optClosingPrice * optClosingQty * 100.0
+            val optOpeningValue = optOpeningPrice * optOpeningQty * 100.0
 
             pnl += (optClosingValue - optOpeningValue + optSellProceeds - optBuyCost - optCommission - optTax)
         }
@@ -234,10 +251,10 @@ fun StockDetailRoute(
     }.sumOf { it.tax }
     val totalSellProceeds = rangeTransactions.filter {
         runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.SELL
-    }.sumOf { it.price * it.quantity }
+    }.sumOf { it.price * it.quantity * (if (it.assetType == "OPTION") 100.0 else 1.0) }
     val totalBuyCost = rangeTransactions.filter {
         runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
-    }.sumOf { it.price * it.quantity }
+    }.sumOf { it.price * it.quantity * (if (it.assetType == "OPTION") 100.0 else 1.0) }
 
     val closingStockQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
         val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
@@ -255,9 +272,13 @@ fun StockDetailRoute(
             else -> qty
         }
     }
-    val closingStockPrice = allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
-        ?: stockTransactions.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
-        ?: 0.0
+    val closingStockPrice = if (rangeEnd == latestDate && quoteMap[symbol]?.currentPrice != null) {
+        quoteMap[symbol]!!.currentPrice!!
+    } else {
+        allSecurityPoints.lastOrNull { !it.date.isAfter(rangeEnd) }?.closePrice
+            ?: stockTransactions.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
+            ?: 0.0
+    }
     val openingStockPrice = allSecurityPoints.lastOrNull { it.date.isBefore(rangeStart) }?.closePrice
         ?: stockTransactions.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price
         ?: closingStockPrice
@@ -290,19 +311,66 @@ fun StockDetailRoute(
             }
         }
         val optClosingPrice = if (isExpiredAtEnd) 0.0 else {
-            optTxns.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: 0.0
+            if (rangeEnd == latestDate && quoteMap[optSymbol]?.currentPrice != null) {
+                quoteMap[optSymbol]!!.currentPrice!!
+            } else {
+                optTxns.lastOrNull { it.tradeDate <= rangeEnd.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: 0.0
+            }
         }
         val optOpeningPrice = if (isExpiredAtStart) 0.0 else {
             optTxns.lastOrNull { it.tradeDate < rangeStart.toString() && runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true }?.price ?: optClosingPrice
         }
 
-        closingOptionMarketValue += optClosingPrice * optClosingQty
-        openingOptionMarketValue += optOpeningPrice * optOpeningQty
+        closingOptionMarketValue += optClosingPrice * optClosingQty * 100.0
+        openingOptionMarketValue += optOpeningPrice * optOpeningQty * 100.0
     }
 
     val closingMarketValue = closingStockMarketValue + closingOptionMarketValue
     val openingMarketValue = openingStockMarketValue + openingOptionMarketValue
     val rangePnl = closingMarketValue - openingMarketValue + totalSellProceeds - totalBuyCost - rangeCommission - rangeTax
+
+    // Active Tab computed values
+    val activeTransactions = remember(rangeTransactions, activeTab) {
+        rangeTransactions.filter { txn ->
+            if (activeTab == DetailTab.STOCK) txn.assetType != "OPTION" else txn.assetType == "OPTION"
+        }
+    }
+    val activeClosingMarketValue = remember(activeTab, closingStockMarketValue, closingOptionMarketValue) {
+        if (activeTab == DetailTab.STOCK) closingStockMarketValue else closingOptionMarketValue
+    }
+    val activePnl = remember(activeTab, stockPnl, optionPnl) {
+        if (activeTab == DetailTab.STOCK) stockPnl else optionPnl
+    }
+    val activeCommission = remember(activeTransactions) {
+        activeTransactions.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true
+        }.sumOf { it.commission }
+    }
+    val activeTax = remember(activeTransactions) {
+        activeTransactions.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()?.isSecurityTrade == true
+        }.sumOf { it.tax }
+    }
+    val activeSellProceeds = remember(activeTransactions) {
+        activeTransactions.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.SELL
+        }.sumOf { it.price * it.quantity * (if (it.assetType == "OPTION") 100.0 else 1.0) }
+    }
+    val activeBuyCost = remember(activeTransactions) {
+        activeTransactions.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
+        }.sumOf { it.price * it.quantity * (if (it.assetType == "OPTION") 100.0 else 1.0) }
+    }
+    val activeSellFee = remember(activeTransactions) {
+        activeTransactions.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.SELL
+        }.sumOf { it.commission + it.tax }
+    }
+    val activeBuyFee = remember(activeTransactions) {
+        activeTransactions.filter {
+            runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
+        }.sumOf { it.commission + it.tax }
+    }
 
     Box(
         modifier = Modifier
@@ -327,12 +395,19 @@ fun StockDetailRoute(
                         Text("←", fontSize = 20.sp, color = ForegroundPrimary)
                     }
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "$securityName $symbol.$marketLabel",
-                        color = ForegroundPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Column {
+                        Text(
+                            text = "$securityName $symbol.$marketLabel",
+                            color = ForegroundPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "更新至: ${latestDate.toString().replace("-", ".")}",
+                            color = ForegroundMuted,
+                            fontSize = 11.sp,
+                        )
+                    }
                 }
             }
 
@@ -406,53 +481,68 @@ fun StockDetailRoute(
                         .clip(RoundedCornerShape(16.dp))
                         .background(SurfaceSecondary)
                         .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("累计盈亏", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text("区间盈亏", color = ForegroundSecondary, fontSize = 14.sp)
-                        val sign = if (rangePnl >= 0) "+" else ""
-                        Text(
-                            text = "$sign${displayCurrency.symbol}${detailNumberFormatter.format(rangePnl.absoluteValue)}",
-                            color = if (rangePnl >= 0) MarketUp else MarketDown,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
+                    val rangeStartFormatted = rangeStart.toString().replace("-", ".")
+                    val rangeEndFormatted = rangeEnd.toString().replace("-", ".")
+                    Text(
+                        text = "$rangeStartFormatted - $rangeEndFormatted",
+                        color = ForegroundMuted,
+                        fontSize = 12.sp,
+                    )
+                    Text(
+                        text = "累计盈亏 (${displayCurrency.name})",
+                        color = ForegroundPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    
+                    val totalSign = if (rangePnl >= 0) "+" else ""
+                    Text(
+                        text = "$totalSign${detailNumberFormatter.format(rangePnl)}",
+                        color = if (rangePnl >= 0) MarketUp else MarketDown,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    
                     if (optionTransactions.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("├─ 正股 ($symbol)", color = ForegroundSecondary, fontSize = 13.sp)
-                            val sign = if (stockPnl >= 0) "+" else ""
-                            Text(
-                                text = "$sign${displayCurrency.symbol}${detailNumberFormatter.format(stockPnl.absoluteValue)}",
-                                color = if (stockPnl >= 0) MarketUp else MarketDown,
-                                fontSize = 13.sp,
-                            )
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text("└─ 衍生品期权", color = ForegroundSecondary, fontSize = 13.sp)
-                            val sign = if (optionPnl >= 0) "+" else ""
-                            Text(
-                                text = "$sign${displayCurrency.symbol}${detailNumberFormatter.format(optionPnl.absoluteValue)}",
-                                color = if (optionPnl >= 0) MarketUp else MarketDown,
-                                fontSize = 13.sp,
-                            )
+                            Column {
+                                Text("正股盈亏", color = ForegroundMuted, fontSize = 12.sp)
+                                val stockSign = if (stockPnl >= 0) "+" else ""
+                                Text(
+                                    text = "$stockSign${detailNumberFormatter.format(stockPnl)}",
+                                    color = if (stockPnl >= 0) MarketUp else MarketDown,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("衍生品盈亏", color = ForegroundMuted, fontSize = 12.sp)
+                                val optionSign = if (optionPnl >= 0) "+" else ""
+                                Text(
+                                    text = "$optionSign${detailNumberFormatter.format(optionPnl)}",
+                                    color = if (optionPnl >= 0) MarketUp else MarketDown,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
+                }
+
+                // Tab Switcher between Section 1 and Section 2
+                if (optionTransactions.isNotEmpty()) {
+                    SegmentRow(
+                        options = DetailTab.entries.toList(),
+                        selected = activeTab,
+                        label = { it.label },
+                        onSelected = { activeTab = it },
+                    )
                 }
 
                 // Section 2: 盈亏构成
@@ -465,12 +555,42 @@ fun StockDetailRoute(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Text("盈亏构成", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    DetailRow("期初持仓市值", openingMarketValue, displayCurrency, forceUnsigned = true)
-                    DetailRow("期末持仓市值", closingMarketValue, displayCurrency, forceUnsigned = true)
-                    DetailRow("累计入账金额", totalSellProceeds, displayCurrency, forcePositive = true)
-                    DetailRow("累计出账金额", totalBuyCost, displayCurrency, forceNegative = true)
-                    DetailRow("佣金/平台费", rangeCommission, displayCurrency, forceNegative = true)
-                    DetailRow("税费", rangeTax, displayCurrency, forceNegative = true)
+                    
+                    val activeOpeningMarketValue = if (activeTab == DetailTab.STOCK) openingStockMarketValue else openingOptionMarketValue
+                    if (activeOpeningMarketValue > 0.0) {
+                        DetailRow("期初持仓市值", activeOpeningMarketValue, displayCurrency, forceUnsigned = true)
+                    }
+                    DetailRow("持仓市值", activeClosingMarketValue, displayCurrency, forceUnsigned = true)
+                    
+                    DetailRow("累计入账金额", activeSellProceeds, displayCurrency, forcePositive = true)
+                    val sellLabel = if (activeTab == DetailTab.STOCK) "股票卖出" else "期权卖出"
+                    DetailSubRow(sellLabel, activeSellProceeds, displayCurrency)
+                    
+                    DetailRow("累计出账金额", activeBuyCost, displayCurrency, forceNegative = true)
+                    val buyLabel = if (activeTab == DetailTab.STOCK) "股票买入" else "期权买入"
+                    DetailSubRow(buyLabel, activeBuyCost, displayCurrency)
+                    
+                    val activeFeeTotal = activeCommission + activeTax
+                    DetailRow("费用合计", activeFeeTotal, displayCurrency, forceNegative = true)
+                    val sellFeeLabel = if (activeTab == DetailTab.STOCK) "股票卖出费用" else "期权卖出费用"
+                    DetailSubRow(sellFeeLabel, activeSellFee, displayCurrency)
+                    val buyFeeLabel = if (activeTab == DetailTab.STOCK) "股票买入费用" else "期权买入费用"
+                    DetailSubRow(buyFeeLabel, activeBuyFee, displayCurrency)
+                    
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(ForegroundMuted.copy(alpha = 0.2f)))
+                    
+                    DetailRow("盈亏合计", activePnl, displayCurrency)
+                    
+                    val formulaDesc = if (activeOpeningMarketValue > 0.0) {
+                        "盈亏合计 = 持仓市值 - 期初持仓市值 + 累计入账金额 - 累计出账金额 - 费用合计"
+                    } else {
+                        "盈亏合计 = 持仓市值 + 累计入账金额 - 累计出账金额 - 费用合计"
+                    }
+                    Text(
+                        text = formulaDesc,
+                        color = ForegroundMuted,
+                        fontSize = 11.sp,
+                    )
                 }
 
                 // Section 3: 流水明细
@@ -487,16 +607,17 @@ fun StockDetailRoute(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text("流水明细", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text("共 ${rangeTransactions.size} 笔", color = ForegroundMuted, fontSize = 13.sp)
+                        Text("共 ${activeTransactions.size} 笔", color = ForegroundMuted, fontSize = 13.sp)
                     }
 
-                    if (rangeTransactions.isEmpty()) {
+                    if (activeTransactions.isEmpty()) {
                         Text("当前区间内没有交易记录", color = ForegroundMuted, fontSize = 13.sp)
                     } else {
-                        rangeTransactions.forEach { txn ->
+                        activeTransactions.forEach { txn ->
                             val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
                             val isBuy = tradeType == TradeType.BUY
-                            val amount = txn.price * txn.quantity
+                            val mult = if (txn.assetType == "OPTION") 100.0 else 1.0
+                            val amount = txn.price * txn.quantity * mult
                             val feeTotal = txn.commission + txn.tax
                             val amountWithFee = if (tradeType?.isSecurityTrade == true) {
                                 if (isBuy) amount + feeTotal else amount - feeTotal
@@ -542,6 +663,9 @@ fun StockDetailRoute(
                                             append(" × ")
                                             append(displayCurrency.symbol)
                                             append(detailNumberFormatter.format(txn.price))
+                                            if (txn.assetType == "OPTION") {
+                                                append(" × 100")
+                                            }
                                             if (feeTotal > 0.0) {
                                                 append(" + 费用")
                                                 append(displayCurrency.symbol)
@@ -568,6 +692,30 @@ fun StockDetailRoute(
             }
         }
 
+    }
+}
+
+@Composable
+private fun DetailSubRow(
+    label: String,
+    value: Double,
+    displayCurrency: DisplayCurrency,
+) {
+    if (value > 0.0) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = ForegroundMuted, fontSize = 12.sp)
+            Text(
+                text = "${displayCurrency.symbol}${detailNumberFormatter.format(value)}",
+                color = ForegroundSecondary,
+                fontSize = 12.sp
+            )
+        }
     }
 }
 
@@ -618,6 +766,7 @@ private fun StockDetailRoutePreview() {
             marketLabel = Market.US.label,
             analysis = PreviewFixtures.profitAnalysis,
             displayCurrency = DisplayCurrency.USD,
+            quotes = emptyList(),
             onBack = {},
         )
     }

@@ -1514,7 +1514,7 @@ fun TradeEntryRoute(
                     }
                 }
 
-                if (isSecurityTrade && !isEditing) {
+                if (isSecurityTrade) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("资产类型", color = ForegroundSecondary, fontSize = 14.sp)
                         Row(

@@ -207,6 +207,7 @@ data class HoldingUiModel(
     val dayTrend: PriceTrend,
     val totalTrend: PriceTrend,
     val isOption: Boolean = false,
+    val underlyingSymbol: String? = null,
 )
 
 data class SellCandidateUiModel(
