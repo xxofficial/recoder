@@ -11,6 +11,7 @@ import com.recoder.stockledger.data.TradeFeeEstimate
 import com.recoder.stockledger.data.TradeFeeEstimateContext
 import com.recoder.stockledger.data.TradeFeeEstimator
 import com.recoder.stockledger.data.TradeType
+import com.recoder.stockledger.data.YahooSplitEvent
 import com.recoder.stockledger.data.ZhuoruiEmailSyncConfig
 import com.recoder.stockledger.data.importer.HsbcNotificationParser
 import com.recoder.stockledger.data.importer.HsbcNotificationStatus
@@ -189,7 +190,8 @@ interface MarketDataRepository {
     suspend fun lookupSecurity(rawInput: String, market: Market): SecurityLookupResult?
     suspend fun searchSecurities(rawInput: String, market: Market, limit: Int = 6): List<SecurityLookupResult>
     suspend fun refreshQuotes(requests: List<QuoteRequest>): Long
-    suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long
+    suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>, force: Boolean = false): Long
+    suspend fun fetchStockSplits(symbol: String, period1: Long = 0L, period2: Long = 4102416000L): List<YahooSplitEvent>
     suspend fun repairSuspiciousStockNames(): Int
     suspend fun refreshExchangeRates(): ExchangeRateRefreshResult
 }
@@ -244,6 +246,7 @@ class DefaultLedgerRepository(
     override val historicalCloses: StateFlow<List<HistoricalClosePoint>> = _historicalCloses
     private val _exchangeRates = MutableStateFlow(exchangeRateDataSource.currentRates())
     override val exchangeRates: StateFlow<ExchangeRates> = _exchangeRates
+    private var lastQuotesRefreshTimeMillis: Long = 0L
 
     override val isUsingRealtimeQuotes: Boolean
         get() = quoteDataSource.isConfigured
@@ -1121,11 +1124,16 @@ class DefaultLedgerRepository(
         return dao.latestQuoteRefreshTimestamp() ?: System.currentTimeMillis()
     }
 
-    override suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>): Long {
+    override suspend fun refreshQuotesForPortfolio(transactions: List<TransactionEntity>, force: Boolean): Long {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastQuotesRefreshTimeMillis < 60_000L) {
+            return dao.latestQuoteRefreshTimestamp() ?: now
+        }
+
         val securityTransactions = transactions
             .filter { transaction ->
-                val tradeType = TradeType.valueOf(transaction.tradeType)
-                tradeType.isSecurityTrade &&
+                val tradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull()
+                tradeType != null && tradeType.isSecurityTrade &&
                     transaction.symbol.isNotBlank() &&
                     transaction.market != Market.CASH.name
             }
@@ -1144,7 +1152,7 @@ class DefaultLedgerRepository(
         if (requests.isEmpty()) {
             dao.clearQuotes()
             _historicalCloses.value = emptyList()
-            return System.currentTimeMillis()
+            return now
         }
 
         val earliestTradeDate = securityTransactions
@@ -1161,7 +1169,96 @@ class DefaultLedgerRepository(
             quoteDataSource.fetchHistoricalCloses(requests, lookbackDays)
         }.getOrElse { emptyList() }
 
-        return refreshQuotes(requests)
+        // Filter requests: only refresh quotes for active holdings (quantity != 0)
+        val activeKeys = securityTransactions.groupBy { it.market to it.symbol }.filter { (_, txns) ->
+            val sorted = txns.sortedWith(compareBy({ it.tradeDate }, { it.tradeTime }, { it.id }))
+            val finalQty = sorted.fold(0) { qty, txn ->
+                val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
+                when (tradeType) {
+                    TradeType.BUY -> qty + txn.quantity
+                    TradeType.SELL -> qty - txn.quantity
+                    TradeType.TRANSFER_IN -> qty + txn.quantity
+                    TradeType.TRANSFER_OUT -> qty - txn.quantity
+                    TradeType.SPLIT -> (qty * txn.price).toInt()
+                    else -> qty
+                }
+            }
+            finalQty != 0
+        }.keys
+
+        val activeRequests = requests.filter { (it.market.name to it.symbol) in activeKeys }
+        if (activeRequests.isNotEmpty()) {
+            runCatching {
+                refreshQuotes(activeRequests)
+            }
+        }
+        
+        lastQuotesRefreshTimeMillis = now
+        return dao.latestQuoteRefreshTimestamp() ?: now
+    }
+
+    private fun httpGetSimple(url: String, headers: Map<String, String>): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 5000
+            headers.forEach { (key, value) -> setRequestProperty(key, value) }
+        }
+        return try {
+            val statusCode = connection.responseCode
+            val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (statusCode !in 200..299) {
+                throw IOException("HTTP $statusCode for $url: ${body.take(120)}")
+            }
+            body
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    override suspend fun fetchStockSplits(
+        symbol: String,
+        period1: Long,
+        period2: Long
+    ): List<YahooSplitEvent> = withContext(Dispatchers.IO) {
+        val list = mutableListOf<YahooSplitEvent>()
+        val url = "https://query2.finance.yahoo.com/v8/finance/chart/$symbol?period1=$period1&period2=$period2&interval=1d&events=splits"
+        try {
+            val responseText = httpGetSimple(
+                url = url,
+                headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            )
+            val json = JSONObject(responseText)
+            val chart = json.optJSONObject("chart") ?: return@withContext emptyList()
+            val resultArr = chart.optJSONArray("result") ?: return@withContext emptyList()
+            if (resultArr.length() == 0) return@withContext emptyList()
+            
+            val result = resultArr.getJSONObject(0)
+            val events = result.optJSONObject("events") ?: return@withContext emptyList()
+            val splits = events.optJSONObject("splits") ?: return@withContext emptyList()
+            
+            val keys = splits.keys()
+            while (keys.hasNext()) {
+                val timestampKey = keys.next()
+                val splitObj = splits.getJSONObject(timestampKey)
+                val denominator = splitObj.optDouble("denominator", 1.0)
+                val numerator = splitObj.optDouble("numerator", 1.0)
+                val ratio = if (denominator != 0.0) numerator / denominator else 1.0
+                
+                val epochSeconds = timestampKey.toLongOrNull() ?: splitObj.optLong("date", 0L)
+                if (epochSeconds > 0L) {
+                    val dateStr = java.time.Instant.ofEpochSecond(epochSeconds)
+                        .atZone(java.time.ZoneId.of("UTC"))
+                        .toLocalDate()
+                        .toString()
+                    list.add(YahooSplitEvent(dateStr, ratio))
+                }
+            }
+        } catch (e: java.lang.Exception) {
+            Log.e("DefaultLedgerRepository", "Failed to fetch splits for $symbol from Yahoo: ${e.message}", e)
+        }
+        list.sortedBy { it.date }
     }
 
     override suspend fun repairSuspiciousStockNames(): Int {
@@ -1559,6 +1656,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
 
     private var cachedCookie: String? = null
     private var cachedCrumb: String? = null
+    private val historicalClosesCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<HistoricalClosePoint>>>()
 
     private fun isOptionSymbol(symbol: String): Boolean {
         val parts = symbol.trim().split(" ")
@@ -1825,15 +1923,26 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         requests: List<QuoteRequest>,
         lookbackDays: Int,
     ): List<HistoricalClosePoint> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val cacheExpiry = 12 * 60 * 60 * 1000L // 12 hours
+
         requests.filter { it.assetType != "OPTION" }.flatMap { request ->
-            runCatching {
-                fetchHistoricalClosesForRequest(
-                    request = request,
-                    lookbackDays = lookbackDays,
-                )
-            }.onFailure {
-                Log.w(TAG, "Historical close fetch failed for ${request.market}:${request.symbol}: ${it.message}")
-            }.getOrDefault(emptyList())
+            val cacheKey = "${request.market.name}:${request.symbol}:$lookbackDays"
+            val cachedVal = historicalClosesCache[cacheKey]
+            if (cachedVal != null && now - cachedVal.first < cacheExpiry) {
+                cachedVal.second
+            } else {
+                runCatching {
+                    val points = fetchHistoricalClosesForRequest(
+                        request = request,
+                        lookbackDays = lookbackDays,
+                    )
+                    historicalClosesCache[cacheKey] = Pair(now, points)
+                    points
+                }.onFailure {
+                    Log.w(TAG, "Historical close fetch failed for ${request.market}:${request.symbol}: ${it.message}")
+                }.getOrDefault(emptyList())
+            }
         }
     }
 

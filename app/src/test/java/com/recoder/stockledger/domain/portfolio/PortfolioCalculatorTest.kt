@@ -82,6 +82,33 @@ class PortfolioCalculatorTest {
         assertEquals(3_000.0, snapshot.cashBalanceCny, 0.0001)
     }
 
+    @Test
+    fun `calculate handles stock split and reverse split`() {
+        // AAPL buy 10 shares at $100. Then AAPL splits 2-for-1 (ratio = 2.0).
+        // Total cost remains $1000. Qty becomes 20. Average cost becomes $50.
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.BUY, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 10),
+                trade(type = TradeType.SPLIT, market = Market.US, symbol = "AAPL", price = 2.0, quantity = 1),
+            ),
+            quotes = listOf(
+                PortfolioQuote(
+                    symbol = "AAPL",
+                    market = Market.US,
+                    currentPrice = 60.0,
+                    previousClose = 55.0,
+                ),
+            ),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 0.9),
+        )
+
+        assertEquals(1, snapshot.positions.size)
+        val position = snapshot.positions.getValue("US:AAPL")
+        assertEquals(20, position.quantity)
+        assertEquals(50.0, position.averageCost, 0.0001)
+        assertEquals(1000.0, position.remainingCost, 0.0001)
+    }
+
     private fun trade(
         type: TradeType,
         market: Market,

@@ -185,6 +185,8 @@ data class LedgerUiState(
     val selectedLedgerId: Long = 1L,
     val partnerContributions: List<PartnerContribution> = emptyList(),
     val selectedPartnerPerspective: String? = null,
+    val isSyncingSplits: Boolean = false,
+    val splitsSyncStatusMessage: String? = null,
 )
 
 data class PartnerContribution(
@@ -265,6 +267,8 @@ class LedgerViewModel(
 
     val selectedLedgerId = MutableStateFlow(1L)
     val selectedPartnerPerspective = MutableStateFlow<String?>(null)
+    private val isSyncingSplits = MutableStateFlow(false)
+    private val splitsSyncStatusMessage = MutableStateFlow<String?>(null)
     
     val ledgers = repository.ledgers.stateIn(
         scope = viewModelScope,
@@ -736,6 +740,10 @@ class LedgerViewModel(
         state.copy(parsedBackupData = backup)
     }.combine(showImportDialog) { state, show ->
         state.copy(showImportDialog = show)
+    }.combine(isSyncingSplits) { state, syncing ->
+        state.copy(isSyncingSplits = syncing)
+    }.combine(splitsSyncStatusMessage) { state, message ->
+        state.copy(splitsSyncStatusMessage = message)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -1017,6 +1025,97 @@ class LedgerViewModel(
                 }
             }.onFailure { error ->
                 hsbcImportStatusMessage.value = "短信解析失败：${error.message ?: "请稍后重试"}"
+            }
+        }
+    }
+
+    fun syncAndFillSplits() {
+        viewModelScope.launch {
+            if (isSyncingSplits.value) return@launch
+            isSyncingSplits.value = true
+            splitsSyncStatusMessage.value = "正在获取交易过的股票列表..."
+            try {
+                val txns = repository.transactions.first()
+                val securityTxns = txns.filter {
+                    val tType = runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()
+                    tType != null && tType.isSecurityTrade && it.symbol.isNotBlank()
+                }
+
+                // Get all unique symbols
+                val symbols = securityTxns.map { it.symbol }.distinct()
+                if (symbols.isEmpty()) {
+                    splitsSyncStatusMessage.value = "没有发现交易过的股票，无需同步"
+                    isSyncingSplits.value = false
+                    return@launch
+                }
+
+                var addedCount = 0
+                symbols.forEachIndexed { index, symbol ->
+                    splitsSyncStatusMessage.value = "正在同步 ${symbol} 历史拆并股 (${index + 1}/${symbols.size})..."
+                    val events = repository.fetchStockSplits(symbol)
+                    if (events.isNotEmpty()) {
+                        // Find all existing split events in database for this symbol
+                        val existingDates = txns.filter {
+                            it.symbol == symbol && it.tradeType == TradeType.SPLIT.name
+                        }.map { it.tradeDate }.toSet()
+
+                        // Find the representative market/platform/name from existing transactions of this stock
+                        val representativeTxn = securityTxns.firstOrNull { it.symbol == symbol }
+                        if (representativeTxn != null) {
+                            val market = Market.fromString(representativeTxn.market) ?: Market.CASH
+                            val platformName = representativeTxn.platform
+                            val platform = runCatching { BrokerPlatform.valueOf(platformName) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
+                            val name = representativeTxn.name
+
+                            events.forEach { event ->
+                                if (event.date.toString() !in existingDates) {
+                                    // Make sure split date is not before the first trade date of this symbol!
+                                    val firstTradeDateStr = securityTxns.filter { it.symbol == symbol }
+                                        .map { it.tradeDate }
+                                        .minOrNull()
+
+                                    val shouldAdd = firstTradeDateStr == null || !LocalDate.parse(event.date.toString()).isBefore(LocalDate.parse(firstTradeDateStr))
+
+                                    if (shouldAdd) {
+                                        val newSplitTxn = TradeDraftInput(
+                                            tradeType = TradeType.SPLIT,
+                                            platform = platform,
+                                            sourceChannel = null,
+                                            externalReference = null,
+                                            market = market,
+                                            symbol = symbol,
+                                            name = name,
+                                            tradeDate = event.date.toString(),
+                                            price = event.ratio,
+                                            quantity = 1,
+                                            commission = 0.0,
+                                            tax = 0.0,
+                                            note = "自动同步补全：折算比例 ${event.ratio}",
+                                            tradeTime = "09:00:00",
+                                            createdAt = System.currentTimeMillis(),
+                                            ledgerId = selectedLedgerId.value,
+                                            investorName = representativeTxn.investorName,
+                                            assetType = representativeTxn.assetType,
+                                            underlyingSymbol = representativeTxn.underlyingSymbol,
+                                            expiryDate = representativeTxn.expiryDate,
+                                            strikePrice = representativeTxn.strikePrice,
+                                            optionType = representativeTxn.optionType,
+                                        )
+                                        repository.addTrade(newSplitTxn)
+                                        addedCount++
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                splitsSyncStatusMessage.value = "同步完成！共补全了 ${addedCount} 条拆并股记录"
+                repository.refreshQuotesForPortfolio(repository.transactions.first(), force = true)
+            } catch (e: Exception) {
+                splitsSyncStatusMessage.value = "同步失败：${e.message ?: "未知错误"}"
+            } finally {
+                isSyncingSplits.value = false
             }
         }
     }
@@ -1710,7 +1809,7 @@ class LedgerViewModel(
         runCatching {
             val latestTransactions = repository.transactions.first()
             val exchangeRateResult = repository.refreshExchangeRates()
-            lastRefreshTimestamp.value = repository.refreshQuotesForPortfolio(latestTransactions)
+            lastRefreshTimestamp.value = repository.refreshQuotesForPortfolio(latestTransactions, force = (trigger == RefreshTrigger.MANUAL_PULL))
             refreshState.value = RefreshState.FRESH
             val rateSuffix = when (exchangeRateResult.origin) {
                 ExchangeRateOrigin.NETWORK -> ""
@@ -1806,7 +1905,9 @@ class LedgerViewModel(
         }
 
         val price = parseDecimal(draft.priceLabel)
-        if (price <= 0.0) return "成交价格必须大于 0"
+        if (price <= 0.0) {
+            return if (draft.selectedType == TradeType.SPLIT) "折算比例必须大于 0" else "成交价格必须大于 0"
+        }
 
         val quantity = parseQuantity(draft.quantityLabel)
         if (quantity <= 0) return "成交数量必须大于 0"
@@ -1824,7 +1925,18 @@ class LedgerViewModel(
         lookup: SymbolLookupUiModel = symbolLookup.value,
         positions: Map<String, PositionComputation> = draftReferencePortfolio.value.positions,
     ): TradeFormState {
-        val normalizedBase = if (draft.selectedType.isSecurityTrade) {
+        val normalizedBase = if (draft.selectedType == TradeType.SPLIT) {
+            draft.copy(
+                market = if (draft.market == Market.CASH) Market.A_SHARE else draft.market,
+                quantityLabel = "1",
+                commissionLabel = "0.00",
+                taxLabel = "0.00",
+                feeEstimateStatus = FeeEstimateStatus.UNAVAILABLE,
+                feeEstimateSummary = null,
+                feeEstimateDetail = null,
+                canAutoEstimateFees = false,
+            )
+        } else if (draft.selectedType.isSecurityTrade) {
             draft.copy(
                 market = if (draft.market == Market.CASH) Market.A_SHARE else draft.market,
             )
@@ -1842,7 +1954,7 @@ class LedgerViewModel(
             )
         }
 
-        return applyFeeEstimateRules(normalizedBase)
+        return if (normalizedBase.selectedType == TradeType.SPLIT) normalizedBase else applyFeeEstimateRules(normalizedBase)
     }
 
     private fun applyFeeEstimateRules(draft: TradeFormState): TradeFormState {
@@ -2258,7 +2370,9 @@ class LedgerViewModel(
                             } else {
                                 platform.label
                             },
-                            secondaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
+                            secondaryMeta = if (tradeType == TradeType.SPLIT) {
+                                "折算比例 ${transaction.price}"
+                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
                                 val unit = if (isOpt) "张" else "股"
                                 "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
@@ -2267,9 +2381,15 @@ class LedgerViewModel(
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
-                            amountLabel = formatSignedMarketAmount(cashFlow, market),
+                            amountLabel = if (tradeType == TradeType.SPLIT) {
+                                "--"
+                            } else {
+                                formatSignedMarketAmount(cashFlow, market)
+                            },
                             timeLabel = transaction.tradeTime,
-                            feeLabel = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
+                            feeLabel = if (tradeType == TradeType.SPLIT) {
+                                transaction.note.ifBlank { "股票拆分/合并折算" }
+                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "费用 ${formatMarketAmount(transaction.commission + transaction.tax, market)}"
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
@@ -2423,6 +2543,19 @@ class LedgerViewModel(
                                     averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
+                        }
+                    }
+
+                    TradeType.SPLIT -> {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key]
+                        if (current != null && current.quantity != 0) {
+                            val nextQuantity = (current.quantity * transaction.price).toInt()
+                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            )
                         }
                     }
 
@@ -2842,6 +2975,18 @@ class LedgerViewModel(
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) - amountCny
                     }
                 }
+
+                TradeType.SPLIT -> {
+                    val current = positions[key]
+                    if (current != null && current.quantity != 0) {
+                        val nextQuantity = (current.quantity * transaction.price).toInt()
+                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                        )
+                    }
+                }
             }
         }
 
@@ -3211,6 +3356,18 @@ class LedgerViewModel(
                                 averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
+                    }
+                }
+                TradeType.SPLIT -> {
+                    val key = positionKey(transaction.symbol, market)
+                    val current = positions[key]
+                    if (current != null && current.quantity != 0) {
+                        val nextQuantity = (current.quantity * transaction.price).toInt()
+                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                        )
                     }
                 }
             }
@@ -3669,6 +3826,7 @@ class LedgerViewModel(
                 }
             }
             TradeType.INTEREST -> -(transaction.price * transaction.quantity * mult)
+            TradeType.SPLIT -> 0.0
         }
     }
 
@@ -4264,6 +4422,9 @@ private data class RefreshMeta(
                     if (tx.symbol == CASH_ACCOUNT_SYMBOL) {
                         balance -= tx.price * tx.quantity
                     }
+                }
+                TradeType.SPLIT -> {
+                    // Split events do not affect cash balance
                 }
             }
         }

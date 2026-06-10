@@ -154,6 +154,19 @@ class PortfolioCalculator {
                         }
                         totalWithdrawCny += amountCny
                     }
+
+                    TradeType.SPLIT -> {
+                        val key = positionKey(transaction.symbol, transaction.market)
+                        val current = positions[key]
+                        if (current != null && current.quantity != 0) {
+                            val nextQuantity = (current.quantity * transaction.price).toInt()
+                            val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            )
+                        }
+                    }
                 }
             }
 

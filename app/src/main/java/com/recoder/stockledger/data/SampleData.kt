@@ -15,7 +15,7 @@ object SampleData {
         tradeDate = LocalDate.now().toString(),
         tradeTime = LocalTime.now().format(tradeTimeFormatter),
         priceLabel = "",
-        quantityLabel = if (defaultType.isSecurityTrade) "" else "1",
+        quantityLabel = if (defaultType == TradeType.SPLIT) "1" else if (defaultType.isSecurityTrade) "" else "1",
         commissionLabel = "0.00",
         taxLabel = "0.00",
         note = "",

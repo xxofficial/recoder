@@ -45,10 +45,11 @@ enum class TradeType(val label: String) {
     TRANSFER_OUT("转出"),
     TRANSFER_IN("转入"),
     INTEREST("利息"),
+    SPLIT("拆并股"),
     ;
 
     val isSecurityTrade: Boolean
-        get() = this == BUY || this == SELL
+        get() = this == BUY || this == SELL || this == SPLIT
 
     val isCashFlowPositive: Boolean
         get() = this == SELL || this == DEPOSIT || this == TRANSFER_IN
@@ -86,6 +87,7 @@ enum class TransactionFilter(
     INTEREST("利息", TradeType.INTEREST),
     TRANSFER_IN("划入/转入", TradeType.TRANSFER_IN),
     TRANSFER_OUT("划出/转出", TradeType.TRANSFER_OUT),
+    SPLIT("拆并股", TradeType.SPLIT),
 }
 
 enum class MarketFilter(
@@ -306,3 +308,8 @@ data class ZhuoruiPromoConfig(
             return !LocalDate.now().isAfter(end)
         }
 }
+
+data class YahooSplitEvent(
+    val date: String,
+    val ratio: Double,
+)

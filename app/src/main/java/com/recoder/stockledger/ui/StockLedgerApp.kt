@@ -497,6 +497,9 @@ fun StockLedgerApp(
                         onLlmApiBaseUrlChange = ledgerViewModel::updateLlmApiBaseUrl,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },
+                        isSyncingSplits = uiState.isSyncingSplits,
+                        splitsSyncStatusMessage = uiState.splitsSyncStatusMessage,
+                        onSyncSplitsClick = ledgerViewModel::syncAndFillSplits,
                     )
                 }
 

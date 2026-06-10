@@ -21,6 +21,17 @@ class FrankfurterExchangeRateDataSource(
     fun currentRates(): ExchangeRates = loadCachedRates() ?: ExchangeRates()
 
     suspend fun refreshRates(): ExchangeRateRefreshResult = withContext(Dispatchers.IO) {
+        val cached = loadCachedRates()
+        val cacheExpiryMillis = 12 * 60 * 60 * 1000L // 12 hours
+        if (cached != null && cached.updatedAtMillis != null &&
+            System.currentTimeMillis() - cached.updatedAtMillis < cacheExpiryMillis
+        ) {
+            return@withContext ExchangeRateRefreshResult(
+                rates = cached,
+                origin = ExchangeRateOrigin.CACHE,
+            )
+        }
+
         runCatching {
             val rates = ExchangeRates(
                 usdToCny = fetchPairRate(base = "USD", quote = "CNY"),
@@ -33,7 +44,6 @@ class FrankfurterExchangeRateDataSource(
                 origin = ExchangeRateOrigin.NETWORK,
             )
         }.getOrElse {
-            val cached = loadCachedRates()
             if (cached != null) {
                 ExchangeRateRefreshResult(
                     rates = cached,

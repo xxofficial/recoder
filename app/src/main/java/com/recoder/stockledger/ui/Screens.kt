@@ -1680,9 +1680,9 @@ fun TradeEntryRoute(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         InputFieldBlock(
-                            label = "成交价格",
+                            label = if (state.selectedType == TradeType.SPLIT) "折算比例" else "成交价格",
                             value = priceState.textFieldValue,
-                            modifier = Modifier.weight(1f),
+                            modifier = if (state.selectedType == TradeType.SPLIT) Modifier.fillMaxWidth() else Modifier.weight(1f),
                             keyboardType = KeyboardType.Decimal,
                             onValueChange = {
                                 priceState.updateFromUser(it) { text ->
@@ -1690,17 +1690,19 @@ fun TradeEntryRoute(
                                 }
                             },
                         )
-                        InputFieldBlock(
-                            label = "成交数量",
-                            value = quantityState.textFieldValue,
-                            modifier = Modifier.weight(1f),
-                            keyboardType = KeyboardType.Number,
-                            onValueChange = {
-                                quantityState.updateFromUser(it) { text ->
-                                    onQuantityChange(text)
-                                }
-                            },
-                        )
+                        if (state.selectedType != TradeType.SPLIT) {
+                            InputFieldBlock(
+                                label = "成交数量",
+                                value = quantityState.textFieldValue,
+                                modifier = Modifier.weight(1f),
+                                keyboardType = KeyboardType.Number,
+                                onValueChange = {
+                                    quantityState.updateFromUser(it) { text ->
+                                        onQuantityChange(text)
+                                    }
+                                },
+                            )
+                        }
                     }
                 } else {
                     val partners = remember(activeLedgerPartners) {
@@ -1801,7 +1803,7 @@ fun TradeEntryRoute(
                     )
                 }
 
-                if (isSecurityTrade) {
+                if (isSecurityTrade && state.selectedType != TradeType.SPLIT) {
                     TradeEntryFeeCard(
                         commission = commissionState.textFieldValue,
                         tax = taxState.textFieldValue,
@@ -1861,6 +1863,7 @@ fun TradeEntryRoute(
                             TradeType.INTEREST -> "确认支付利息"
                             TradeType.TRANSFER_IN -> "确认转入"
                             TradeType.TRANSFER_OUT -> "确认转出"
+                            TradeType.SPLIT -> "确认折算记录"
                         }
                     },
                     onClick = onSubmit,

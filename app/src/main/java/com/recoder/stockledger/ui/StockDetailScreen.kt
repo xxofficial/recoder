@@ -154,6 +154,7 @@ fun StockDetailRoute(
             when (tradeType) {
                 TradeType.BUY -> qty + txn.quantity
                 TradeType.SELL -> qty - txn.quantity
+                TradeType.SPLIT -> (qty * txn.price).toInt()
                 else -> qty
             }
         }
@@ -162,6 +163,7 @@ fun StockDetailRoute(
             when (tradeType) {
                 TradeType.BUY -> qty + txn.quantity
                 TradeType.SELL -> qty - txn.quantity
+                TradeType.SPLIT -> (qty * txn.price).toInt()
                 else -> qty
             }
         }
@@ -261,6 +263,7 @@ fun StockDetailRoute(
         when (tradeType) {
             TradeType.BUY -> qty + txn.quantity
             TradeType.SELL -> qty - txn.quantity
+            TradeType.SPLIT -> (qty * txn.price).toInt()
             else -> qty
         }
     }
@@ -269,6 +272,7 @@ fun StockDetailRoute(
         when (tradeType) {
             TradeType.BUY -> qty + txn.quantity
             TradeType.SELL -> qty - txn.quantity
+            TradeType.SPLIT -> (qty * txn.price).toInt()
             else -> qty
         }
     }
