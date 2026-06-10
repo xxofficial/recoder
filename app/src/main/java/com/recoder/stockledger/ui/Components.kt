@@ -5,7 +5,9 @@ import android.app.TimePickerDialog
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
@@ -699,10 +701,12 @@ fun SymbolSuggestionSection(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TransactionRow(
     item: TransactionUiModel,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     isSelected: Boolean = false,
     showCheckbox: Boolean = false,
 ) {
@@ -712,7 +716,10 @@ fun TransactionRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(BackgroundPrimary)
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top,

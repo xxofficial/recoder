@@ -22,3 +22,4 @@ scratch/
 /mapping.txt
 /scratch.*
 /test_*.py
+**/glyphlist.txt

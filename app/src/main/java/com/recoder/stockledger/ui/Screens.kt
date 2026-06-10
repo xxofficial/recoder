@@ -953,105 +953,94 @@ fun TransactionsRoute(
                 modifier = Modifier.statusBarsPadding(),
             )
 
+            // Sticky Search/Batch Header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 12.dp)
+            ) {
+                if (batchSelectionMode) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val allIds = sections.flatMap { section -> section.items.map { it.id } }
+                        val allSelected = allIds.isNotEmpty() && allIds.all { it in selectedTransactionIds }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    if (allSelected) onExitBatchMode() else onSelectAll(allIds)
+                                }
+                                .background(SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                text = if (allSelected) "取消全选" else "全选",
+                                color = ForegroundPrimary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "已选 ${selectedTransactionIds.size} 笔",
+                            color = ForegroundMuted,
+                            fontSize = 13.sp,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onExitBatchMode() }
+                                .background(SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text("取消", color = ForegroundPrimary, fontSize = 13.sp)
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        InputFieldBlock(
+                            label = "",
+                            value = transactionKeyword,
+                            placeholder = "搜索证券名称或代码",
+                            modifier = Modifier.weight(1f),
+                            onValueChange = onTransactionKeywordChange,
+                        )
+                        FilterActionButton(
+                            active = hasActiveFilters,
+                            onClick = {
+                                draftTradeFilter = selectedTradeFilter
+                                draftMarketFilter = selectedMarketFilter
+                                draftStartDate = transactionDateStart
+                                draftEndDate = transactionDateEnd
+                                showFilterSheet = true
+                            },
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onEnterBatchMode() }
+                                .background(SurfaceSecondary)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text("批量", color = ForegroundPrimary, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .padding(start = 20.dp, end = 20.dp),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                item(key = "search_header") {
-                    if (batchSelectionMode) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            val allIds = sections.flatMap { section -> section.items.map { it.id } }
-                            val allSelected = allIds.isNotEmpty() && allIds.all { it in selectedTransactionIds }
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        if (allSelected) onExitBatchMode() else onSelectAll(allIds)
-                                    }
-                                    .background(SurfaceSecondary)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    text = if (allSelected) "取消全选" else "全选",
-                                    color = ForegroundPrimary,
-                                    fontSize = 13.sp,
-                                )
-                            }
-                            Spacer(modifier = Modifier.weight(1f))
-                            Text(
-                                text = "已选 ${selectedTransactionIds.size} 笔",
-                                color = ForegroundMuted,
-                                fontSize = 13.sp,
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        if (selectedTransactionIds.isNotEmpty()) showBatchDeleteDialog = true
-                                    }
-                                    .background(if (selectedTransactionIds.isNotEmpty()) MarketDown else SurfaceSecondary)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    text = "删除(${selectedTransactionIds.size})",
-                                    color = if (selectedTransactionIds.isNotEmpty()) BackgroundPrimary else ForegroundMuted,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onExitBatchMode() }
-                                    .background(SurfaceSecondary)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                            ) {
-                                Text("取消", color = ForegroundPrimary, fontSize = 13.sp)
-                            }
-                        }
-                    } else {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            InputFieldBlock(
-                                label = "",
-                                value = transactionKeyword,
-                                placeholder = "搜索证券名称或代码",
-                                modifier = Modifier.weight(1f),
-                                onValueChange = onTransactionKeywordChange,
-                            )
-                            FilterActionButton(
-                                active = hasActiveFilters,
-                                onClick = {
-                                    draftTradeFilter = selectedTradeFilter
-                                    draftMarketFilter = selectedMarketFilter
-                                    draftStartDate = transactionDateStart
-                                    draftEndDate = transactionDateEnd
-                                    showFilterSheet = true
-                                },
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onEnterBatchMode() }
-                                    .background(SurfaceSecondary)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                            ) {
-                                Text("批量", color = ForegroundPrimary, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
-
                 if (sections.isEmpty()) {
                     item(key = "empty_state") {
                         Text("当前条件下没有流水记录。", color = ForegroundMuted, fontSize = 14.sp)
@@ -1085,6 +1074,14 @@ fun TransactionsRoute(
                                                 onToggleSelection(item.id)
                                             } else {
                                                 onEditTradeClick(item.id)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (!batchSelectionMode) {
+                                                onEnterBatchMode()
+                                                onToggleSelection(item.id)
+                                            } else {
+                                                onToggleSelection(item.id)
                                             }
                                         },
                                         isSelected = item.id in selectedTransactionIds,
