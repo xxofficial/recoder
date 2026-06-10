@@ -511,6 +511,10 @@ fun OperationsRoute(
     onRetryFailedPdfImport: (BrokerPlatform) -> Unit,
     onDestinationSelected: (TopLevelDestination) -> Unit,
     ledgers: List<LedgerEntity> = emptyList(),
+    onSplitClick: () -> Unit = {},
+    isSyncingSplits: Boolean = false,
+    splitsSyncStatusMessage: String? = null,
+    onSyncSplitsClick: () -> Unit = {},
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
 
@@ -541,6 +545,7 @@ fun OperationsRoute(
                     onWithdrawClick = onWithdrawClick,
                     onTransferClick = onTransferClick,
                     onInterestClick = onInterestClick,
+                    onSplitClick = onSplitClick,
                 )
 
                 Column(
@@ -882,6 +887,40 @@ fun OperationsRoute(
                             }
                         }
                     }
+                }
+
+                // Stock splits sync section
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = SurfaceSecondary,
+                            shape = RoundedCornerShape(16.dp),
+                        )
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("持仓股票拆折算同步", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "如果你的持仓股票发生过拆股或并股（例如SNXX1、ZSL等），可以联网自动同步并自动生成折算交易记录，修正持仓数量与均价。",
+                        color = ForegroundSecondary,
+                        fontSize = 13.sp,
+                    )
+
+                    if (splitsSyncStatusMessage != null) {
+                        Text(
+                            text = splitsSyncStatusMessage,
+                            color = ForegroundMuted,
+                            fontSize = 13.sp,
+                        )
+                    }
+
+                    FilledActionButton(
+                        text = if (isSyncingSplits) "同步中..." else "立即同步折算记录",
+                        onClick = onSyncSplitsClick,
+                        enabled = !isSyncingSplits,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         }

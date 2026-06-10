@@ -350,6 +350,13 @@ fun StockLedgerApp(
                             }
                         },
                         ledgers = uiState.ledgers,
+                        onSplitClick = {
+                            ledgerViewModel.openTradeEntry(TradeType.SPLIT)
+                            navController.navigate(Routes.tradeEntry(TradeType.SPLIT))
+                        },
+                        isSyncingSplits = uiState.isSyncingSplits,
+                        splitsSyncStatusMessage = uiState.splitsSyncStatusMessage,
+                        onSyncSplitsClick = ledgerViewModel::syncAndFillSplits,
                     )
                 }
 
@@ -497,9 +504,6 @@ fun StockLedgerApp(
                         onLlmApiBaseUrlChange = ledgerViewModel::updateLlmApiBaseUrl,
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },
-                        isSyncingSplits = uiState.isSyncingSplits,
-                        splitsSyncStatusMessage = uiState.splitsSyncStatusMessage,
-                        onSyncSplitsClick = ledgerViewModel::syncAndFillSplits,
                     )
                 }
 

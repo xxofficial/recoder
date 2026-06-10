@@ -270,6 +270,7 @@ fun TradeActionButtons(
     onWithdrawClick: () -> Unit,
     onTransferClick: () -> Unit,
     onInterestClick: () -> Unit,
+    onSplitClick: () -> Unit = {},
     enabled: Boolean = true,
 ) {
     Column(
@@ -327,7 +328,11 @@ fun TradeActionButtons(
                 onClick = onInterestClick,
                 modifier = Modifier.weight(1f),
             )
-            Spacer(modifier = Modifier.weight(1f))
+            OutlineActionButton(
+                text = "拆股并股",
+                onClick = onSplitClick,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
