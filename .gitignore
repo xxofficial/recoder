@@ -14,3 +14,11 @@ Statements/
 .claude/
 .vscode/
 scratch/
+
+# Temporary files in root
+/*-ui.xml
+/*.png
+/extracted.txt
+/mapping.txt
+/scratch.*
+/test_*.py
