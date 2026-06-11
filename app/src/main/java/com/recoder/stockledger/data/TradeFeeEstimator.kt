@@ -372,7 +372,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         planId: String = defaultPlanId(platform),
         context: TradeFeeEstimateContext = TradeFeeEstimateContext(),
     ): TradeFeeEstimate {
@@ -380,7 +380,7 @@ object TradeFeeEstimator {
         if (profile.coverage == FeeEstimateCoverage.UNSUPPORTED) {
             return unsupportedEstimate(profile.note)
         }
-        if (!tradeType.isSecurityTrade || price <= 0.0 || quantity <= 0) {
+        if (!tradeType.isSecurityTrade || price <= 0.0 || quantity <= 0.0) {
             return unsupportedEstimate(profile.note)
         }
         return when (platform) {
@@ -399,7 +399,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
         Market.HK -> {
@@ -453,7 +453,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
         Market.HK -> {
@@ -495,7 +495,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
         context: TradeFeeEstimateContext,
     ): TradeFeeEstimate = when (market) {
@@ -556,7 +556,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
         Market.HK -> {
@@ -596,7 +596,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
         context: TradeFeeEstimateContext = TradeFeeEstimateContext(),
     ): TradeFeeEstimate = when (market) {
@@ -681,7 +681,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
         Market.HK -> {
@@ -724,7 +724,7 @@ object TradeFeeEstimator {
         market: Market,
         tradeType: TradeType,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         profile: TradeFeeProfile,
     ): TradeFeeEstimate = when (market) {
         Market.US -> {
@@ -888,7 +888,7 @@ object TradeFeeEstimator {
             )
     }
 
-    private fun amount(price: Double, quantity: Int): BigDecimal =
+    private fun amount(price: Double, quantity: Double): BigDecimal =
         bd(price).multiply(bd(quantity))
 
     private fun currency(market: Market, value: Double): String = when (market) {

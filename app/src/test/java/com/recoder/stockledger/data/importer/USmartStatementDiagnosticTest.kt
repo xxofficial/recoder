@@ -1,15 +1,15 @@
 package com.recoder.stockledger.data.importer
 
 import org.junit.Test
-import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.text.PDFTextStripper
+import org.apache.pdfbox.pdmodel.PDDocument
+import org.apache.pdfbox.text.PDFTextStripper
 import java.io.File
 
 class USmartStatementDiagnosticTest {
 
-    private val statementsDir = File("D:\\Project\\recoder\\Statements")
-    private val password = "581577"
-    private val outputDir = File("D:\\Project\\recoder\\Statements\\extracted")
+    private val statementsDir = File("../Statements/uSMART")
+    private val password = TestConfig.getPassword("usmart", "581577")
+    private val outputDir = File("../Statements/uSMART/extracted")
 
     @Test
     fun `extract text from all uSMART PDFs for diagnosis`() {

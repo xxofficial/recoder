@@ -22,7 +22,7 @@ data class TransactionEntity(
     val tradeDate: String,
     val tradeTime: String,
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val commission: Double,
     val tax: Double,
     val note: String,

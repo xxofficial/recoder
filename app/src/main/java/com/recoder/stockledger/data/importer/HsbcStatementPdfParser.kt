@@ -113,7 +113,7 @@ object HsbcStatementPdfParser {
                                     name = "代收保管费",
                                     currencyCode = curr,
                                     price = amount,
-                                    quantity = 1,
+                                    quantity = 1.0,
                                     amount = amount,
                                     tradeDate = date,
                                     tradeTime = getTradeTimeForMarket(Market.HK),
@@ -187,7 +187,7 @@ object HsbcStatementPdfParser {
                 val typeStr = refMatch.groupValues[2].trim().uppercase()
 
                 val tradeType = if (typeStr == "SAL" || qtyStr.endsWith("-")) TradeType.SELL else TradeType.BUY
-                val quantity = qtyStr.removeSuffix("-").replace(",", "").toIntOrNull() ?: 0
+                val quantity = qtyStr.removeSuffix("-").replace(",", "").toDoubleOrNull() ?: 0.0
                 val tradeDate = parseHsbcDate(tradeDateStr)
 
                 if (tradeDate != null && currentStockTicker.isNotEmpty()) {

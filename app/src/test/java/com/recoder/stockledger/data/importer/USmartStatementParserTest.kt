@@ -13,7 +13,7 @@ import org.json.JSONArray
 class USmartStatementParserTest {
 
     private val statementsDir = File("../Statements/uSMART")
-    private val password = "581577"
+    private val password = TestConfig.getPassword("usmart", "581577")
     private val goldenFile = File(statementsDir, "parsed_results.json")
 
     /**
@@ -150,7 +150,7 @@ class USmartStatementParserTest {
                 assertEquals("Trade $idx tradeType", extractValue(expectedBlock, "tradeType"), actual.tradeType.name)
                 assertEquals("Trade $idx market", extractValue(expectedBlock, "market"), actual.market.name)
                 assertEquals("Trade $idx price", extractValue(expectedBlock, "price").toDouble(), actual.price, 0.0001)
-                assertEquals("Trade $idx quantity", extractValue(expectedBlock, "quantity").toInt(), actual.quantity)
+                assertEquals("Trade $idx quantity", extractValue(expectedBlock, "quantity").toDouble(), actual.quantity, 0.0001)
                 assertEquals("Trade $idx amount", extractValue(expectedBlock, "amount").toDouble(), actual.amount, 0.01)
                 assertEquals("Trade $idx tradeDate", extractValue(expectedBlock, "tradeDate"), actual.tradeDate.toString())
                 assertEquals("Trade $idx commission", extractValue(expectedBlock, "commission").toDouble(), actual.commission ?: 0.0, 0.01)

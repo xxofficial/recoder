@@ -149,21 +149,21 @@ fun StockDetailRoute(
             runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
         }.sumOf { it.price * it.quantity }
 
-        val closingQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+        val closingQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0.0) { qty, txn ->
             val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
             when (tradeType) {
                 TradeType.BUY -> qty + txn.quantity
                 TradeType.SELL -> qty - txn.quantity
-                TradeType.SPLIT -> (qty * txn.price).toInt()
+                TradeType.SPLIT -> qty * txn.price
                 else -> qty
             }
         }
-        val openingQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+        val openingQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0.0) { qty, txn ->
             val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
             when (tradeType) {
                 TradeType.BUY -> qty + txn.quantity
                 TradeType.SELL -> qty - txn.quantity
-                TradeType.SPLIT -> (qty * txn.price).toInt()
+                TradeType.SPLIT -> qty * txn.price
                 else -> qty
             }
         }
@@ -206,7 +206,7 @@ fun StockDetailRoute(
             val expiryStr = firstTxn?.expiryDate?.takeIf { it.isNotBlank() } ?: ""
             val expiryDate = runCatching { LocalDate.parse(expiryStr) }.getOrNull()
 
-            val optClosingQty = optTxns.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+            val optClosingQty = optTxns.filter { it.tradeDate <= rangeEnd.toString() }.fold(0.0) { qty, txn ->
                 val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
                 when (tradeType) {
                     TradeType.BUY -> qty + txn.quantity
@@ -214,7 +214,7 @@ fun StockDetailRoute(
                     else -> qty
                 }
             }
-            val optOpeningQty = optTxns.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+            val optOpeningQty = optTxns.filter { it.tradeDate < rangeStart.toString() }.fold(0.0) { qty, txn ->
                 val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
                 when (tradeType) {
                     TradeType.BUY -> qty + txn.quantity
@@ -258,21 +258,21 @@ fun StockDetailRoute(
         runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
     }.sumOf { it.price * it.quantity * (if (it.assetType == "OPTION") 100.0 else 1.0) }
 
-    val closingStockQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+    val closingStockQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0.0) { qty, txn ->
         val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
         when (tradeType) {
             TradeType.BUY -> qty + txn.quantity
             TradeType.SELL -> qty - txn.quantity
-            TradeType.SPLIT -> (qty * txn.price).toInt()
+            TradeType.SPLIT -> qty * txn.price
             else -> qty
         }
     }
-    val openingStockQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+    val openingStockQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0.0) { qty, txn ->
         val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
         when (tradeType) {
             TradeType.BUY -> qty + txn.quantity
             TradeType.SELL -> qty - txn.quantity
-            TradeType.SPLIT -> (qty * txn.price).toInt()
+            TradeType.SPLIT -> qty * txn.price
             else -> qty
         }
     }
@@ -298,7 +298,7 @@ fun StockDetailRoute(
         val isExpiredAtEnd = expiryDate != null && rangeEnd.isAfter(expiryDate)
         val isExpiredAtStart = expiryDate != null && rangeStart.minusDays(1).isAfter(expiryDate)
 
-        val optClosingQty = optTxns.filter { it.tradeDate <= rangeEnd.toString() }.fold(0) { qty, txn ->
+        val optClosingQty = optTxns.filter { it.tradeDate <= rangeEnd.toString() }.fold(0.0) { qty, txn ->
             val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
             when (tradeType) {
                 TradeType.BUY -> qty + txn.quantity
@@ -306,7 +306,7 @@ fun StockDetailRoute(
                 else -> qty
             }
         }
-        val optOpeningQty = optTxns.filter { it.tradeDate < rangeStart.toString() }.fold(0) { qty, txn ->
+        val optOpeningQty = optTxns.filter { it.tradeDate < rangeStart.toString() }.fold(0.0) { qty, txn ->
             val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
             when (tradeType) {
                 TradeType.BUY -> qty + txn.quantity

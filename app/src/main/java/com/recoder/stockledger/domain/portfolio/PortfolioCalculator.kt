@@ -14,7 +14,7 @@ data class PortfolioTrade(
     val tradeDate: String,
     val tradeTime: String,
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val commission: Double,
     val tax: Double,
     val createdAt: Long,
@@ -31,7 +31,7 @@ data class PortfolioPosition(
     val symbol: String,
     val name: String,
     val market: Market,
-    val quantity: Int,
+    val quantity: Double,
     val averageCost: Double,
     val remainingCost: Double,
     val realizedProfit: Double,
@@ -112,7 +112,7 @@ class PortfolioCalculator {
                                 symbol = transaction.symbol,
                                 name = transaction.name,
                                 market = transaction.market,
-                                quantity = 0,
+                                quantity = 0.0,
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
@@ -122,7 +122,7 @@ class PortfolioCalculator {
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                         totalDepositCny += amountCny
@@ -139,7 +139,7 @@ class PortfolioCalculator {
                                 symbol = transaction.symbol,
                                 name = transaction.name,
                                 market = transaction.market,
-                                quantity = 0,
+                                quantity = 0.0,
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
@@ -149,7 +149,7 @@ class PortfolioCalculator {
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                         totalWithdrawCny += amountCny
@@ -158,12 +158,12 @@ class PortfolioCalculator {
                     TradeType.SPLIT -> {
                         val key = positionKey(transaction.symbol, transaction.market)
                         val current = positions[key]
-                        if (current != null && current.quantity != 0) {
-                            val nextQuantity = (current.quantity * transaction.price).toInt()
+                        if (current != null && current.quantity != 0.0) {
+                            val nextQuantity = current.quantity * transaction.price
                             val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
-                                averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
                             )
                         }
                     }
@@ -243,7 +243,7 @@ class PortfolioCalculator {
             symbol = transaction.symbol,
             name = transaction.name,
             market = transaction.market,
-            quantity = 0,
+            quantity = 0.0,
             averageCost = 0.0,
             remainingCost = 0.0,
             realizedProfit = 0.0,
@@ -274,12 +274,12 @@ class PortfolioCalculator {
 
     private fun applyBuy(current: PortfolioPosition, transaction: PortfolioTrade): PortfolioPosition {
         val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-        if (current.quantity < 0) {
+        if (current.quantity < 0.0) {
             val coverQuantity = minOf(-current.quantity, transaction.quantity)
             val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
             val coverFees = transaction.commission + transaction.tax
             val remainingBuyQty = transaction.quantity - coverQuantity
-            return if (remainingBuyQty > 0) {
+            return if (remainingBuyQty > 0.0) {
                 PortfolioPosition(
                     symbol = transaction.symbol,
                     name = transaction.name,
@@ -291,15 +291,15 @@ class PortfolioCalculator {
                 )
             } else {
                 val nextQuantity = current.quantity + transaction.quantity
-                val nextRemaining = if (nextQuantity == 0) {
+                val nextRemaining = if (nextQuantity == 0.0) {
                     0.0
                 } else {
-                    current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                    current.remainingCost * (nextQuantity / current.quantity)
                 }
                 current.copy(
                     quantity = nextQuantity,
                     remainingCost = nextRemaining,
-                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
                 )
             }
@@ -311,19 +311,19 @@ class PortfolioCalculator {
         return current.copy(
             quantity = nextQuantity,
             remainingCost = nextRemaining,
-            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+            averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
         )
     }
 
     private fun applySell(current: PortfolioPosition, transaction: PortfolioTrade): PortfolioPosition {
         val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-        if (current.quantity > 0) {
+        if (current.quantity > 0.0) {
             val closeQuantity = minOf(current.quantity, transaction.quantity)
             val removedCost = current.averageCost * closeQuantity * mult
             val closeProceeds = transaction.price * closeQuantity * mult
             val closeProfit = closeProceeds - removedCost
             val remainingSellQty = transaction.quantity - closeQuantity
-            return if (remainingSellQty > 0) {
+            return if (remainingSellQty > 0.0) {
                 PortfolioPosition(
                     symbol = transaction.symbol,
                     name = transaction.name,
@@ -335,11 +335,11 @@ class PortfolioCalculator {
                 )
             } else {
                 val nextQuantity = current.quantity - closeQuantity
-                val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
                 current.copy(
                     quantity = nextQuantity,
                     remainingCost = nextRemaining,
-                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                     realizedProfit = current.realizedProfit + closeProfit,
                 )
             }
@@ -350,7 +350,7 @@ class PortfolioCalculator {
         return current.copy(
             quantity = nextQuantity,
             remainingCost = nextRemaining,
-            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+            averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
         )
     }
 

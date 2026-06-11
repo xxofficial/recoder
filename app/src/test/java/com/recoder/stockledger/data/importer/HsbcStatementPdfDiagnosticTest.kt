@@ -34,12 +34,11 @@ class HsbcStatementPdfDiagnosticTest {
                     doc = PDDocument.load(file)
                 } catch (e: Exception) {
                     println("  Failed to load without password: ${e.message}. Trying common password...")
-                    // If it requires a password, maybe there is a known password? 
-                    // Let's try "581577" which was used in USmartStatementParserTest.kt
+                    // Let's try the configured password or "581577"
                     try {
-                        doc = PDDocument.load(file, "581577")
+                        doc = PDDocument.load(file, TestConfig.getPassword("hsbc", TestConfig.getPassword("usmart", "581577")))
                     } catch (e2: Exception) {
-                        println("  Failed with password 581577: ${e2.message}")
+                        println("  Failed with password: ${e2.message}")
                         throw e2
                     }
                 }

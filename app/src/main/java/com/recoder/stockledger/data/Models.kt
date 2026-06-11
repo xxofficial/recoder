@@ -123,20 +123,18 @@ enum class BrokerPlatform(
     val label: String,
     val shortLabel: String,
     val isConfigurable: Boolean = true,
+    val supportsPdfImport: Boolean = false,
 ) {
     UNSPECIFIED("未设置", "未", false),
     ALIPAY("支付宝", "支"),
     EAST_MONEY("东方财富", "东财"),
-    LONGBRIDGE("长桥证券", "长桥"),
-    HSBC("汇丰银行", "HS"),
-    USMART("uSMART", "uSMART"),
-    ZHUORUI("卓锐证券", "卓锐"),
+    LONGBRIDGE("长桥证券", "长桥", supportsPdfImport = true),
+    HSBC("汇丰银行", "HS", supportsPdfImport = true),
+    USMART("uSMART", "uSMART", supportsPdfImport = true),
+    ZHUORUI("卓锐证券", "卓锐", supportsPdfImport = true),
     CHIEF("致富证券", "致富"),
     SCHWAB("嘉信国际", "嘉信"),
     ;
-
-    val supportsPdfImport: Boolean
-        get() = this == ZHUORUI || this == USMART || this == HSBC
 
     companion object {
         val configurableEntries: List<BrokerPlatform> = entries.filter { it.isConfigurable }

@@ -23,7 +23,7 @@ class HsbcNotificationParserTest {
         assertEquals(Market.US, parsed.market)
         assertEquals("AMKR", parsed.symbol)
         assertEquals(77.50, parsed.price ?: 0.0, 0.0001)
-        assertEquals(2, parsed.quantity)
+        assertEquals(2.0, parsed.quantity, 0.0001)
         assertEquals("P899228", parsed.externalReference)
     }
 
@@ -55,7 +55,7 @@ class HsbcNotificationParserTest {
         assertEquals(Market.US, parsed.market)
         assertEquals("AMKR", parsed.symbol)
         assertEquals(77.50, parsed.price ?: 0.0, 0.0001)
-        assertEquals(2, parsed.quantity)
+        assertEquals(2.0, parsed.quantity, 0.0001)
         assertEquals("P899228", parsed.externalReference)
     }
 
@@ -96,7 +96,7 @@ class HsbcNotificationParserTest {
         assertEquals(HsbcNotificationStatus.EXECUTED, parsed.status)
         assertEquals("AMKOR TECHNOLOGY INC", parsed.name)
         assertEquals("AMKR", parsed.symbol)
-        assertEquals(2, parsed.quantity)
+        assertEquals(2.0, parsed.quantity, 0.0001)
     }
 
     @Test

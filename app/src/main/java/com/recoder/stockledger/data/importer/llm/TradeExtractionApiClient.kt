@@ -245,7 +245,7 @@ class OpenAiTradeExtractionClient(
             tradeDate = tradeDate,
             tradeTime = obj.optString("tradeTime", "00:00"),
             price = obj.optDouble("price", 0.0).coerceAtLeast(0.0),
-            quantity = obj.optInt("quantity", 0).coerceAtLeast(0),
+            quantity = obj.optDouble("quantity", 0.0).coerceAtLeast(0.0),
             commission = obj.optDouble("commission", 0.0).coerceAtLeast(0.0),
             tax = obj.optDouble("tax", 0.0).coerceAtLeast(0.0),
             note = obj.optString("note", ""),

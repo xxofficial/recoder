@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [TransactionEntity::class, QuoteSnapshotEntity::class, LedgerEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class StockLedgerDatabase : RoomDatabase() {
@@ -119,6 +119,62 @@ abstract class StockLedgerDatabase : RoomDatabase() {
                     ALTER TABLE transactions ADD COLUMN optionType TEXT
                     """.trimIndent()
                 )
+            }
+        }
+
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `transactions_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
+                        `tradeType` TEXT NOT NULL, 
+                        `platform` TEXT NOT NULL, 
+                        `sourceChannel` TEXT, 
+                        `externalReference` TEXT, 
+                        `market` TEXT NOT NULL, 
+                        `symbol` TEXT NOT NULL, 
+                        `name` TEXT NOT NULL, 
+                        `tradeDate` TEXT NOT NULL, 
+                        `tradeTime` TEXT NOT NULL, 
+                        `price` REAL NOT NULL, 
+                        `quantity` REAL NOT NULL, 
+                        `commission` REAL NOT NULL, 
+                        `tax` REAL NOT NULL, 
+                        `note` TEXT NOT NULL, 
+                        `createdAt` INTEGER NOT NULL, 
+                        `ledgerId` INTEGER NOT NULL, 
+                        `investorName` TEXT, 
+                        `assetType` TEXT NOT NULL, 
+                        `underlyingSymbol` TEXT, 
+                        `expiryDate` TEXT, 
+                        `strikePrice` REAL, 
+                        `optionType` TEXT
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO `transactions_new` (
+                        `id`, `tradeType`, `platform`, `sourceChannel`, `externalReference`, 
+                        `market`, `symbol`, `name`, `tradeDate`, `tradeTime`, `price`, 
+                        `quantity`, `commission`, `tax`, `note`, `createdAt`, `ledgerId`, 
+                        `investorName`, `assetType`, `underlyingSymbol`, `expiryDate`, 
+                        `strikePrice`, `optionType`
+                    )
+                    SELECT 
+                        `id`, `tradeType`, `platform`, `sourceChannel`, `externalReference`, 
+                        `market`, `symbol`, `name`, `tradeDate`, `tradeTime`, `price`, 
+                        CAST(`quantity` AS REAL), `commission`, `tax`, `note`, `createdAt`, `ledgerId`, 
+                        `investorName`, `assetType`, `underlyingSymbol`, `expiryDate`, 
+                        `strikePrice`, `optionType`
+                    FROM `transactions`
+                    """.trimIndent()
+                )
+                database.execSQL("DROP TABLE `transactions`")
+                database.execSQL("ALTER TABLE `transactions_new` RENAME TO `transactions`")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_symbol_market` ON `transactions` (`symbol`, `market`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_ledgerId` ON `transactions` (`ledgerId`)")
             }
         }
     }

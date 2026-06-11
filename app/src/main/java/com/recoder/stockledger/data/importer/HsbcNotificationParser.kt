@@ -18,7 +18,7 @@ data class ParsedHsbcNotification(
     val name: String,
     val currencyCode: String,
     val price: Double?,
-    val quantity: Int,
+    val quantity: Double,
     val externalReference: String,
     val rawText: String,
 )
@@ -36,7 +36,7 @@ object HsbcNotificationParser {
     private fun parseSms(rawText: String): ParsedHsbcNotification? {
         smsExecutedRegex.find(rawText)?.let { match ->
             val side = match.groupValues[1]
-            val quantity = match.groupValues[2].toIntOrNull() ?: return null
+            val quantity = match.groupValues[2].toDoubleOrNull() ?: return null
             val symbol = match.groupValues[3]
             val currencyCode = match.groupValues[4]
             val price = match.groupValues[5].sanitizeNumber() ?: return null
@@ -60,7 +60,7 @@ object HsbcNotificationParser {
 
         smsCancelledRegex.find(rawText)?.let { match ->
             val side = match.groupValues[1]
-            val quantity = match.groupValues[2].toIntOrNull() ?: return null
+            val quantity = match.groupValues[2].toDoubleOrNull() ?: return null
             val symbol = match.groupValues[3]
             val externalReference = match.groupValues[4]
             val (normalizedSymbol, market) = resolveSymbolAndMarket(symbol, null) ?: return null
@@ -92,7 +92,7 @@ object HsbcNotificationParser {
         val symbolBlock = emailSymbolRegex.find(rawText) ?: return null
         val securityName = symbolBlock.groupValues[1].trim().ifBlank { symbolBlock.groupValues[2].trim() }
         val symbol = symbolBlock.groupValues[2].trim()
-        val quantity = emailQuantityRegex.find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return null
+        val quantity = emailQuantityRegex.find(rawText)?.groupValues?.getOrNull(1)?.toDoubleOrNull() ?: return null
         val priceMatch = emailPriceRegex.find(rawText)
         val currencyCode = priceMatch?.groupValues?.getOrNull(1).orEmpty()
         val price = priceMatch?.groupValues?.getOrNull(2)?.sanitizeNumber()

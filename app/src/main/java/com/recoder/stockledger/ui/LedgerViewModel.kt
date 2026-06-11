@@ -91,7 +91,7 @@ private data class PositionComputation(
     val symbol: String,
     val name: String,
     val market: Market,
-    val quantity: Int,
+    val quantity: Double,
     val averageCost: Double,
     val remainingCost: Double,
     val realizedProfit: Double,
@@ -519,7 +519,7 @@ class LedgerViewModel(
                     dayProfit = "${formatSignedDisplayAmount(context.portfolio.dayProfitCny * ratio, selectedDisplayCurrency, repository.exchangeRates.value)} (${formatSignedPercent(context.portfolio.dayProfitPercent)})"
                 )
                 val holdings = context.portfolio.positions.values
-                    .filter { it.quantity != 0 }
+                    .filter { it.quantity != 0.0 }
                     .map { position ->
                         val quote = context.quotes.firstOrNull { it.symbol == position.symbol && it.market == position.market.name }
                         val currentPrice = quote?.currentPrice
@@ -529,7 +529,7 @@ class LedgerViewModel(
                         val mult = if (isOpt) 100.0 else 1.0
                         val scaledQty = position.quantity * ratio
                         val scaledCost = position.remainingCost * ratio
-                        val scaledAvgCost = if (position.quantity != 0) position.remainingCost / (position.quantity * mult) else 0.0
+                        val scaledAvgCost = if (position.quantity != 0.0) position.remainingCost / (position.quantity * mult) else 0.0
                         
                         val unrealized = currentPrice?.let { (it - scaledAvgCost) * scaledQty * mult }
                         val dayProfit = if (currentPrice != null && previousClose != null) {
@@ -1087,7 +1087,7 @@ class LedgerViewModel(
                                             name = name,
                                             tradeDate = event.date.toString(),
                                             price = event.ratio,
-                                            quantity = 1,
+                                            quantity = 1.0,
                                             commission = 0.0,
                                             tax = 0.0,
                                             note = "自动同步补全：折算比例 ${event.ratio}",
@@ -1547,7 +1547,7 @@ class LedgerViewModel(
             name = finalName,
             tradeDate = currentDraft.tradeDate,
             price = parseDecimal(currentDraft.priceLabel),
-            quantity = if (currentDraft.selectedType.isSecurityTrade) parseQuantity(currentDraft.quantityLabel) else 1,
+            quantity = if (currentDraft.selectedType.isSecurityTrade) parseQuantity(currentDraft.quantityLabel) else 1.0,
             commission = if (currentDraft.selectedType.isSecurityTrade) parseDecimal(currentDraft.commissionLabel) else 0.0,
             tax = if (currentDraft.selectedType.isSecurityTrade) parseDecimal(currentDraft.taxLabel) else 0.0,
             note = currentDraft.note.trim(),
@@ -2232,9 +2232,9 @@ class LedgerViewModel(
         displayCurrency: DisplayCurrency,
         exchangeRates: ExchangeRates,
     ): PortfolioSummary {
-        val aCount = portfolio.positions.values.count { it.market == Market.A_SHARE && it.quantity != 0 }
-        val hkCount = portfolio.positions.values.count { it.market == Market.HK && it.quantity != 0 }
-        val usCount = portfolio.positions.values.count { it.market == Market.US && it.quantity != 0 }
+        val aCount = portfolio.positions.values.count { it.market == Market.A_SHARE && it.quantity != 0.0 }
+        val hkCount = portfolio.positions.values.count { it.market == Market.HK && it.quantity != 0.0 }
+        val usCount = portfolio.positions.values.count { it.market == Market.US && it.quantity != 0.0 }
         return PortfolioSummary(
             totalAssets = formatDisplayAmount(portfolio.totalAssetsCny, displayCurrency, exchangeRates),
             totalCost = formatDisplayAmount(portfolio.netInflowCny, displayCurrency, exchangeRates),
@@ -2287,7 +2287,7 @@ class LedgerViewModel(
     private fun buildSellCandidates(
         positions: Map<String, PositionComputation>,
     ): List<SellCandidateUiModel> = positions.values
-        .filter { it.quantity != 0 }
+        .filter { it.quantity != 0.0 }
         .sortedByDescending { it.quantity }
         .map { position ->
             SellCandidateUiModel(
@@ -2506,14 +2506,14 @@ class LedgerViewModel(
                     }
 
                     TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT, TradeType.INTEREST -> {
-                        val sign = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
+                        val sign = if (tradeType == TradeType.TRANSFER_IN) 1.0 else -1.0
                         if (tradeType == TradeType.INTEREST) {
                             val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
                             cashBalanceCny -= amountCny
                         } else {
                             val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                             val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                            if (sign > 0) {
+                            if (sign > 0.0) {
                                 totalDepositCny += amountCny
                                 dailyNetFlowCny += amountCny
                             } else {
@@ -2528,7 +2528,7 @@ class LedgerViewModel(
                                     symbol = transaction.symbol,
                                     name = transaction.name,
                                     market = market,
-                                    quantity = 0,
+                                    quantity = 0.0,
                                     averageCost = 0.0,
                                     remainingCost = 0.0,
                                     realizedProfit = 0.0,
@@ -2536,11 +2536,11 @@ class LedgerViewModel(
                                     underlyingSymbol = transaction.underlyingSymbol,
                                 )
                                 val nextQuantity = current.quantity + (sign * transaction.quantity)
-                                val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (sign * (transaction.price * transaction.quantity * mult))
+                                val nextRemaining = if (nextQuantity <= 0.0) 0.0 else current.remainingCost + (sign * (transaction.price * transaction.quantity * mult))
                                 positions[key] = current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                    averageCost = if (nextQuantity <= 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
                         }
@@ -2549,12 +2549,12 @@ class LedgerViewModel(
                     TradeType.SPLIT -> {
                         val key = positionKey(transaction.symbol, market)
                         val current = positions[key]
-                        if (current != null && current.quantity != 0) {
-                            val nextQuantity = (current.quantity * transaction.price).toInt()
+                        if (current != null && current.quantity != 0.0) {
+                            val nextQuantity = current.quantity * transaction.price
                             val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
-                                averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
                             )
                         }
                     }
@@ -2569,7 +2569,7 @@ class LedgerViewModel(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
                                 market = market,
-                                quantity = 0,
+                                quantity = 0.0,
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
@@ -2578,15 +2578,15 @@ class LedgerViewModel(
                             )
                         val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         if (tradeType == TradeType.BUY) {
-                            if (current.quantity < 0) {
+                            if (current.quantity < 0.0) {
                                 // Covering short position
-                                val coverQuantity = minOf(-current.quantity, transaction.quantity)
+                                val coverQuantity = minOf(-current.quantity, transaction.quantity.toDouble())
                                 val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
                                 val coverFees = transaction.commission + transaction.tax
                                 val remainingBuyQty = transaction.quantity - coverQuantity
                                 val totalCost = transaction.price * transaction.quantity * mult + coverFees
                                 cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
-                                if (remainingBuyQty > 0) {
+                                if (remainingBuyQty > 0.0) {
                                     positions[key] = PositionComputation(
                                         symbol = transaction.symbol,
                                         name = transaction.name,
@@ -2600,11 +2600,11 @@ class LedgerViewModel(
                                     )
                                 } else {
                                     val nextQuantity = current.quantity + transaction.quantity
-                                    val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                                    val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost * (nextQuantity / current.quantity)
                                     positions[key] = current.copy(
                                         quantity = nextQuantity,
                                         remainingCost = nextRemaining,
-                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                        averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                         realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                     )
                                 }
@@ -2616,20 +2616,20 @@ class LedgerViewModel(
                                 positions[key] = current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
                         } else {
                             // SELL
-                            if (current.quantity > 0) {
-                                val closeQuantity = minOf(current.quantity, transaction.quantity)
+                            if (current.quantity > 0.0) {
+                                val closeQuantity = minOf(current.quantity, transaction.quantity.toDouble())
                                 val removedCost = current.averageCost * closeQuantity * mult
                                 val closeProceeds = transaction.price * closeQuantity * mult
                                 val closeProfit = closeProceeds - removedCost
                                 val remainingSellQty = transaction.quantity - closeQuantity
                                 val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                                 cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
-                                if (remainingSellQty > 0) {
+                                if (remainingSellQty > 0.0) {
                                     positions[key] = PositionComputation(
                                         symbol = transaction.symbol,
                                         name = transaction.name,
@@ -2643,11 +2643,11 @@ class LedgerViewModel(
                                     )
                                 } else {
                                     val nextQuantity = current.quantity - closeQuantity
-                                    val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                                    val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
                                     positions[key] = current.copy(
                                         quantity = nextQuantity,
                                         remainingCost = nextRemaining,
-                                        averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                        averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                         realizedProfit = current.realizedProfit + closeProfit,
                                     )
                                 }
@@ -2659,7 +2659,7 @@ class LedgerViewModel(
                                 positions[key] = current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
                         }
@@ -2679,7 +2679,7 @@ class LedgerViewModel(
             }
 
             val holdingsValueCny = positions.values.sumOf { position ->
-                if (position.quantity == 0) return@sumOf 0.0
+                if (position.quantity == 0.0) return@sumOf 0.0
                 val key = positionKey(position.symbol, position.market)
                 val closePrice = latestCloseByPosition[key] ?: position.averageCost
                 val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
@@ -2729,7 +2729,7 @@ class LedgerViewModel(
                 associatedPositions.forEach { position ->
                     val posKey = positionKey(position.symbol, position.market)
                     realizedCny += convertToCny(position.realizedProfit, position.market, exchangeRates)
-                    if (position.quantity != 0) {
+                    if (position.quantity != 0.0) {
                         val closePrice = latestCloseByPosition[posKey] ?: position.averageCost
                         unrealizedCny += convertToCny((closePrice - position.averageCost) * position.quantity, position.market, exchangeRates)
                     }
@@ -2818,7 +2818,7 @@ class LedgerViewModel(
                             symbol = transaction.symbol,
                             name = transaction.name,
                             market = market,
-                            quantity = 0,
+                            quantity = 0.0,
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
@@ -2850,11 +2850,11 @@ class LedgerViewModel(
                             )
                         } else {
                             val nextQuantity = current.quantity + transaction.quantity
-                            val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                            val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost * (nextQuantity / current.quantity)
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 realizedProfit = current.realizedProfit + coverProfit - coverFees,
                             )
                         }
@@ -2865,7 +2865,7 @@ class LedgerViewModel(
                         positions[key] = current.copy(
                             quantity = nextQuantity,
                             remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                            averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                         )
                     }
                 }
@@ -2879,7 +2879,7 @@ class LedgerViewModel(
                             symbol = transaction.symbol,
                             name = transaction.name,
                             market = market,
-                            quantity = 0,
+                            quantity = 0.0,
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
@@ -2912,11 +2912,11 @@ class LedgerViewModel(
                             )
                         } else {
                             val nextQuantity = current.quantity - closeQuantity
-                            val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                            val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 realizedProfit = current.realizedProfit + closeProfit,
                             )
                         }
@@ -2928,7 +2928,7 @@ class LedgerViewModel(
                         positions[key] = current.copy(
                             quantity = nextQuantity,
                             remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                            averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                         )
                     }
                 }
@@ -2955,7 +2955,7 @@ class LedgerViewModel(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
                                 market = market,
-                                quantity = 0,
+                                quantity = 0.0,
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
@@ -2978,12 +2978,12 @@ class LedgerViewModel(
 
                 TradeType.SPLIT -> {
                     val current = positions[key]
-                    if (current != null && current.quantity != 0) {
-                        val nextQuantity = (current.quantity * transaction.price).toInt()
+                    if (current != null && current.quantity != 0.0) {
+                        val nextQuantity = current.quantity * transaction.price
                         val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         positions[key] = current.copy(
                             quantity = nextQuantity,
-                            averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
                         )
                     }
                 }
@@ -2994,7 +2994,7 @@ class LedgerViewModel(
         if (realtimeDate != null) {
             activityDates += realtimeDate
             positions.values.forEach { position ->
-                if (position.quantity == 0) return@forEach
+                if (position.quantity == 0.0) return@forEach
                 val key = positionKey(position.symbol, position.market)
                 val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
                 val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
@@ -3221,7 +3221,7 @@ class LedgerViewModel(
                             symbol = transaction.symbol,
                             name = transaction.name,
                             market = market,
-                            quantity = 0,
+                            quantity = 0.0,
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
@@ -3255,7 +3255,7 @@ class LedgerViewModel(
                             symbol = transaction.symbol,
                             name = transaction.name,
                             market = market,
-                            quantity = 0,
+                            quantity = 0.0,
                             averageCost = 0.0,
                             remainingCost = 0.0,
                             realizedProfit = 0.0,
@@ -3289,11 +3289,11 @@ class LedgerViewModel(
                             } else {
                                 // Partial or full cover, no new position
                                 val nextQuantity = current.quantity + transaction.quantity
-                                val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
+                                val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost * (nextQuantity / current.quantity)
                                 current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
                                 )
                             }
@@ -3306,7 +3306,7 @@ class LedgerViewModel(
                             current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                     } else {
@@ -3336,11 +3336,11 @@ class LedgerViewModel(
                             } else {
                                 // Partial or full close of long
                                 val nextQuantity = current.quantity - closeQuantity
-                                val nextRemaining = if (nextQuantity == 0) 0.0 else current.remainingCost - removedCost
+                                val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
                                 current.copy(
                                     quantity = nextQuantity,
                                     remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                     realizedProfit = current.realizedProfit + closeProfit,
                                 )
                             }
@@ -3353,7 +3353,7 @@ class LedgerViewModel(
                             current.copy(
                                 quantity = nextQuantity,
                                 remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                             )
                         }
                     }
@@ -3361,12 +3361,12 @@ class LedgerViewModel(
                 TradeType.SPLIT -> {
                     val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
-                    if (current != null && current.quantity != 0) {
-                        val nextQuantity = (current.quantity * transaction.price).toInt()
+                    if (current != null && current.quantity != 0.0) {
+                        val nextQuantity = current.quantity * transaction.price
                         val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         positions[key] = current.copy(
                             quantity = nextQuantity,
-                            averageCost = if (nextQuantity == 0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
                         )
                     }
                 }
@@ -3375,7 +3375,7 @@ class LedgerViewModel(
 
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
         val holdings = positions.values
-            .filter { it.quantity != 0 }
+            .filter { it.quantity != 0.0 }
             .map { position ->
                 val quote = quoteMap[positionKey(position.symbol, position.market)]
                 val currentPrice = quote?.currentPrice
@@ -3401,7 +3401,7 @@ class LedgerViewModel(
                 val marketValue = (currentPrice ?: position.averageCost) * position.quantity * mult
 
                 val unit = if (isOpt) "张" else "股"
-                val qtyVal = position.quantity.toDouble()
+                val qtyVal = position.quantity
                 val formattedQty = String.format("%.2f", qtyVal).removeSuffix(".00").removeSuffix("0").removeSuffix(".")
 
                 HoldingUiModel(
@@ -3724,7 +3724,10 @@ class LedgerViewModel(
         .removeSuffix(".US")
         .replace("_", ".")
 
-    private fun parseQuantity(value: String): Int = value.filter { it.isDigit() }.toIntOrNull() ?: 0
+    private fun parseQuantity(value: String): Double {
+        val cleaned = value.replace(",", "").replace(Regex("[^0-9.]"), "")
+        return cleaned.toDoubleOrNull() ?: 0.0
+    }
 
     private fun positionKey(symbol: String, market: Market): String = "${market.name}:$symbol"
 
@@ -4271,7 +4274,7 @@ private data class RefreshMeta(
         symbol: String,
         name: String,
         market: Market,
-        quantity: Int,
+        quantity: Double,
         amount: Double,
         currency: DisplayCurrency,
         sourcePlatform: BrokerPlatform,
@@ -4352,7 +4355,7 @@ private data class RefreshMeta(
                     tradeDate = date,
                     tradeTime = time,
                     price = amount,
-                    quantity = 1,
+                    quantity = 1.0,
                     commission = 0.0,
                     tax = 0.0,
                     note = "资金划转至 ${targetPlatform.label}",
@@ -4370,7 +4373,7 @@ private data class RefreshMeta(
                     tradeDate = date,
                     tradeTime = time,
                     price = amount,
-                    quantity = 1,
+                    quantity = 1.0,
                     commission = 0.0,
                     tax = 0.0,
                     note = "资金从 ${sourcePlatform.label} 划转",

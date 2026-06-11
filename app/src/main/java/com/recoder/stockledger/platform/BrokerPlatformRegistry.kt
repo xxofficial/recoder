@@ -44,12 +44,16 @@ class BrokerPlatformRegistry(
             DefaultBrokerPlatformAdapter(
                 platform = BrokerPlatform.LONGBRIDGE,
                 supportedMarkets = setOf(Market.HK, Market.US),
-                supportedImportChannels = emptySet(),
+                supportedImportChannels = setOf(ImportSourceChannel.PDF_STATEMENT),
             ),
             DefaultBrokerPlatformAdapter(
                 platform = BrokerPlatform.HSBC,
                 supportedMarkets = setOf(Market.HK, Market.US),
-                supportedImportChannels = setOf(ImportSourceChannel.HSBC_SMS, ImportSourceChannel.HSBC_EMAIL),
+                supportedImportChannels = setOf(
+                    ImportSourceChannel.HSBC_SMS,
+                    ImportSourceChannel.HSBC_EMAIL,
+                    ImportSourceChannel.PDF_STATEMENT,
+                ),
             ),
             DefaultBrokerPlatformAdapter(
                 platform = BrokerPlatform.USMART,

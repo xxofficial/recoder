@@ -83,7 +83,7 @@ data class TradeDraftInput(
     val name: String,
     val tradeDate: String,
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val commission: Double,
     val tax: Double,
     val note: String,
@@ -534,7 +534,7 @@ class DefaultLedgerRepository(
                         tradeDate = item.optString("tradeDate"),
                         tradeTime = item.optString("tradeTime"),
                         price = item.optDouble("price"),
-                        quantity = item.optInt("quantity"),
+                        quantity = item.optDouble("quantity"),
                         commission = item.optDouble("commission"),
                         tax = item.optDouble("tax"),
                         note = item.optString("note"),
@@ -810,6 +810,9 @@ class DefaultLedgerRepository(
             BrokerPlatform.HSBC -> {
                 com.recoder.stockledger.data.importer.HsbcStatementPdfParser.parse(inputStream, password)
             }
+            BrokerPlatform.LONGBRIDGE -> {
+                com.recoder.stockledger.data.importer.LongBridgeStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
+            }
             else -> {
                 ZhuoruiStatementPdfParser.parsePdf(inputStream, password, context.cacheDir)
             }
@@ -908,6 +911,11 @@ class DefaultLedgerRepository(
                     tradeTime = parsed.tradeTime ?: "00:00",
                     createdAt = System.currentTimeMillis(),
                     ledgerId = ledgerId,
+                    assetType = parsed.assetType,
+                    underlyingSymbol = parsed.underlyingSymbol,
+                    expiryDate = parsed.expiryDate,
+                    strikePrice = parsed.strikePrice,
+                    optionType = parsed.optionType,
                 ),
             )
             results.add(
@@ -1020,6 +1028,11 @@ class DefaultLedgerRepository(
                     tradeTime = parsed.tradeTime ?: "00:00",
                     createdAt = System.currentTimeMillis(),
                     ledgerId = ledgerId,
+                    assetType = parsed.assetType,
+                    underlyingSymbol = parsed.underlyingSymbol,
+                    expiryDate = parsed.expiryDate,
+                    strikePrice = parsed.strikePrice,
+                    optionType = parsed.optionType,
                 ),
             )
             results.add(
@@ -1172,18 +1185,18 @@ class DefaultLedgerRepository(
         // Filter requests: only refresh quotes for active holdings (quantity != 0)
         val activeKeys = securityTransactions.groupBy { it.market to it.symbol }.filter { (_, txns) ->
             val sorted = txns.sortedWith(compareBy({ it.tradeDate }, { it.tradeTime }, { it.id }))
-            val finalQty = sorted.fold(0) { qty, txn ->
+            val finalQty = sorted.fold(0.0) { qty, txn ->
                 val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
                 when (tradeType) {
                     TradeType.BUY -> qty + txn.quantity
                     TradeType.SELL -> qty - txn.quantity
                     TradeType.TRANSFER_IN -> qty + txn.quantity
                     TradeType.TRANSFER_OUT -> qty - txn.quantity
-                    TradeType.SPLIT -> (qty * txn.price).toInt()
+                    TradeType.SPLIT -> qty * txn.price
                     else -> qty
                 }
             }
-            finalQty != 0
+            finalQty != 0.0
         }.keys
 
         val activeRequests = requests.filter { (it.market.name to it.symbol) in activeKeys }
@@ -1350,7 +1363,7 @@ class DefaultLedgerRepository(
         platform: BrokerPlatform,
         market: Market,
         price: Double,
-        quantity: Int,
+        quantity: Double,
         tradeDate: String,
         tradeTime: String,
     ): TradeFeeEstimate {

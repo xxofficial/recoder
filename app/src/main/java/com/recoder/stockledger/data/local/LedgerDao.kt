@@ -131,7 +131,7 @@ interface LedgerDao {
         market: String,
         tradeDate: String,
         tradeType: String,
-        quantity: Int,
+        quantity: Double,
         price: Double,
     ): List<TransactionEntity>
 

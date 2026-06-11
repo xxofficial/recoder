@@ -38,6 +38,7 @@ class AppContainer(
             StockLedgerDatabase.MIGRATION_2_3,
             StockLedgerDatabase.MIGRATION_3_4,
             StockLedgerDatabase.MIGRATION_4_5,
+            StockLedgerDatabase.MIGRATION_5_6,
         )
             .fallbackToDestructiveMigration()
             .build()

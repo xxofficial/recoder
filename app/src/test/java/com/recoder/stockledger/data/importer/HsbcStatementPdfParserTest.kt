@@ -12,7 +12,7 @@ import com.recoder.stockledger.data.Market
 class HsbcStatementPdfParserTest {
 
     private val statementsDir = File("e:\\AndroidWorkSpace\\recoder\\Statements\\hsbc")
-    private val password = "581577"
+    private val password = TestConfig.getPassword("hsbc", "581577")
 
     @Before
     fun setUp() {

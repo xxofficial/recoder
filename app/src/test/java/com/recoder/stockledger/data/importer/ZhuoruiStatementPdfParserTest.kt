@@ -124,7 +124,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals("美光科技", trade.name)
             assertEquals(Market.US, trade.market)
             assertEquals("USD", trade.currencyCode)
-            assertEquals(1, trade.quantity)
+            assertEquals(1.0, trade.quantity, 0.0001)
             assertEquals(380.0, trade.price, 0.01)
             assertEquals(381.39, trade.amount, 0.01)
             assertEquals(LocalDate.of(2026, 2, 9), trade.tradeDate)
@@ -137,7 +137,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals("iShares黄金信托ETF", trade.name)
             assertEquals(Market.US, trade.market)
             assertEquals("USD", trade.currencyCode)
-            assertEquals(4, trade.quantity)
+            assertEquals(4.0, trade.quantity, 0.0001)
             assertEquals(94.02, trade.price, 0.01)
             assertEquals(374.68, trade.amount, 0.01)
             assertEquals(LocalDate.of(2026, 2, 9), trade.tradeDate)
@@ -157,7 +157,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals("富途控股", trade.name)
             assertEquals(Market.US, trade.market)
             assertEquals("USD", trade.currencyCode)
-            assertEquals(1, trade.quantity)
+            assertEquals(1.0, trade.quantity, 0.0001)
             assertEquals(176.0, trade.price, 0.01)
             assertEquals(177.39, trade.amount, 0.01)
             assertEquals(LocalDate.of(2026, 1, 16), trade.tradeDate)
@@ -181,7 +181,7 @@ class ZhuoruiStatementPdfParserTest {
         trades[0].let { trade ->
             assertEquals(TradeType.BUY, trade.tradeType)
             assertEquals("MU", trade.symbol)
-            assertEquals(1, trade.quantity)
+            assertEquals(1.0, trade.quantity, 0.0001)
             assertEquals(380.0, trade.price, 0.01)
             assertEquals(381.39, trade.amount, 0.01)
         }
@@ -195,7 +195,7 @@ class ZhuoruiStatementPdfParserTest {
         trades[0].let { trade ->
             assertEquals(TradeType.BUY, trade.tradeType)
             assertEquals("FUTU", trade.symbol)
-            assertEquals(1, trade.quantity)
+            assertEquals(1.0, trade.quantity, 0.0001)
             assertEquals(176.0, trade.price, 0.01)
             assertEquals(177.39, trade.amount, 0.01)
         }
@@ -207,12 +207,12 @@ class ZhuoruiStatementPdfParserTest {
 
         assertEquals(2, trades.size)
 
-        val trade3 = trades.find { it.quantity == 3 }
+        val trade3 = trades.find { it.quantity == 3.0 }
         assertEquals(TradeType.BUY, trade3?.tradeType)
         assertEquals("RDW", trade3?.symbol)
         assertEquals(89.025, trade3?.price ?: 0.0, 0.001)
 
-        val trade27 = trades.find { it.quantity == 27 }
+        val trade27 = trades.find { it.quantity == 27.0 }
         assertEquals(TradeType.BUY, trade27?.tradeType)
         assertEquals("RDW", trade27?.symbol)
         assertEquals(10.0, trade27?.price ?: 0.0, 0.01)
@@ -321,7 +321,7 @@ class ZhuoruiStatementPdfParserTest {
             assertEquals(TradeType.BUY, trade.tradeType)
             assertEquals("GOOG", trade.symbol)
             assertEquals("谷歌", trade.name)
-            assertEquals(1, trade.quantity)
+            assertEquals(1.0, trade.quantity, 0.0001)
             assertEquals(318.499, trade.price, 0.001)
             assertEquals(319.89, trade.amount, 0.01)
         }

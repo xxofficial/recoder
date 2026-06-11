@@ -16,7 +16,7 @@ data class ParsedZhuoruiEmail(
     val name: String,
     val currencyCode: String,
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val tradeDateTime: LocalDateTime,
     val externalReference: String,
     val rawText: String,
@@ -82,7 +82,7 @@ object ZhuoruiEmailParser {
             Log.w(TAG, "parse: 成交金额解析失败: '${detailTokens.getOrNull(detailTokens.lastIndex - 2)}'")
             return null
         }
-        val quantity = detailTokens.getOrNull(detailTokens.lastIndex - 3)?.sanitizeInteger()
+        val quantity = detailTokens.getOrNull(detailTokens.lastIndex - 3)?.sanitizeNumber()
         if (quantity == null) {
             Log.w(TAG, "parse: 成交数量解析失败: '${detailTokens.getOrNull(detailTokens.lastIndex - 3)}'")
             return null
@@ -205,18 +205,20 @@ object ZhuoruiEmailParser {
         accountId: String,
         tradeType: TradeType,
         symbol: String,
-        quantity: Int,
+        quantity: Double,
         price: Double,
         tradeDateTime: LocalDateTime,
     ): String {
         val normalizedPrice = price.toString().replace(".", "_")
+        val qtyStr = if (quantity % 1.0 == 0.0) quantity.toInt().toString() else quantity.toString()
+        val normalizedQuantity = qtyStr.replace(".", "_")
         return listOf(
             "ZR",
             accountId,
             tradeDateTime.format(referenceFormatter),
             tradeType.name,
             symbol.replace(".", "_"),
-            quantity.toString(),
+            normalizedQuantity,
             normalizedPrice,
         ).joinToString(separator = "-")
     }

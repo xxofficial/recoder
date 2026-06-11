@@ -150,7 +150,7 @@ object USmartStatementPdfParser {
     private data class RawTrade(
         val market: Market,
         val tradeType: TradeType,
-        val quantity: Int,
+        val quantity: Double,
         val currency: String,
         val price: Double,
         val amount: Double,
@@ -238,7 +238,7 @@ object USmartStatementPdfParser {
                             name = "融资利息",
                             currencyCode = curr,
                             price = amount,
-                            quantity = 1,
+                            quantity = 1.0,
                             amount = amount,
                             tradeDate = tDate,
                             tradeTime = tradeTime,
@@ -323,8 +323,9 @@ object USmartStatementPdfParser {
                     val market = t.market
                     val symbol = resolveSymbol(currentSymbol!!, market)
                     val dateStr = t.tradeDate.format(dateFormatter)
-                    val priceStr = String.format("%.4f", t.price)
-                    val tradeRef = "YL-$dateStr-$symbol-${t.tradeType.name}-${t.quantity}-$priceStr-$idx"
+                    val qtyStrForRef = String.format("%.4f", t.quantity).removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix(".")
+                    val priceStr = String.format("%.4f", t.price).removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix(".")
+                    val tradeRef = "YL-$dateStr-$symbol-${t.tradeType.name}-${qtyStrForRef}-$priceStr-$idx"
                     
                     val tradeTime = getTradeTimeForMarket(market)
                     val hour = getHourForMarket(market)
@@ -399,7 +400,7 @@ object USmartStatementPdfParser {
                     if (tradeMatch != null) {
                         val marketStr = tradeMatch.groupValues[1]
                         val dirStr = tradeMatch.groupValues[2]
-                        val qty = tradeMatch.groupValues[3].replace(",", "").toInt()
+                        val qty = tradeMatch.groupValues[3].replace(",", "").toDouble()
                         val curr = tradeMatch.groupValues[4]
                         val price = parseOcrNumber(tradeMatch.groupValues[5])
                         val amount = parseOcrNumber(tradeMatch.groupValues[6])
@@ -450,7 +451,7 @@ object USmartStatementPdfParser {
                 if (currentSymbol != null) {
                     val marketStr = tradeMatch.groupValues[1]
                     val dirStr = tradeMatch.groupValues[2]
-                    val qty = tradeMatch.groupValues[3].replace(",", "").toInt()
+                    val qty = tradeMatch.groupValues[3].replace(",", "").toDouble()
                     val curr = tradeMatch.groupValues[4]
                     val price = parseOcrNumber(tradeMatch.groupValues[5])
                     val amount = parseOcrNumber(tradeMatch.groupValues[6])
@@ -715,7 +716,7 @@ object USmartStatementPdfParser {
                             name = "融资利息",
                             currencyCode = curr,
                             price = amount,
-                            quantity = 1,
+                            quantity = 1.0,
                             amount = amount,
                             tradeDate = tradeDate,
                             tradeTime = tradeTime,
@@ -760,7 +761,7 @@ object USmartStatementPdfParser {
                             name = "融资利息",
                             currencyCode = curr,
                             price = amount,
-                            quantity = 1,
+                            quantity = 1.0,
                             amount = amount,
                             tradeDate = tradeDate,
                             tradeTime = tradeTime,

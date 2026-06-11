@@ -19,7 +19,7 @@ data class ParsedStatementTrade(
     val name: String,
     val currencyCode: String,
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val amount: Double,
     val tradeDate: LocalDate,
     val tradeTime: String? = null,
@@ -29,6 +29,11 @@ data class ParsedStatementTrade(
     val tradeRef: String,
     val rawLine: String,
     val createdAt: Long? = null,
+    val assetType: String = "STOCK",
+    val underlyingSymbol: String? = null,
+    val expiryDate: String? = null,
+    val strikePrice: Double? = null,
+    val optionType: String? = null,
 )
 
 object ZhuoruiStatementPdfParser {
@@ -300,14 +305,15 @@ object ZhuoruiStatementPdfParser {
             return null
         }
 
-        val quantity = numbers[0].toInt()
+        val quantity = numbers[0]
         val price = numbers[1]
         val clearingBalance = numbers[2]
         val amount = kotlin.math.abs(clearingBalance)
 
         val priceStr = String.format("%.4f", price)
         val symbol = resolveSymbol(stockCode, market)
-        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${quantity}-${priceStr}"
+        val qtyStrForRef = String.format("%.4f", quantity).removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix(".")
+        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${qtyStrForRef}-${priceStr}"
 
         Log.d(TAG, "格式A 解析成功: $direction $symbol($stockName) x$quantity @$price amount=$amount $currencyCode")
         return ParsedStatementTrade(
@@ -449,7 +455,7 @@ object ZhuoruiStatementPdfParser {
         val priceToken = tokens[tokens.size - 2]
         val amountToken = tokens[tokens.size - 1]
 
-        val quantity = qtyToken.replace(",", "").toIntOrNull()
+        val quantity = qtyToken.replace(",", "").toDoubleOrNull()
         val price = priceToken.replace(",", "").toDoubleOrNull()
         val clearingBalance = amountToken.replace(",", "").toDoubleOrNull()
 
@@ -470,7 +476,8 @@ object ZhuoruiStatementPdfParser {
 
         val priceStr = String.format("%.4f", price)
         val symbol = resolveSymbol(stockCode, defaultMarket)
-        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${quantity}-${priceStr}-$ref"
+        val qtyStrForRef = String.format("%.4f", quantity).removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix("0").removeSuffix(".")
+        val tradeRef = "${tradeDateStr.replace("-", "")}-${stockCode}-${direction.name}-${qtyStrForRef}-${priceStr}-$ref"
 
         Log.d(TAG, "格式B 解析成功: $direction $symbol($stockName) x$quantity @$price")
         return ParsedStatementTrade(

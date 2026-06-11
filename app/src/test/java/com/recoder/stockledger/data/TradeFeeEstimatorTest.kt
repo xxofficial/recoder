@@ -12,7 +12,7 @@ class TradeFeeEstimatorTest {
             market = Market.HK,
             tradeType = TradeType.BUY,
             price = 10.0,
-            quantity = 100,
+            quantity = 100.0,
         )
 
         assertEquals(100.00, estimate.commission, 0.0001)
@@ -27,7 +27,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.SELL,
             price = 42.94,
-            quantity = 25,
+            quantity = 25.0,
         )
 
         assertEquals(1.98, estimate.commission, 0.0001)
@@ -42,7 +42,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.SELL,
             price = 42.94,
-            quantity = 25,
+            quantity = 25.0,
         )
 
         assertEquals(18.00, estimate.commission, 0.0001)
@@ -57,7 +57,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.BUY,
             price = 0.35,
-            quantity = 1000,
+            quantity = 1000.0,
         )
 
         assertEquals(3.50, estimate.commission, 0.0001)
@@ -75,7 +75,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.BUY,
             price = 50.0,
-            quantity = 100,
+            quantity = 100.0,
             planId = trade25PlanId,
             context = TradeFeeEstimateContext(monthlyTurnoverHkdBeforeTrade = 120_000.0),
         )
@@ -94,7 +94,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.BUY,
             price = 50.0,
-            quantity = 100,
+            quantity = 100.0,
             planId = trade25PlanId,
             context = TradeFeeEstimateContext(monthlyTurnoverHkdBeforeTrade = 260_000.0),
         )
@@ -112,7 +112,7 @@ class TradeFeeEstimatorTest {
             market = Market.HK,
             tradeType = TradeType.BUY,
             price = 20.0,
-            quantity = 100,
+            quantity = 100.0,
             planId = legacyPlanId,
         )
 
@@ -127,7 +127,7 @@ class TradeFeeEstimatorTest {
             market = Market.HK,
             tradeType = TradeType.BUY,
             price = 20.0,
-            quantity = 1000,
+            quantity = 1000.0,
         )
 
         assertEquals(20.00, estimate.commission, 0.0001)
@@ -142,7 +142,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.BUY,
             price = 10.0,
-            quantity = 100,
+            quantity = 100.0,
         )
 
         assertEquals(0.99, estimate.commission, 0.0001)
@@ -156,7 +156,7 @@ class TradeFeeEstimatorTest {
             market = Market.US,
             tradeType = TradeType.SELL,
             price = 50.0,
-            quantity = 10,
+            quantity = 10.0,
         )
 
         assertEquals(0.00, estimate.commission, 0.0001)

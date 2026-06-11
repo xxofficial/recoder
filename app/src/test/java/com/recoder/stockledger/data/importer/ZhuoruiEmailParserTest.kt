@@ -45,7 +45,7 @@ class ZhuoruiEmailParserTest {
         assertEquals("MVLL", parsed.symbol)
         assertEquals("GraniteShares每日2倍做多MRVL主动型ETF", parsed.name)
         assertEquals(66.910, parsed.price, 0.0001)
-        assertEquals(15, parsed.quantity)
+        assertEquals(15.0, parsed.quantity, 0.0001)
         assertEquals("ZR-762092870253-20260424231837-BUY-MVLL-15-66_91", parsed.externalReference)
     }
 
@@ -83,7 +83,7 @@ class ZhuoruiEmailParserTest {
         assertEquals(TradeType.SELL, parsed.tradeType)
         assertEquals("LITX", parsed.symbol)
         assertEquals(42.940, parsed.price, 0.0001)
-        assertEquals(25, parsed.quantity)
+        assertEquals(25.0, parsed.quantity, 0.0001)
     }
 
     @Test
@@ -114,7 +114,7 @@ class ZhuoruiEmailParserTest {
         assertEquals("MVLL", parsed.symbol)
         assertEquals("USD", parsed.currencyCode)
         assertEquals(66.910, parsed.price, 0.0001)
-        assertEquals(15, parsed.quantity)
+        assertEquals(15.0, parsed.quantity, 0.0001)
     }
 
     @Test

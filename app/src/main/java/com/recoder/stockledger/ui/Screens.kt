@@ -2319,7 +2319,7 @@ fun PlatformTransferDialog(
         symbol: String,
         name: String,
         market: Market,
-        quantity: Int,
+        quantity: Double,
         amount: Double,
         currency: DisplayCurrency,
         sourcePlatform: BrokerPlatform,
@@ -2620,8 +2620,8 @@ fun PlatformTransferDialog(
                         InputFieldBlockWithoutTime(
                             value = quantityStr,
                             placeholder = "要转移的股数",
-                            keyboardType = KeyboardType.Number,
-                            onValueChange = { quantityStr = it.filter { c -> c.isDigit() } },
+                            keyboardType = KeyboardType.Decimal,
+                            onValueChange = { quantityStr = it.filter { c -> c.isDigit() || c == '.' } },
                         )
                     }
                 } else {
@@ -2679,7 +2679,7 @@ fun PlatformTransferDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val qty = quantityStr.toIntOrNull() ?: 0
+                    val qty = quantityStr.toDoubleOrNull() ?: 0.0
                     val amt = amountStr.toDoubleOrNull() ?: 0.0
                     if (sourcePlatform != BrokerPlatform.UNSPECIFIED && targetPlatform != BrokerPlatform.UNSPECIFIED && isValidTime) {
                         onConfirm(
@@ -2699,7 +2699,7 @@ fun PlatformTransferDialog(
                     }
                 },
                 enabled = (if (isStock) {
-                    symbol.isNotBlank() && (quantityStr.toIntOrNull() ?: 0) > 0
+                    symbol.isNotBlank() && (quantityStr.toDoubleOrNull() ?: 0.0) > 0.0
                 } else {
                     (amountStr.toDoubleOrNull() ?: 0.0) > 0.0
                 }) && isValidTime

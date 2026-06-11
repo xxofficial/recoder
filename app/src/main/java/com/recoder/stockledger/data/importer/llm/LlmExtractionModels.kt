@@ -13,7 +13,7 @@ data class LlmExtractedTrade(
     val tradeDate: LocalDate,
     val tradeTime: String,
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val commission: Double,
     val tax: Double,
     val note: String,
