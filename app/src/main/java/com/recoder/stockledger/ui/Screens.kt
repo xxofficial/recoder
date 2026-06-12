@@ -1440,14 +1440,17 @@ class InputFieldState(initialValue: String) {
         }
         preProgrammaticValue = null
 
+        val textChanged = text != textFieldValue.text
         textFieldValue = newValue
-        if (sentHistory.isEmpty() || sentHistory.last() != text) {
-            sentHistory.add(text)
-            if (sentHistory.size > 15) {
-                sentHistory.removeAt(0)
+        if (textChanged) {
+            if (sentHistory.isEmpty() || sentHistory.last() != text) {
+                sentHistory.add(text)
+                if (sentHistory.size > 15) {
+                    sentHistory.removeAt(0)
+                }
             }
+            onValueChange(text)
         }
-        onValueChange(text)
     }
 
     fun updateFromState(stateValue: String) {
