@@ -101,6 +101,10 @@ class PortfolioCalculator {
                         cashBalanceCny += applySecurityTrade(transaction, positions, exchangeRates)
                     }
 
+                    TradeType.EXPIRE -> {
+                        applyExpire(transaction, positions)
+                    }
+
                     TradeType.TRANSFER_IN -> {
                         val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
@@ -362,10 +366,35 @@ class PortfolioCalculator {
             averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
         )
     }
-
     private fun isAlmostZero(value: Double): Boolean = kotlin.math.abs(value) < 1e-6
 
     private fun cleanQuantity(qty: Double): Double = if (isAlmostZero(qty)) 0.0 else qty
+
+    private fun applyExpire(
+        transaction: PortfolioTrade,
+        positions: MutableMap<String, PortfolioPosition>,
+    ) {
+        val key = positionKey(transaction.symbol, transaction.market)
+        val current = positions[key] ?: return
+        val qtyDelta = transaction.quantity
+        val nextQuantity = if (current.quantity > 0.0) {
+            maxOf(0.0, current.quantity - qtyDelta)
+        } else {
+            minOf(0.0, current.quantity + qtyDelta)
+        }
+        val fraction = if (current.quantity == 0.0) 1.0 else {
+            val closed = current.quantity - nextQuantity
+            Math.abs(closed / current.quantity)
+        }
+        val closedCost = current.remainingCost * fraction
+        val coverProfit = -closedCost
+        positions[key] = current.copy(
+            quantity = nextQuantity,
+            remainingCost = current.remainingCost - closedCost,
+            averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
+            realizedProfit = current.realizedProfit + coverProfit
+        )
+    }
 
     private fun effectiveTradeDate(transaction: PortfolioTrade): LocalDate {
         val date = LocalDate.parse(transaction.tradeDate)

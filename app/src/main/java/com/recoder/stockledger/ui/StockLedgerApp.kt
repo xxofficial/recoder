@@ -357,6 +357,9 @@ fun StockLedgerApp(
                         isSyncingSplits = uiState.isSyncingSplits,
                         splitsSyncStatusMessage = uiState.splitsSyncStatusMessage,
                         onSyncSplitsClick = ledgerViewModel::syncAndFillSplits,
+                        expiredOptions = uiState.expiredOptions,
+                        isClearingExpiredOptions = uiState.isClearingExpiredOptions,
+                        onClearExpiredOptions = { ledgerViewModel.clearExpiredOptions(uiState.expiredOptions) },
                     )
                 }
 

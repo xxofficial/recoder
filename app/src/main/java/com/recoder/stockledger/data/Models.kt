@@ -46,10 +46,11 @@ enum class TradeType(val label: String) {
     TRANSFER_IN("转入"),
     INTEREST("利息"),
     SPLIT("拆并股"),
+    EXPIRE("期权到期"),
     ;
 
     val isSecurityTrade: Boolean
-        get() = this == BUY || this == SELL || this == SPLIT
+        get() = this == BUY || this == SELL || this == SPLIT || this == EXPIRE
 
     val isCashFlowPositive: Boolean
         get() = this == SELL || this == DEPOSIT || this == TRANSFER_IN
@@ -88,6 +89,7 @@ enum class TransactionFilter(
     TRANSFER_IN("划入/转入", TradeType.TRANSFER_IN),
     TRANSFER_OUT("划出/转出", TradeType.TRANSFER_OUT),
     SPLIT("拆并股", TradeType.SPLIT),
+    EXPIRE("期权到期", TradeType.EXPIRE),
 }
 
 enum class MarketFilter(

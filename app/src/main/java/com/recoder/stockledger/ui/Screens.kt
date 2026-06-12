@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -515,6 +518,9 @@ fun OperationsRoute(
     isSyncingSplits: Boolean = false,
     splitsSyncStatusMessage: String? = null,
     onSyncSplitsClick: () -> Unit = {},
+    expiredOptions: List<HoldingUiModel> = emptyList(),
+    isClearingExpiredOptions: Boolean = false,
+    onClearExpiredOptions: () -> Unit = {},
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
 
@@ -538,6 +544,93 @@ fun OperationsRoute(
                     .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
+                if (expiredOptions.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = SurfaceSecondary,
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = MarketDown.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(16.dp),
+                            )
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Warning,
+                                contentDescription = "Expired Options",
+                                tint = MarketDown,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "检测到已到期期权",
+                                color = ForegroundPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Text(
+                            text = "系统检测到有已到期的期权持仓。一键清理会自动生成“期权到期（EXPIRE）”流水，将持仓数量清零，剩余成本全部结转至已实现盈亏，不产生现金流量。",
+                            color = ForegroundSecondary,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            expiredOptions.forEach { option ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(BackgroundPrimary, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = option.name,
+                                            color = ForegroundPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = option.code,
+                                            color = ForegroundMuted,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = option.quantityLabel,
+                                        color = ForegroundSecondary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+
+                        FilledActionButton(
+                            text = if (isClearingExpiredOptions) "正在清理中..." else "一键清理已到期持仓",
+                            onClick = onClearExpiredOptions,
+                            enabled = !isClearingExpiredOptions,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
                 TradeActionButtons(
                     onBuyClick = onBuyClick,
                     onSellClick = onSellClick,
@@ -1383,14 +1476,17 @@ class InputFieldState(initialValue: String) {
         }
         preProgrammaticValue = null
 
+        val textChanged = text != textFieldValue.text
         textFieldValue = newValue
-        if (sentHistory.isEmpty() || sentHistory.last() != text) {
-            sentHistory.add(text)
-            if (sentHistory.size > 15) {
-                sentHistory.removeAt(0)
+        if (textChanged) {
+            if (sentHistory.isEmpty() || sentHistory.last() != text) {
+                sentHistory.add(text)
+                if (sentHistory.size > 15) {
+                    sentHistory.removeAt(0)
+                }
             }
+            onValueChange(text)
         }
-        onValueChange(text)
     }
 
     fun updateFromState(stateValue: String) {
@@ -1903,6 +1999,7 @@ fun TradeEntryRoute(
                             TradeType.TRANSFER_IN -> "确认转入"
                             TradeType.TRANSFER_OUT -> "确认转出"
                             TradeType.SPLIT -> "确认折算记录"
+                            TradeType.EXPIRE -> "确认过期失效"
                         }
                     },
                     onClick = onSubmit,

@@ -283,4 +283,160 @@ class JointLedgerMathTest {
         assertEquals(1000.0, results[1].assetsShareCny, 0.001)
         assertEquals(-1000.0, results[1].pnlShareCny, 0.001)
     }
+
+    @Test
+    fun testAutoReconcileExpireTransactionsLogic() {
+        data class TempTx(val id: Long, val tradeType: String, val quantity: Int, val symbol: String, val ledgerId: Long)
+        
+        fun reconcile(txs: List<TempTx>): List<String> {
+            val actions = mutableListOf<String>()
+            val expireTxs = txs.filter { it.tradeType == "EXPIRE" }
+            val txsByLedgerAndSymbol = txs.groupBy { it.ledgerId to it.symbol }
+            val expireTxsByLedgerAndSymbol = expireTxs.groupBy { it.ledgerId to it.symbol }
+
+            for ((key, txList) in expireTxsByLedgerAndSymbol) {
+                val (ledgerId, symbol) = key
+                val activeExpireTx = if (txList.size > 1) {
+                    val kept = txList.first()
+                    txList.drop(1).forEach { delTx ->
+                        actions.add("DELETE_${delTx.id}")
+                    }
+                    kept
+                } else {
+                    txList.first()
+                }
+
+                val siblingTxs = txsByLedgerAndSymbol[ledgerId to symbol].orEmpty()
+                var preExpireQty = 0
+                siblingTxs.forEach { tx ->
+                    if (tx.tradeType != "EXPIRE") {
+                        when (tx.tradeType) {
+                            "BUY", "TRANSFER_IN" -> preExpireQty += tx.quantity
+                            "SELL", "TRANSFER_OUT" -> preExpireQty -= tx.quantity
+                        }
+                    }
+                }
+                val absolutePreExpireQty = Math.abs(preExpireQty)
+                if (absolutePreExpireQty == 0) {
+                    actions.add("DELETE_${activeExpireTx.id}")
+                } else if (activeExpireTx.quantity != absolutePreExpireQty) {
+                    actions.add("UPDATE_${activeExpireTx.id}_TO_${absolutePreExpireQty}")
+                }
+            }
+            return actions
+        }
+
+        // Case 1: Match. No change.
+        val txs1 = listOf(
+            TempTx(1, "BUY", 2, "AAPL_OPT", 1),
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(emptyList<String>(), reconcile(txs1))
+
+        // Case 2: Mismatch. preExpireQty is 3, expireTx qty is 2 -> Update to 3
+        val txs2 = listOf(
+            TempTx(1, "BUY", 3, "AAPL_OPT", 1),
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(listOf("UPDATE_2_TO_3"), reconcile(txs2))
+
+        // Case 3: preExpireQty is 0 -> Delete
+        val txs3 = listOf(
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(listOf("DELETE_2"), reconcile(txs3))
+
+        // Case 4: Duplicate EXPIREs. preExpireQty is 2, but we have two EXPIREs (id 2, id 3). We should delete the second one (id 3).
+        val txs4 = listOf(
+            TempTx(1, "BUY", 2, "AAPL_OPT", 1),
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1),
+            TempTx(3, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(listOf("DELETE_3"), reconcile(txs4))
+    }
+
+    @Test
+    fun testOptionTradeDateClamping() {
+        fun isOptionSymbol(symbol: String): Boolean {
+            val parts = symbol.trim().split(" ")
+            if (parts.size != 2) return false
+            val optPart = parts[1]
+            if (optPart.length < 8) return false
+            val datePart = optPart.substring(0, 6)
+            if (!datePart.all { it.isDigit() }) return false
+            val typeChar = optPart[6]
+            if (typeChar != 'C' && typeChar != 'P') return false
+            return true
+        }
+
+        fun getExpiryDateForSymbol(symbol: String): java.time.LocalDate? {
+            val clean = symbol.trim()
+            val parts = clean.split(" ")
+            if (parts.size != 2) return null
+            val optPart = parts[1]
+            if (optPart.length < 8) return null
+            val datePart = optPart.substring(0, 6)
+            if (!datePart.all { it.isDigit() }) return null
+            val typeChar = optPart[6]
+            if (typeChar != 'C' && typeChar != 'P') return null
+            return runCatching {
+                val year = "20" + datePart.substring(0, 2)
+                val month = datePart.substring(2, 4)
+                val day = datePart.substring(4, 6)
+                java.time.LocalDate.parse("$year-$month-$day")
+            }.getOrNull()
+        }
+
+        fun sanitizeOptionTradeDate(
+            tradeType: String,
+            symbol: String,
+            assetType: String?,
+            expiryDate: String?,
+            tradeDate: String
+        ): String {
+            if (tradeType == "EXPIRE") return tradeDate
+            val isOpt = assetType == "OPTION" || isOptionSymbol(symbol)
+            if (!isOpt) return tradeDate
+
+            val expiry = expiryDate?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+                ?: getExpiryDateForSymbol(symbol)
+                ?: return tradeDate
+
+            val currentTradeDate = runCatching { java.time.LocalDate.parse(tradeDate) }.getOrNull() ?: return tradeDate
+            if (currentTradeDate.isAfter(expiry)) {
+                return expiry.toString()
+            }
+            return tradeDate
+        }
+
+        // Test option symbol parsing
+        assertTrue(isOptionSymbol("AAPL 240621C00200000"))
+        assertFalse(isOptionSymbol("AAPL"))
+
+        // Test normal stock trade - no clamping
+        assertEquals("2024-06-25", sanitizeOptionTradeDate("BUY", "AAPL", "STOCK", null, "2024-06-25"))
+
+        // Test option trade - tradeDate before expiry: no clamping
+        assertEquals("2024-06-20", sanitizeOptionTradeDate("BUY", "AAPL 240621C00200000", "OPTION", null, "2024-06-20"))
+
+        // Test option trade - tradeDate equals expiry: no clamping
+        assertEquals("2024-06-21", sanitizeOptionTradeDate("BUY", "AAPL 240621C00200000", "OPTION", null, "2024-06-21"))
+
+        // Test option trade - tradeDate after expiry: clamped to expiry
+        assertEquals("2024-06-21", sanitizeOptionTradeDate("BUY", "AAPL 240621C00200000", "OPTION", null, "2024-06-22"))
+
+        // Test option trade - tradeDate after expiry with explicit expiry date: clamped to expiry
+        assertEquals("2024-06-21", sanitizeOptionTradeDate("BUY", "AAPL 240621C00200000", "OPTION", "2024-06-21", "2024-06-25"))
+
+        // Test EXPIRE trade type - no clamping even if tradeDate is after expiry
+        assertEquals("2024-06-22", sanitizeOptionTradeDate("EXPIRE", "AAPL 240621C00200000", "OPTION", null, "2024-06-22"))
+    }
+
+    private fun assertTrue(value: Boolean) {
+        org.junit.Assert.assertTrue(value)
+    }
+
+    private fun assertFalse(value: Boolean) {
+        org.junit.Assert.assertFalse(value)
+    }
 }

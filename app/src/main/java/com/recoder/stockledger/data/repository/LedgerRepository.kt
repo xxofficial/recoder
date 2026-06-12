@@ -266,6 +266,13 @@ class DefaultLedgerRepository(
     }
 
     override suspend fun addTrade(input: TradeDraftInput) {
+        val sanitizedTradeDate = sanitizeOptionTradeDate(
+            tradeType = input.tradeType.name,
+            symbol = input.symbol,
+            assetType = input.assetType,
+            expiryDate = input.expiryDate,
+            tradeDate = input.tradeDate
+        )
         val resolvedName = resolveConsistentName(input.symbol, input.market, input.name)
         dao.insertTransaction(
             TransactionEntity(
@@ -276,7 +283,7 @@ class DefaultLedgerRepository(
                 market = input.market.name,
                 symbol = input.symbol,
                 name = resolvedName,
-                tradeDate = input.tradeDate,
+                tradeDate = sanitizedTradeDate,
                 tradeTime = input.tradeTime,
                 price = input.price,
                 quantity = input.quantity,
@@ -299,6 +306,13 @@ class DefaultLedgerRepository(
         transactionId: Long,
         input: TradeDraftInput,
     ) {
+        val sanitizedTradeDate = sanitizeOptionTradeDate(
+            tradeType = input.tradeType.name,
+            symbol = input.symbol,
+            assetType = input.assetType,
+            expiryDate = input.expiryDate,
+            tradeDate = input.tradeDate
+        )
         val resolvedName = resolveConsistentName(input.symbol, input.market, input.name)
         val entity = TransactionEntity(
             id = transactionId,
@@ -309,7 +323,7 @@ class DefaultLedgerRepository(
             market = input.market.name,
             symbol = input.symbol,
             name = resolvedName,
-            tradeDate = input.tradeDate,
+            tradeDate = sanitizedTradeDate,
             tradeTime = input.tradeTime,
             price = input.price,
             quantity = input.quantity,
@@ -601,12 +615,20 @@ class DefaultLedgerRepository(
             val consistentName = symbolToName[txn.market to txn.symbol]
             val finalName = if (!consistentName.isNullOrBlank()) consistentName else txn.name
 
+            val sanitizedTradeDate = sanitizeOptionTradeDate(
+                tradeType = txn.tradeType,
+                symbol = txn.symbol,
+                assetType = txn.assetType,
+                expiryDate = txn.expiryDate,
+                tradeDate = txn.tradeDate
+            )
+
             val isDuplicate = allExistingTransactions.any { existing ->
                 existing.ledgerId == targetLedgerId &&
                 existing.platform == txn.platform &&
                 existing.symbol == txn.symbol &&
                 existing.market == txn.market &&
-                existing.tradeDate == txn.tradeDate &&
+                existing.tradeDate == sanitizedTradeDate &&
                 existing.tradeTime == txn.tradeTime &&
                 existing.tradeType == txn.tradeType &&
                 existing.quantity == txn.quantity &&
@@ -618,7 +640,8 @@ class DefaultLedgerRepository(
                     txn.copy(
                         id = 0,
                         ledgerId = targetLedgerId,
-                        name = finalName
+                        name = finalName,
+                        tradeDate = sanitizedTradeDate
                     )
                 )
             }
@@ -1783,6 +1806,58 @@ class DefaultLedgerRepository(
     private fun parseTradeTimeOrNull(value: String): LocalTime? = runCatching {
         LocalTime.parse(value.trim())
     }.getOrNull()
+
+    private fun isOptionSymbol(symbol: String): Boolean {
+        val parts = symbol.trim().split(" ")
+        if (parts.size != 2) return false
+        val optPart = parts[1]
+        if (optPart.length < 8) return false
+        val datePart = optPart.substring(0, 6)
+        if (!datePart.all { it.isDigit() }) return false
+        val typeChar = optPart[6]
+        if (typeChar != 'C' && typeChar != 'P') return false
+        return true
+    }
+
+    private fun getExpiryDateForSymbol(symbol: String): LocalDate? {
+        val clean = symbol.trim()
+        val parts = clean.split(" ")
+        if (parts.size != 2) return null
+        val optPart = parts[1]
+        if (optPart.length < 8) return null
+        val datePart = optPart.substring(0, 6)
+        if (!datePart.all { it.isDigit() }) return null
+        val typeChar = optPart[6]
+        if (typeChar != 'C' && typeChar != 'P') return null
+        return runCatching {
+            val year = "20" + datePart.substring(0, 2)
+            val month = datePart.substring(2, 4)
+            val day = datePart.substring(4, 6)
+            LocalDate.parse("$year-$month-$day")
+        }.getOrNull()
+    }
+
+    private fun sanitizeOptionTradeDate(
+        tradeType: String,
+        symbol: String,
+        assetType: String?,
+        expiryDate: String?,
+        tradeDate: String
+    ): String {
+        if (tradeType == "EXPIRE") return tradeDate
+        val isOpt = assetType == "OPTION" || isOptionSymbol(symbol)
+        if (!isOpt) return tradeDate
+
+        val expiry = expiryDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: getExpiryDateForSymbol(symbol)
+            ?: return tradeDate
+
+        val currentTradeDate = runCatching { LocalDate.parse(tradeDate) }.getOrNull() ?: return tradeDate
+        if (currentTradeDate.isAfter(expiry)) {
+            return expiry.toString()
+        }
+        return tradeDate
+    }
 
     private companion object {
         const val TAG = "LedgerRepository"
