@@ -292,12 +292,21 @@ class JointLedgerMathTest {
             val actions = mutableListOf<String>()
             val expireTxs = txs.filter { it.tradeType == "EXPIRE" }
             val txsByLedgerAndSymbol = txs.groupBy { it.ledgerId to it.symbol }
+            val expireTxsByLedgerAndSymbol = expireTxs.groupBy { it.ledgerId to it.symbol }
 
-            for (expireTx in expireTxs) {
-                val ledgerId = expireTx.ledgerId
-                val symbol = expireTx.symbol
+            for ((key, txList) in expireTxsByLedgerAndSymbol) {
+                val (ledgerId, symbol) = key
+                val activeExpireTx = if (txList.size > 1) {
+                    val kept = txList.first()
+                    txList.drop(1).forEach { delTx ->
+                        actions.add("DELETE_${delTx.id}")
+                    }
+                    kept
+                } else {
+                    txList.first()
+                }
+
                 val siblingTxs = txsByLedgerAndSymbol[ledgerId to symbol].orEmpty()
-                
                 var preExpireQty = 0
                 siblingTxs.forEach { tx ->
                     if (tx.tradeType != "EXPIRE") {
@@ -309,9 +318,9 @@ class JointLedgerMathTest {
                 }
                 val absolutePreExpireQty = Math.abs(preExpireQty)
                 if (absolutePreExpireQty == 0) {
-                    actions.add("DELETE_${expireTx.id}")
-                } else if (expireTx.quantity != absolutePreExpireQty) {
-                    actions.add("UPDATE_${expireTx.id}_TO_${absolutePreExpireQty}")
+                    actions.add("DELETE_${activeExpireTx.id}")
+                } else if (activeExpireTx.quantity != absolutePreExpireQty) {
+                    actions.add("UPDATE_${activeExpireTx.id}_TO_${absolutePreExpireQty}")
                 }
             }
             return actions
@@ -336,5 +345,13 @@ class JointLedgerMathTest {
             TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
         )
         assertEquals(listOf("DELETE_2"), reconcile(txs3))
+
+        // Case 4: Duplicate EXPIREs. preExpireQty is 2, but we have two EXPIREs (id 2, id 3). We should delete the second one (id 3).
+        val txs4 = listOf(
+            TempTx(1, "BUY", 2, "AAPL_OPT", 1),
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1),
+            TempTx(3, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(listOf("DELETE_3"), reconcile(txs4))
     }
 }

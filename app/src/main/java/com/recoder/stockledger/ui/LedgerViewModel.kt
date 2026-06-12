@@ -186,6 +186,7 @@ data class LedgerUiState(
     val partnerContributions: List<PartnerContribution> = emptyList(),
     val selectedPartnerPerspective: String? = null,
     val expiredOptions: List<HoldingUiModel> = emptyList(),
+    val isClearingExpiredOptions: Boolean = false,
 )
 
 data class PartnerContribution(
@@ -247,6 +248,7 @@ class LedgerViewModel(
     private val backupStatusMessage = MutableStateFlow<String?>(null)
     val parsedBackupData = MutableStateFlow<ImportedBackup?>(null)
     val showImportDialog = MutableStateFlow(false)
+    val isClearingExpiredOptions = MutableStateFlow(false)
     private val hsbcImportDraftText = MutableStateFlow("")
     private val hsbcImportStatusMessage = MutableStateFlow<String?>(null)
     private val zhuoruiEmailSyncConfig = MutableStateFlow(loadZhuoruiEmailSyncConfig())
@@ -745,6 +747,8 @@ class LedgerViewModel(
             }
         }
         state.copy(showImportDialog = show, expiredOptions = expired)
+    }.combine(isClearingExpiredOptions) { state, clearing ->
+        state.copy(isClearingExpiredOptions = clearing)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -1389,46 +1393,52 @@ class LedgerViewModel(
     }
 
     fun clearExpiredOptions(expiredList: List<HoldingUiModel>) {
+        if (isClearingExpiredOptions.value) return
+        isClearingExpiredOptions.value = true
         viewModelScope.launch {
-            val now = System.currentTimeMillis()
-            val activePlatform = selectedPlatform.value ?: BrokerPlatform.UNSPECIFIED
-            
-            expiredList.forEach { holding ->
-                val key = positionKey(holding.code, holding.market)
-                val position = portfolio.value.positions[key] ?: return@forEach
-                val qty = position.quantity
-                if (qty == 0) return@forEach
+            try {
+                val now = System.currentTimeMillis()
+                val activePlatform = selectedPlatform.value ?: BrokerPlatform.UNSPECIFIED
                 
-                val expiry = getExpiryDateForSymbol(holding.code) ?: LocalDate.now()
-                val tradeDateStr = if (holding.market == Market.US) {
-                    expiry.plusDays(1).toString()
-                } else {
-                    expiry.toString()
+                expiredList.forEach { holding ->
+                    val key = positionKey(holding.code, holding.market)
+                    val position = portfolio.value.positions[key] ?: return@forEach
+                    val qty = position.quantity
+                    if (qty == 0) return@forEach
+                    
+                    val expiry = getExpiryDateForSymbol(holding.code) ?: LocalDate.now()
+                    val tradeDateStr = if (holding.market == Market.US) {
+                        expiry.plusDays(1).toString()
+                    } else {
+                        expiry.toString()
+                    }
+                    val tradeTimeStr = if (holding.market == Market.US) "04:00:00" else "16:00:00"
+                    
+                    val input = TradeDraftInput(
+                        tradeType = TradeType.EXPIRE,
+                        platform = activePlatform,
+                        market = holding.market,
+                        symbol = holding.code,
+                        name = holding.name,
+                        tradeDate = tradeDateStr,
+                        price = 0.0,
+                        quantity = Math.abs(qty),
+                        commission = 0.0,
+                        tax = 0.0,
+                        note = "期权到期失效自动清理",
+                        tradeTime = tradeTimeStr,
+                        createdAt = now,
+                        ledgerId = selectedLedgerId.value,
+                        assetType = "OPTION",
+                        underlyingSymbol = position.underlyingSymbol,
+                        expiryDate = expiry.toString(),
+                    )
+                    repository.addTrade(input)
                 }
-                val tradeTimeStr = if (holding.market == Market.US) "04:00:00" else "16:00:00"
-                
-                val input = TradeDraftInput(
-                    tradeType = TradeType.EXPIRE,
-                    platform = activePlatform,
-                    market = holding.market,
-                    symbol = holding.code,
-                    name = holding.name,
-                    tradeDate = tradeDateStr,
-                    price = 0.0,
-                    quantity = Math.abs(qty),
-                    commission = 0.0,
-                    tax = 0.0,
-                    note = "期权到期失效自动清理",
-                    tradeTime = tradeTimeStr,
-                    createdAt = now,
-                    ledgerId = selectedLedgerId.value,
-                    assetType = "OPTION",
-                    underlyingSymbol = position.underlyingSymbol,
-                    expiryDate = expiry.toString(),
-                )
-                repository.addTrade(input)
+                refreshQuotes(trigger = RefreshTrigger.TRADE_CREATE)
+            } finally {
+                isClearingExpiredOptions.value = false
             }
-            refreshQuotes(trigger = RefreshTrigger.TRADE_CREATE)
         }
     }
 
@@ -1438,11 +1448,22 @@ class LedgerViewModel(
             if (expireTxs.isEmpty()) return@launch
 
             val txsByLedgerAndSymbol = transactions.groupBy { it.ledgerId to it.symbol }
+            val expireTxsByLedgerAndSymbol = expireTxs.groupBy { it.ledgerId to it.symbol }
 
-            for (expireTx in expireTxs) {
-                val ledgerId = expireTx.ledgerId
-                val symbol = expireTx.symbol
-                
+            for ((key, txList) in expireTxsByLedgerAndSymbol) {
+                val (ledgerId, symbol) = key
+                // 1. If there are duplicate EXPIRE transactions, delete all but the first one
+                val activeExpireTx = if (txList.size > 1) {
+                    val kept = txList.first()
+                    txList.drop(1).forEach { delTx ->
+                        repository.deleteTrade(delTx.id)
+                    }
+                    kept
+                } else {
+                    txList.first()
+                }
+
+                // 2. Perform reconciliation on the kept EXPIRE transaction
                 val siblingTxs = txsByLedgerAndSymbol[ledgerId to symbol].orEmpty()
                 
                 var preExpireQty = 0
@@ -1459,28 +1480,28 @@ class LedgerViewModel(
                 
                 val absolutePreExpireQty = Math.abs(preExpireQty)
                 if (absolutePreExpireQty == 0) {
-                    repository.deleteTrade(expireTx.id)
-                } else if (expireTx.quantity != absolutePreExpireQty) {
+                    repository.deleteTrade(activeExpireTx.id)
+                } else if (activeExpireTx.quantity != absolutePreExpireQty) {
                     val input = TradeDraftInput(
                         tradeType = TradeType.EXPIRE,
-                        platform = runCatching { BrokerPlatform.valueOf(expireTx.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED),
-                        market = runCatching { Market.valueOf(expireTx.market) }.getOrDefault(Market.CASH),
-                        symbol = expireTx.symbol,
-                        name = expireTx.name,
-                        tradeDate = expireTx.tradeDate,
-                        price = expireTx.price,
+                        platform = runCatching { BrokerPlatform.valueOf(activeExpireTx.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED),
+                        market = runCatching { Market.valueOf(activeExpireTx.market) }.getOrDefault(Market.CASH),
+                        symbol = activeExpireTx.symbol,
+                        name = activeExpireTx.name,
+                        tradeDate = activeExpireTx.tradeDate,
+                        price = activeExpireTx.price,
                         quantity = absolutePreExpireQty,
-                        commission = expireTx.commission,
-                        tax = expireTx.tax,
-                        note = expireTx.note ?: "期权到期失效自动清理",
-                        tradeTime = expireTx.tradeTime,
-                        createdAt = expireTx.createdAt,
-                        ledgerId = expireTx.ledgerId,
-                        assetType = expireTx.assetType,
-                        underlyingSymbol = expireTx.underlyingSymbol,
-                        expiryDate = expireTx.expiryDate,
+                        commission = activeExpireTx.commission,
+                        tax = activeExpireTx.tax,
+                        note = activeExpireTx.note ?: "期权到期失效自动清理",
+                        tradeTime = activeExpireTx.tradeTime,
+                        createdAt = activeExpireTx.createdAt,
+                        ledgerId = activeExpireTx.ledgerId,
+                        assetType = activeExpireTx.assetType,
+                        underlyingSymbol = activeExpireTx.underlyingSymbol,
+                        expiryDate = activeExpireTx.expiryDate,
                     )
-                    repository.updateTrade(expireTx.id, input)
+                    repository.updateTrade(activeExpireTx.id, input)
                 }
             }
         }

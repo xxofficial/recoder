@@ -515,6 +515,7 @@ fun OperationsRoute(
     onDestinationSelected: (TopLevelDestination) -> Unit,
     ledgers: List<LedgerEntity> = emptyList(),
     expiredOptions: List<HoldingUiModel> = emptyList(),
+    isClearingExpiredOptions: Boolean = false,
     onClearExpiredOptions: () -> Unit = {},
 ) {
     var showZhuoruiManualSyncOptions by remember { mutableStateOf(false) }
@@ -618,8 +619,9 @@ fun OperationsRoute(
                         }
 
                         FilledActionButton(
-                            text = "一键清理已到期持仓",
+                            text = if (isClearingExpiredOptions) "正在清理中..." else "一键清理已到期持仓",
                             onClick = onClearExpiredOptions,
+                            enabled = !isClearingExpiredOptions,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
