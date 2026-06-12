@@ -151,6 +151,45 @@ class PortfolioCalculatorTest {
         assertEquals(1400.0, snapshotShort.cashBalanceCny, 0.0001)
     }
 
+    @Test
+    fun `calculate handles option expiration sorting with specific trade times`() {
+        val usdRate = 7.0
+        val optSymbol = "SLV 260413P66"
+        
+        // Scenario: A BUY transaction at 09:38 on 2026-04-13
+        // And an EXPIRE transaction at 23:59:59 on 2026-04-13
+        // Verify that the EXPIRE transaction is sorted AFTER the BUY transaction
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(
+                    type = TradeType.BUY,
+                    market = Market.US,
+                    symbol = optSymbol,
+                    price = 1.0,
+                    quantity = 1.0,
+                    tradeDate = "2026-04-13",
+                    tradeTime = "09:38:00"
+                ),
+                trade(
+                    type = TradeType.EXPIRE,
+                    market = Market.US,
+                    symbol = optSymbol,
+                    price = 0.0,
+                    quantity = 1.0,
+                    tradeDate = "2026-04-13",
+                    tradeTime = "23:59:59"
+                )
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
+        )
+        
+        val pos = snapshot.positions.getValue("US:$optSymbol")
+        assertEquals(0.0, pos.quantity, 0.0001)
+        assertEquals(0.0, pos.remainingCost, 0.0001)
+        assertEquals(-100.0, pos.realizedProfit, 0.0001)
+    }
+
     private fun trade(
         type: TradeType,
         market: Market,
@@ -160,13 +199,15 @@ class PortfolioCalculatorTest {
         quantity: Double,
         commission: Double = 0.0,
         tax: Double = 0.0,
+        tradeDate: String = "2026-01-02",
+        tradeTime: String = "10:00",
     ): PortfolioTrade = PortfolioTrade(
         tradeType = type,
         market = market,
         symbol = symbol,
         name = name,
-        tradeDate = "2026-01-02",
-        tradeTime = "10:00",
+        tradeDate = tradeDate,
+        tradeTime = tradeTime,
         price = price,
         quantity = quantity,
         commission = commission,

@@ -1506,12 +1506,8 @@ class LedgerViewModel(
                     if (qty == 0.0) return@forEach
                     
                     val expiry = getExpiryDateForSymbol(holding.code) ?: LocalDate.now()
-                    val tradeDateStr = if (holding.market == Market.US) {
-                        expiry.plusDays(1).toString()
-                    } else {
-                        expiry.toString()
-                    }
-                    val tradeTimeStr = if (holding.market == Market.US) "04:00:00" else "16:00:00"
+                    val tradeDateStr = expiry.toString()
+                    val tradeTimeStr = "23:59:59"
                     
                     val input = TradeDraftInput(
                         tradeType = TradeType.EXPIRE,
@@ -1578,27 +1574,33 @@ class LedgerViewModel(
                 }
                 
                 val absolutePreExpireQty = Math.abs(preExpireQty)
+                val expiry = getExpiryDateForSymbol(activeExpireTx.symbol)
+                val expectedDate = expiry?.toString() ?: activeExpireTx.tradeDate
+                val expectedTime = "23:59:59"
+                
                 if (absolutePreExpireQty == 0.0) {
                     repository.deleteTrade(activeExpireTx.id)
-                } else if (activeExpireTx.quantity != absolutePreExpireQty) {
+                } else if (activeExpireTx.quantity != absolutePreExpireQty ||
+                    activeExpireTx.tradeDate != expectedDate ||
+                    activeExpireTx.tradeTime != expectedTime) {
                     val input = TradeDraftInput(
                         tradeType = TradeType.EXPIRE,
                         platform = runCatching { BrokerPlatform.valueOf(activeExpireTx.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED),
                         market = runCatching { Market.valueOf(activeExpireTx.market) }.getOrDefault(Market.CASH),
                         symbol = activeExpireTx.symbol,
                         name = activeExpireTx.name,
-                        tradeDate = activeExpireTx.tradeDate,
+                        tradeDate = expectedDate,
                         price = activeExpireTx.price,
                         quantity = absolutePreExpireQty,
                         commission = activeExpireTx.commission,
                         tax = activeExpireTx.tax,
                         note = activeExpireTx.note ?: "期权到期失效自动清理",
-                        tradeTime = activeExpireTx.tradeTime,
+                        tradeTime = expectedTime,
                         createdAt = activeExpireTx.createdAt,
                         ledgerId = activeExpireTx.ledgerId,
                         assetType = activeExpireTx.assetType,
                         underlyingSymbol = activeExpireTx.underlyingSymbol,
-                        expiryDate = activeExpireTx.expiryDate,
+                        expiryDate = expiry?.toString() ?: activeExpireTx.expiryDate,
                     )
                     repository.updateTrade(activeExpireTx.id, input)
                 }
