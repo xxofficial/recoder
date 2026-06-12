@@ -994,14 +994,57 @@ class DefaultLedgerRepository(
                 externalReference = externalReference,
             )
             if (existing != null) {
-                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, 类型=${finalParsed.tradeType}, 数量=${finalParsed.quantity}, 价格=${finalParsed.price}, extRef=$externalReference")
-                results.add(
-                    TradeImportResult(
-                        outcome = TradeImportOutcome.DUPLICATE,
-                        message = "交易 ${finalParsed.symbol} ${finalParsed.quantity} 股已存在，已跳过",
-                        externalReference = externalReference,
+                val needUpdate = existing.symbol != finalParsed.symbol ||
+                        existing.market != finalParsed.market.name ||
+                        existing.name != finalParsed.name ||
+                        existing.price != finalParsed.price ||
+                        existing.quantity != finalParsed.quantity ||
+                        existing.tradeDate != finalParsed.tradeDate.toString() ||
+                        existing.tradeTime != (finalParsed.tradeTime ?: "") ||
+                        existing.commission != (finalParsed.commission ?: 0.0) ||
+                        existing.tax != (finalParsed.tax ?: 0.0) ||
+                        existing.assetType != finalParsed.assetType ||
+                        existing.underlyingSymbol != finalParsed.underlyingSymbol ||
+                        existing.expiryDate != finalParsed.expiryDate ||
+                        existing.strikePrice != finalParsed.strikePrice ||
+                        existing.optionType != finalParsed.optionType
+
+                if (needUpdate) {
+                    val updated = existing.copy(
+                        symbol = finalParsed.symbol,
+                        market = finalParsed.market.name,
+                        name = finalParsed.name,
+                        price = finalParsed.price,
+                        quantity = finalParsed.quantity,
+                        tradeDate = finalParsed.tradeDate.toString(),
+                        tradeTime = finalParsed.tradeTime ?: "",
+                        commission = finalParsed.commission ?: 0.0,
+                        tax = finalParsed.tax ?: 0.0,
+                        assetType = finalParsed.assetType,
+                        underlyingSymbol = finalParsed.underlyingSymbol,
+                        expiryDate = finalParsed.expiryDate,
+                        strikePrice = finalParsed.strikePrice,
+                        optionType = finalParsed.optionType
                     )
-                )
+                    dao.updateTransaction(updated)
+                    Log.d(TAG, "更新已存在的交易(以修正解析结果): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, extRef=$externalReference")
+                    results.add(
+                        TradeImportResult(
+                            outcome = TradeImportOutcome.IMPORTED,
+                            message = "交易已更新修复: ${finalParsed.symbol}",
+                            externalReference = externalReference,
+                        )
+                    )
+                } else {
+                    Log.d(TAG, "发现重复交易(ExternalReference): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, extRef=$externalReference")
+                    results.add(
+                        TradeImportResult(
+                            outcome = TradeImportOutcome.DUPLICATE,
+                            message = "交易 ${finalParsed.symbol} ${finalParsed.quantity} 股已存在，已跳过",
+                            externalReference = externalReference,
+                        )
+                    )
+                }
                 matchedDbTxIds.add(existing.id)
                 continue
             }
