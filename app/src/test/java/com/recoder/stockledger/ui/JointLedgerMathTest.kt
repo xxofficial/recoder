@@ -283,4 +283,58 @@ class JointLedgerMathTest {
         assertEquals(1000.0, results[1].assetsShareCny, 0.001)
         assertEquals(-1000.0, results[1].pnlShareCny, 0.001)
     }
+
+    @Test
+    fun testAutoReconcileExpireTransactionsLogic() {
+        data class TempTx(val id: Long, val tradeType: String, val quantity: Int, val symbol: String, val ledgerId: Long)
+        
+        fun reconcile(txs: List<TempTx>): List<String> {
+            val actions = mutableListOf<String>()
+            val expireTxs = txs.filter { it.tradeType == "EXPIRE" }
+            val txsByLedgerAndSymbol = txs.groupBy { it.ledgerId to it.symbol }
+
+            for (expireTx in expireTxs) {
+                val ledgerId = expireTx.ledgerId
+                val symbol = expireTx.symbol
+                val siblingTxs = txsByLedgerAndSymbol[ledgerId to symbol].orEmpty()
+                
+                var preExpireQty = 0
+                siblingTxs.forEach { tx ->
+                    if (tx.tradeType != "EXPIRE") {
+                        when (tx.tradeType) {
+                            "BUY", "TRANSFER_IN" -> preExpireQty += tx.quantity
+                            "SELL", "TRANSFER_OUT" -> preExpireQty -= tx.quantity
+                        }
+                    }
+                }
+                val absolutePreExpireQty = Math.abs(preExpireQty)
+                if (absolutePreExpireQty == 0) {
+                    actions.add("DELETE_${expireTx.id}")
+                } else if (expireTx.quantity != absolutePreExpireQty) {
+                    actions.add("UPDATE_${expireTx.id}_TO_${absolutePreExpireQty}")
+                }
+            }
+            return actions
+        }
+
+        // Case 1: Match. No change.
+        val txs1 = listOf(
+            TempTx(1, "BUY", 2, "AAPL_OPT", 1),
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(emptyList<String>(), reconcile(txs1))
+
+        // Case 2: Mismatch. preExpireQty is 3, expireTx qty is 2 -> Update to 3
+        val txs2 = listOf(
+            TempTx(1, "BUY", 3, "AAPL_OPT", 1),
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(listOf("UPDATE_2_TO_3"), reconcile(txs2))
+
+        // Case 3: preExpireQty is 0 -> Delete
+        val txs3 = listOf(
+            TempTx(2, "EXPIRE", 2, "AAPL_OPT", 1)
+        )
+        assertEquals(listOf("DELETE_2"), reconcile(txs3))
+    }
 }

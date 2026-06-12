@@ -756,6 +756,7 @@ class LedgerViewModel(
         viewModelScope.launch {
             repository.transactions.collect { transactions ->
                 transactionSnapshot.value = transactions
+                autoReconcileExpireTransactions(transactions)
             }
         }
         viewModelScope.launch {
@@ -1428,6 +1429,60 @@ class LedgerViewModel(
                 repository.addTrade(input)
             }
             refreshQuotes(trigger = RefreshTrigger.TRADE_CREATE)
+        }
+    }
+
+    private fun autoReconcileExpireTransactions(transactions: List<TransactionEntity>) {
+        viewModelScope.launch {
+            val expireTxs = transactions.filter { it.tradeType == TradeType.EXPIRE.name }
+            if (expireTxs.isEmpty()) return@launch
+
+            val txsByLedgerAndSymbol = transactions.groupBy { it.ledgerId to it.symbol }
+
+            for (expireTx in expireTxs) {
+                val ledgerId = expireTx.ledgerId
+                val symbol = expireTx.symbol
+                
+                val siblingTxs = txsByLedgerAndSymbol[ledgerId to symbol].orEmpty()
+                
+                var preExpireQty = 0
+                siblingTxs.forEach { tx ->
+                    if (tx.tradeType != TradeType.EXPIRE.name) {
+                        val type = runCatching { TradeType.valueOf(tx.tradeType) }.getOrNull()
+                        when (type) {
+                            TradeType.BUY, TradeType.TRANSFER_IN -> preExpireQty += tx.quantity
+                            TradeType.SELL, TradeType.TRANSFER_OUT -> preExpireQty -= tx.quantity
+                            else -> {}
+                        }
+                    }
+                }
+                
+                val absolutePreExpireQty = Math.abs(preExpireQty)
+                if (absolutePreExpireQty == 0) {
+                    repository.deleteTrade(expireTx.id)
+                } else if (expireTx.quantity != absolutePreExpireQty) {
+                    val input = TradeDraftInput(
+                        tradeType = TradeType.EXPIRE,
+                        platform = runCatching { BrokerPlatform.valueOf(expireTx.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED),
+                        market = runCatching { Market.valueOf(expireTx.market) }.getOrDefault(Market.CASH),
+                        symbol = expireTx.symbol,
+                        name = expireTx.name,
+                        tradeDate = expireTx.tradeDate,
+                        price = expireTx.price,
+                        quantity = absolutePreExpireQty,
+                        commission = expireTx.commission,
+                        tax = expireTx.tax,
+                        note = expireTx.note ?: "期权到期失效自动清理",
+                        tradeTime = expireTx.tradeTime,
+                        createdAt = expireTx.createdAt,
+                        ledgerId = expireTx.ledgerId,
+                        assetType = expireTx.assetType,
+                        underlyingSymbol = expireTx.underlyingSymbol,
+                        expiryDate = expireTx.expiryDate,
+                    )
+                    repository.updateTrade(expireTx.id, input)
+                }
+            }
         }
     }
 
