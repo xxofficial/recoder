@@ -185,6 +185,7 @@ data class LedgerUiState(
     val selectedLedgerId: Long = 1L,
     val partnerContributions: List<PartnerContribution> = emptyList(),
     val selectedPartnerPerspective: String? = null,
+    val expiredOptions: List<HoldingUiModel> = emptyList(),
 )
 
 data class PartnerContribution(
@@ -735,7 +736,15 @@ class LedgerViewModel(
     }.combine(parsedBackupData) { state, backup ->
         state.copy(parsedBackupData = backup)
     }.combine(showImportDialog) { state, show ->
-        state.copy(showImportDialog = show)
+        val expired = state.holdings.filter { holding ->
+            if (holding.isOption) {
+                val expiry = getExpiryDateForSymbol(holding.code)
+                expiry != null && expiry.isBefore(LocalDate.now())
+            } else {
+                false
+            }
+        }
+        state.copy(showImportDialog = show, expiredOptions = expired)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -1357,6 +1366,68 @@ class LedgerViewModel(
             } else {
                 refreshQuotes(trigger = RefreshTrigger.TRADE_DELETE)
             }
+        }
+    }
+
+    private fun getExpiryDateForSymbol(symbol: String): LocalDate? {
+        val clean = symbol.trim()
+        val parts = clean.split(" ")
+        if (parts.size != 2) return null
+        val optPart = parts[1]
+        if (optPart.length < 8) return null
+        val datePart = optPart.substring(0, 6)
+        if (!datePart.all { it.isDigit() }) return null
+        val typeChar = optPart[6]
+        if (typeChar != 'C' && typeChar != 'P') return null
+        return runCatching {
+            val year = "20" + datePart.substring(0, 2)
+            val month = datePart.substring(2, 4)
+            val day = datePart.substring(4, 6)
+            LocalDate.parse("$year-$month-$day")
+        }.getOrNull()
+    }
+
+    fun clearExpiredOptions(expiredList: List<HoldingUiModel>) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val activePlatform = selectedPlatform.value ?: BrokerPlatform.UNSPECIFIED
+            
+            expiredList.forEach { holding ->
+                val key = positionKey(holding.code, holding.market)
+                val position = portfolio.value.positions[key] ?: return@forEach
+                val qty = position.quantity
+                if (qty == 0) return@forEach
+                
+                val expiry = getExpiryDateForSymbol(holding.code) ?: LocalDate.now()
+                val tradeDateStr = if (holding.market == Market.US) {
+                    expiry.plusDays(1).toString()
+                } else {
+                    expiry.toString()
+                }
+                val tradeTimeStr = if (holding.market == Market.US) "04:00:00" else "16:00:00"
+                
+                val input = TradeDraftInput(
+                    tradeType = TradeType.EXPIRE,
+                    platform = activePlatform,
+                    market = holding.market,
+                    symbol = holding.code,
+                    name = holding.name,
+                    tradeDate = tradeDateStr,
+                    price = 0.0,
+                    quantity = Math.abs(qty),
+                    commission = 0.0,
+                    tax = 0.0,
+                    note = "期权到期失效自动清理",
+                    tradeTime = tradeTimeStr,
+                    createdAt = now,
+                    ledgerId = selectedLedgerId.value,
+                    assetType = "OPTION",
+                    underlyingSymbol = position.underlyingSymbol,
+                    expiryDate = expiry.toString(),
+                )
+                repository.addTrade(input)
+            }
+            refreshQuotes(trigger = RefreshTrigger.TRADE_CREATE)
         }
     }
 
@@ -2371,6 +2442,40 @@ class LedgerViewModel(
             transactionMap[cursor].orEmpty().forEach { transaction ->
                 val market = Market.fromString(transaction.market) ?: Market.CASH
                 when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
+                    TradeType.EXPIRE -> {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                        val qtyDelta = transaction.quantity
+                        val nextQuantity = if (current.quantity > 0) {
+                            maxOf(0, current.quantity - qtyDelta)
+                        } else {
+                            minOf(0, current.quantity + qtyDelta)
+                        }
+                        val fraction = if (current.quantity == 0) 1.0 else {
+                            val closed = current.quantity - nextQuantity
+                            Math.abs(closed.toDouble() / current.quantity.toDouble())
+                        }
+                        val closedCost = current.remainingCost * fraction
+                        val coverProfit = -closedCost
+                        
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = current.remainingCost - closedCost,
+                            averageCost = if (nextQuantity == 0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
+                            realizedProfit = current.realizedProfit + coverProfit
+                        )
+                    }
+
                     TradeType.DEPOSIT -> {
                         val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                         cashBalanceCny += amountCny
@@ -2676,6 +2781,45 @@ class LedgerViewModel(
             val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
             activityDates += date
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
+                TradeType.EXPIRE -> {
+                    val current = positions[key]
+                        ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                    val qtyDelta = transaction.quantity
+                    val nextQuantity = if (current.quantity > 0) {
+                        maxOf(0, current.quantity - qtyDelta)
+                    } else {
+                        minOf(0, current.quantity + qtyDelta)
+                    }
+                    val fraction = if (current.quantity == 0) 1.0 else {
+                        val closed = current.quantity - nextQuantity
+                        Math.abs(closed.toDouble() / current.quantity.toDouble())
+                    }
+                    val closedCost = current.remainingCost * fraction
+                    val coverProfit = -closedCost
+                    val coverProfitCny = convertToCny(coverProfit, market, exchangeRates)
+                    
+                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
+                    val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
+                    securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + coverProfitCny
+                    
+                    positions[key] = current.copy(
+                        quantity = nextQuantity,
+                        remainingCost = current.remainingCost - closedCost,
+                        averageCost = if (nextQuantity == 0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
+                        realizedProfit = current.realizedProfit + coverProfit
+                    )
+                }
+
                 TradeType.BUY -> {
                     tradeStatsByDate[date] = tradeStatsByDate
                         .getOrDefault(date, DailyTradeStats())
@@ -3032,6 +3176,41 @@ class LedgerViewModel(
         ordered.forEach { transaction ->
             val market = Market.fromString(transaction.market) ?: Market.CASH
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
+                TradeType.EXPIRE -> {
+                    val key = positionKey(transaction.symbol, market)
+                    val current = positions[key]
+                        ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                    val qtyDelta = transaction.quantity
+                    val nextQuantity = if (current.quantity > 0) {
+                        maxOf(0, current.quantity - qtyDelta)
+                    } else {
+                        minOf(0, current.quantity + qtyDelta)
+                    }
+                    val fraction = if (current.quantity == 0) 1.0 else {
+                        val closed = current.quantity - nextQuantity
+                        Math.abs(closed.toDouble() / current.quantity.toDouble())
+                    }
+                    val closedCost = current.remainingCost * fraction
+                    val coverProfit = -closedCost
+                    
+                    positions[key] = current.copy(
+                        quantity = nextQuantity,
+                        remainingCost = current.remainingCost - closedCost,
+                        averageCost = if (nextQuantity == 0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
+                        realizedProfit = current.realizedProfit + coverProfit
+                    )
+                }
+
                 TradeType.DEPOSIT -> {
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                     cashBalanceCny += amountCny
@@ -3650,6 +3829,7 @@ class LedgerViewModel(
         val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
         val mult = if (isOpt) 100.0 else 1.0
         return when (tradeType) {
+            TradeType.EXPIRE -> 0.0
             TradeType.BUY -> -(transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax)
             TradeType.SELL -> transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
             TradeType.DEPOSIT -> transaction.price * transaction.quantity * mult
@@ -4240,6 +4420,9 @@ private data class RefreshMeta(
             
             val tradeType = runCatching { TradeType.valueOf(tx.tradeType) }.getOrNull() ?: continue
             when (tradeType) {
+                TradeType.EXPIRE -> {
+                    // No cash balance change
+                }
                 TradeType.DEPOSIT -> {
                     balance += tx.price * tx.quantity
                 }

@@ -82,6 +82,48 @@ class PortfolioCalculatorTest {
         assertEquals(3_000.0, snapshot.cashBalanceCny, 0.0001)
     }
 
+    @Test
+    fun `calculate handles option expiration`() {
+        val usdRate = 7.0
+        val optSymbol = "AAPL 260618C00150000"
+        
+        // 1. Long option expiration (Buy 1 Call, then expire)
+        val snapshotLong = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.DEPOSIT, market = Market.CASH, price = 1000.0, quantity = 1),
+                trade(type = TradeType.BUY, market = Market.US, symbol = optSymbol, price = 2.0, quantity = 1),
+                trade(type = TradeType.EXPIRE, market = Market.US, symbol = optSymbol, price = 0.0, quantity = 1),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
+        )
+        
+        val posLong = snapshotLong.positions.getValue("US:$optSymbol")
+        assertEquals(0, posLong.quantity)
+        assertEquals(0.0, posLong.remainingCost, 0.0001)
+        assertEquals(0.0, posLong.averageCost, 0.0001)
+        assertEquals(-200.0, posLong.realizedProfit, 0.0001)
+        // Cash spent is 2.0 * 1 * 100 * 7.0 = 1400.0. Since deposit was 1000.0, balance is -400.0.
+        assertEquals(-400.0, snapshotLong.cashBalanceCny, 0.0001)
+
+        // 2. Short option expiration (Sell 1 Call, then expire)
+        val snapshotShort = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.SELL, market = Market.US, symbol = optSymbol, price = 2.0, quantity = 1),
+                trade(type = TradeType.EXPIRE, market = Market.US, symbol = optSymbol, price = 0.0, quantity = 1),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
+        )
+        
+        val posShort = snapshotShort.positions.getValue("US:$optSymbol")
+        assertEquals(0, posShort.quantity)
+        assertEquals(0.0, posShort.remainingCost, 0.0001)
+        assertEquals(0.0, posShort.averageCost, 0.0001)
+        assertEquals(200.0, posShort.realizedProfit, 0.0001)
+        assertEquals(1400.0, snapshotShort.cashBalanceCny, 0.0001)
+    }
+
     private fun trade(
         type: TradeType,
         market: Market,

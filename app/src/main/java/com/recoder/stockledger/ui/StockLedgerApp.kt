@@ -350,6 +350,8 @@ fun StockLedgerApp(
                             }
                         },
                         ledgers = uiState.ledgers,
+                        expiredOptions = uiState.expiredOptions,
+                        onClearExpiredOptions = { ledgerViewModel.clearExpiredOptions(uiState.expiredOptions) }
                     )
                 }
 

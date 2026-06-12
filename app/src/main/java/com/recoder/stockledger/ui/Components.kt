@@ -1443,6 +1443,7 @@ fun TradeTypeSelector(
 fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
     TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN -> MarketUpSoft to MarketUp
     TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT, TradeType.INTEREST -> MarketDownSoft to MarketDown
+    TradeType.EXPIRE -> SurfaceMuted to MarketNeutral
 }
 
 @Composable
