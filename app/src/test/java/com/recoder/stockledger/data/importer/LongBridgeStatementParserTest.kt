@@ -128,4 +128,111 @@ class LongBridgeStatementParserTest {
         assertEquals("", trade.symbol)
         assertEquals("09:30", trade.tradeTime)
     }
+
+    @Test
+    fun testParseUsOptionTimezoneConversion() {
+        val sampleText = """
+            2026.04.13
+            2026.04.14
+            OS20260413123456
+            买⼊
+            SLV260413P66000  SLV
+            260413 66 Put
+            1.00
+            0.50
+            50.00
+            -51.50
+            下单时间 / 成交时间
+            2026.04.13 09:38:00 EDT
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+        val trade = trades[0]
+        assertEquals(Market.US, trade.market)
+        assertEquals("SLV 260413P66", trade.symbol)
+        assertEquals(LocalDate.of(2026, 4, 13), trade.tradeDate)
+        assertEquals("21:38", trade.tradeTime)
+    }
+
+    @Test
+    fun testParseUsOptionTimezoneConversionRollover() {
+        val sampleText = """
+            2026.04.13
+            2026.04.14
+            OS20260413654321
+            买⼊
+            SLV260413P66000  SLV
+            260413 66 Put
+            1.00
+            0.50
+            50.00
+            -51.50
+            下单时间 / 成交时间
+            2026.04.13 16:30:00 EDT
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+        val trade = trades[0]
+        assertEquals(Market.US, trade.market)
+        assertEquals("SLV 260413P66", trade.symbol)
+        assertEquals(LocalDate.of(2026, 4, 14), trade.tradeDate)
+        assertEquals("04:30", trade.tradeTime)
+    }
+
+    @Test
+    fun testParseUsStockSymbolAndName() {
+        val sampleText = """
+            市场: 美国市场; 币种: 美元
+            2026.02.03
+            2026.02.04
+            OS20260203112233
+            买⼊
+            NVDA 英伟达
+            1.00
+            186.92
+            186.92
+            -187.92
+            下单时间 / 成交时间
+            2026.02.03 09:30:00 EST
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+        val trade = trades[0]
+        assertEquals(Market.US, trade.market)
+        assertEquals("NVDA", trade.symbol)
+        assertEquals("英伟达", trade.name)
+    }
+
+    @Test
+    fun testParseIpoAllotment() {
+        val sampleText = """
+            其他资⾦出⼊明细
+            发⽣⽇期 业务类型 项⽬ ⾦额 结余 备注
+            2025.09.15 新股中签款扣除 IPO 2525.HK 中签⾦额 (20 股 @HKD 4,256.00) -4,298.92 10,000.00
+            
+            其他持仓出入明细
+            发生日期 类型 项目 备注 数量
+            市场: 香港市场
+            2025.09.15 中签新股入账 2525  禾赛-W IPO 2525.HK 中簽(20 股) 20.00
+            责任说明
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+        val trade = trades[0]
+        assertEquals(TradeType.BUY, trade.tradeType)
+        assertEquals(Market.HK, trade.market)
+        assertEquals("2525.HK", trade.symbol)
+        assertEquals("禾赛-W", trade.name)
+        assertEquals(20.0, trade.quantity, 0.001)
+        assertEquals(212.8, trade.price, 0.001)
+        assertEquals(4256.0, trade.amount, 0.001)
+        assertEquals("HKD", trade.currencyCode)
+        assertEquals(LocalDate.of(2025, 9, 15), trade.tradeDate)
+        assertEquals("STOCK", trade.assetType)
+        assertEquals("IPO-2525.HK-20250915", trade.tradeRef)
+    }
 }

@@ -76,7 +76,7 @@ class AutoNameRepairAndroidTest {
             name = "Apple Inc.", // Inconsistent name
             currencyCode = "USD",
             price = 150.0,
-            quantity = 10,
+            quantity = 10.0,
             amount = 1500.0,
             tradeDate = LocalDate.of(2026, 6, 1),
             tradeTime = "10:00",
@@ -103,4 +103,155 @@ class AutoNameRepairAndroidTest {
         assertEquals("AAPL", txs[0].symbol)
         assertEquals("苹果", txs[0].name) // Verified: corrected from "Apple Inc." to "苹果"!
     }
+
+    @Test
+    fun testBatchSymbolUnification() = runBlocking {
+        // 1. Prepare two mock parsed trades:
+        // - Trade 1 has empty symbol but name "蜜雪集团" (representing pre-listing/IPO statement entry)
+        // - Trade 2 has symbol "02097.HK" and name "蜜雪集团" (representing post-listing statement entry)
+        val trade1 = ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = TradeType.BUY,
+            market = Market.HK,
+            symbol = "",
+            name = "蜜雪集团",
+            currencyCode = "HKD",
+            price = 24.0,
+            quantity = 20.0,
+            amount = 480.0,
+            tradeDate = LocalDate.of(2025, 6, 1),
+            tradeTime = "09:30",
+            commission = 1.0,
+            tax = 0.0,
+            platformFee = 0.0,
+            tradeRef = "TEST-REF-IPO-1",
+            rawLine = "BUY 20 @ 24"
+        )
+
+        val trade2 = ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = TradeType.BUY,
+            market = Market.HK,
+            symbol = "02097.HK",
+            name = "蜜雪集团",
+            currencyCode = "HKD",
+            price = 24.0,
+            quantity = 20.0,
+            amount = 480.0,
+            tradeDate = LocalDate.of(2025, 7, 1),
+            tradeTime = "09:30",
+            commission = 1.0,
+            tax = 0.0,
+            platformFee = 0.0,
+            tradeRef = "TEST-REF-IPO-2",
+            rawLine = "BUY 20 @ 24"
+        )
+
+        // 2. Perform the import in a batch
+        val results = baseRepo.importParsedTrades(
+            parsedTrades = listOf(trade1, trade2),
+            platform = BrokerPlatform.LONGBRIDGE,
+            ledgerId = 1L
+        )
+
+        assertEquals(2, results.size)
+        assertEquals(TradeImportOutcome.IMPORTED, results[0].outcome)
+        assertEquals(TradeImportOutcome.IMPORTED, results[1].outcome)
+
+        // 3. Query the database to verify if BOTH trades now have the unified symbol "02097.HK"
+        val txs = db.ledgerDao().getAllTransactions()
+        assertEquals(2, txs.size)
+        assertEquals("02097.HK", txs[0].symbol)
+        assertEquals("02097.HK", txs[1].symbol)
+    }
+
+    @Test
+    fun testStockSymbolNotMatchedToOption() = runBlocking {
+        // Seed an option transaction in the database first
+        val optionTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "BUY",
+            platform = "LONGBRIDGE",
+            market = "US",
+            symbol = "TSLA 260601C500",
+            name = "特斯拉",
+            tradeDate = "2026-05-18",
+            tradeTime = "23:09",
+            price = 0.68,
+            quantity = 1.0,
+            commission = 0.0,
+            tax = 0.0,
+            note = "",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "OPTION"
+        )
+        db.ledgerDao().insertTransaction(optionTx)
+
+        // Now import a stock transaction with empty symbol but name "特斯拉"
+        val stockTrade = ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = TradeType.BUY,
+            market = Market.US,
+            symbol = "",
+            name = "特斯拉",
+            currencyCode = "USD",
+            price = 329.0,
+            quantity = 0.3,
+            amount = 99.0,
+            tradeDate = LocalDate.of(2025, 6, 11),
+            tradeTime = "22:27",
+            commission = 0.0,
+            tax = 0.0,
+            platformFee = 0.0,
+            tradeRef = "OS20250612173762",
+            rawLine = "TSLA STOCK BUY",
+            assetType = "STOCK"
+        )
+
+        val results = baseRepo.importParsedTrades(
+            parsedTrades = listOf(stockTrade),
+            platform = BrokerPlatform.LONGBRIDGE,
+            ledgerId = 1L
+        )
+
+        assertEquals(TradeImportOutcome.IMPORTED, results[0].outcome)
+
+        val allTx = db.ledgerDao().getAllTransactions()
+        val importedStockTx = allTx.find { it.externalReference == "PDF-STMT-OS20250612173762" }
+        assertNotNull(importedStockTx)
+        // Verify it was NOT assigned the option symbol!
+        assertNotEquals("TSLA 260601C500", importedStockTx!!.symbol)
+    }
+
+    @Test
+    fun testSeedIfEmptyRepairsOptionSymbolInStock() = runBlocking {
+        // Seed a corrupted transaction: assetType = STOCK but symbol = TSLA 260601C500
+        val corruptedTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "BUY",
+            platform = "LONGBRIDGE",
+            market = "US",
+            symbol = "TSLA 260601C500",
+            name = "特斯拉",
+            tradeDate = "2025-06-11",
+            tradeTime = "22:27",
+            price = 329.0,
+            quantity = 0.3,
+            commission = 0.0,
+            tax = 0.0,
+            note = "",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "STOCK"
+        )
+        val id = db.ledgerDao().insertTransaction(corruptedTx)
+
+        // Call seedIfEmpty via baseRepo
+        baseRepo.seedIfEmpty()
+
+        // Verify it was repaired to TSLA
+        val repaired = db.ledgerDao().getAllTransactions().find { it.id == id }
+        assertNotNull(repaired)
+        assertEquals("TSLA", repaired!!.symbol)
+    }
 }
+

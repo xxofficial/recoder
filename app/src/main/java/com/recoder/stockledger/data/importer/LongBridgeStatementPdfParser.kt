@@ -9,7 +9,17 @@ import com.tom_roush.pdfbox.text.PDFTextStripper
 import java.io.File
 import java.io.InputStream
 import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+
+data class LongBridgeScanResult(
+    val market: Market,
+    val currency: String,
+    val adjustedDate: LocalDate,
+    val adjustedTime: String?
+)
 
 object LongBridgeStatementPdfParser {
     private const val TAG = "LongBridgePdfParser"
@@ -108,9 +118,13 @@ object LongBridgeStatementPdfParser {
                         val joinedName = parts.subList(osIdx + 2, n - 4).joinToString(" ").trim()
                         val optionMatch = optionRegex.matchEntire(joinedName.replace(" ", ""))
                         
-                        val (tradeMarket, tradeCurrency, parsedTradeTime) = scanTimeAndTz(
-                            lines, i + 1, currentMarket, currentCurrency
+                        val scanResult = scanTimeAndTz(
+                            lines, i + 1, currentMarket, currentCurrency, tradeDate
                         )
+                        val tradeMarket = scanResult.market
+                        val tradeCurrency = scanResult.currency
+                        val adjustedTradeDate = scanResult.adjustedDate
+                        val parsedTradeTime = scanResult.adjustedTime
 
                         val symbol: String
                         val name: String
@@ -148,7 +162,10 @@ object LongBridgeStatementPdfParser {
                             
                             val stockCode: String
                             val stockName: String
-                            if (firstPart.all { it.isDigit() }) {
+                            val isUsTicker = tradeMarket == Market.US && firstPart.matches(Regex("""^[A-Za-z0-9\.\-]+$""")) && firstPart.isNotEmpty()
+                            val isHkTicker = tradeMarket == Market.HK && firstPart.all { it.isDigit() } && firstPart.isNotEmpty()
+                            
+                            if (isUsTicker || isHkTicker) {
                                 stockCode = firstPart
                                 stockName = nameParts.getOrNull(1) ?: firstPart
                             } else {
@@ -185,7 +202,7 @@ object LongBridgeStatementPdfParser {
                             price = price,
                             quantity = qty,
                             amount = amount,
-                            tradeDate = tradeDate,
+                            tradeDate = adjustedTradeDate,
                             tradeTime = parsedTradeTime,
                             tradeRef = orderId,
                             rawLine = line,
@@ -259,9 +276,13 @@ object LongBridgeStatementPdfParser {
                             }
                         }
 
-                        val (tradeMarket, tradeCurrency, parsedTradeTime) = scanTimeAndTz(
-                            lines, k, currentMarket, currentCurrency
+                        val scanResult = scanTimeAndTz(
+                            lines, k, currentMarket, currentCurrency, tradeDate
                         )
+                        val tradeMarket = scanResult.market
+                        val tradeCurrency = scanResult.currency
+                        val adjustedTradeDate = scanResult.adjustedDate
+                        val parsedTradeTime = scanResult.adjustedTime
 
                         if (foundNumbers && nameLines.isNotEmpty()) {
                             val joinedName = nameLines.joinToString(" ").trim()
@@ -303,7 +324,10 @@ object LongBridgeStatementPdfParser {
                                 
                                 val stockCode: String
                                 val stockName: String
-                                if (firstPart.all { it.isDigit() }) {
+                                val isUsTicker = tradeMarket == Market.US && firstPart.matches(Regex("""^[A-Za-z0-9\.\-]+$""")) && firstPart.isNotEmpty()
+                                val isHkTicker = tradeMarket == Market.HK && firstPart.all { it.isDigit() } && firstPart.isNotEmpty()
+                                
+                                if (isUsTicker || isHkTicker) {
                                     stockCode = firstPart
                                     stockName = partsName.getOrNull(1) ?: firstPart
                                 } else {
@@ -340,7 +364,7 @@ object LongBridgeStatementPdfParser {
                                 price = price,
                                 quantity = qty,
                                 amount = amount,
-                                tradeDate = tradeDate,
+                                tradeDate = adjustedTradeDate,
                                 tradeTime = parsedTradeTime,
                                 tradeRef = orderId,
                                 rawLine = lines.subList(maxOf(0, i - 2), minOf(lines.size, k)).joinToString(" | "),
@@ -414,15 +438,141 @@ object LongBridgeStatementPdfParser {
             i++
         }
 
+        // 5. Parse Other Position In/Out Details (其他持仓出⼊明细) for IPO Allotment
+        val otherPositionsHeaderIdx = lines.indexOfFirst {
+            it.contains("其他持仓出") || it.contains("其他持倉出")
+        }
+        if (otherPositionsHeaderIdx != -1) {
+            var idx = otherPositionsHeaderIdx + 1
+            var currentOtherMarket = Market.HK
+            while (idx < lines.size) {
+                val line = lines[idx]
+                if (line.contains("责任说明") || line.contains("说明") || line.contains("Page") || line.contains("综合账")) {
+                    break
+                }
+                
+                if (line.contains("市场: 港市场") || line.contains("市场: ⾹港市场") || line.contains("市场: 香港市场")) {
+                    currentOtherMarket = Market.HK
+                    idx++
+                    continue
+                }
+                if (line.contains("市场: 美国市场")) {
+                    currentOtherMarket = Market.US
+                    idx++
+                    continue
+                }
+                
+                val match = Regex("""^(\d{4}\.\d{2}\.\d{2})\s+(\S+)\s+(.*?)\s+(-?[\d,]+\.\d{2})$""").matchEntire(line)
+                if (match != null) {
+                    val dateStr = match.groupValues[1]
+                    val typeStr = match.groupValues[2]
+                    val contentStr = match.groupValues[3]
+                    val qtyStr = match.groupValues[4]
+                    
+                    val qty = qtyStr.replace(",", "").toDoubleOrNull()
+                    if (qty != null && (typeStr.contains("中签") || typeStr.contains("中簽") || typeStr.contains("新股"))) {
+                        val tradeDate = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+                        
+                        var symbol = ""
+                        val remarkSymbolMatch = Regex("""\b(\d+)\.HK\b""").find(contentStr)
+                        if (remarkSymbolMatch != null) {
+                            symbol = remarkSymbolMatch.groupValues[1].padStart(4, '0') + ".HK"
+                        } else {
+                            val itemSymbolMatch = Regex("""^(\d+)\s+""").find(contentStr)
+                            if (itemSymbolMatch != null) {
+                                val digits = itemSymbolMatch.groupValues[1]
+                                symbol = digits.padStart(4, '0') + ".HK"
+                            }
+                        }
+                        
+                        var name = contentStr
+                        if (symbol.isNotEmpty()) {
+                            name = name.replace(Regex("""^\d+\s+"""), "")
+                            val ipoIndex = name.indexOf("IPO ")
+                            if (ipoIndex != -1) {
+                                name = name.substring(0, ipoIndex).trim()
+                            }
+                        }
+                        name = name.replace("\"", "").trim()
+                        
+                        var price = 0.0
+                        for (cashLine in lines) {
+                            if ((cashLine.contains("中签") || cashLine.contains("中簽")) && cashLine.contains(symbol.replace(".HK", ""))) {
+                                val amtMatch = Regex("""@(?:HKD|USD)?\s*([\d,]+\.?\d*)""").find(cashLine)
+                                if (amtMatch != null) {
+                                    val totalAmt = amtMatch.groupValues[1].replace(",", "").toDoubleOrNull() ?: 0.0
+                                    if (totalAmt > 0 && qty > 0) {
+                                        price = totalAmt / qty
+                                    }
+                                }
+                            }
+                        }
+                        
+                        val trade = ParsedStatementTrade(
+                            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                            tradeType = TradeType.BUY,
+                            market = currentOtherMarket,
+                            symbol = symbol,
+                            name = name,
+                            currencyCode = if (currentOtherMarket == Market.HK) "HKD" else "USD",
+                            price = price,
+                            quantity = qty,
+                            amount = price * qty,
+                            tradeDate = tradeDate,
+                            tradeTime = "09:00",
+                            tradeRef = "IPO-${symbol}-${dateStr.replace(".", "")}",
+                            rawLine = line,
+                            commission = 0.0,
+                            tax = 0.0,
+                            platformFee = 0.0,
+                            assetType = "STOCK",
+                            underlyingSymbol = null,
+                            expiryDate = null,
+                            strikePrice = null,
+                            optionType = null
+                        )
+                        trades.add(trade)
+                    }
+                }
+                idx++
+            }
+        }
+
         return trades
+    }
+
+    private fun convertTimezone(date: LocalDate, timeStr: String, tz: String): Pair<LocalDate, String> {
+        return try {
+            val zoneId = when (tz) {
+                "EST" -> ZoneId.of("America/New_York")
+                "EDT" -> ZoneId.of("America/New_York")
+                "HKT" -> ZoneId.of("Asia/Hong_Kong")
+                else -> ZoneId.of("Asia/Hong_Kong")
+            }
+            val timeParts = timeStr.split(":")
+            val hour = timeParts.getOrNull(0)?.toIntOrNull() ?: 0
+            val minute = timeParts.getOrNull(1)?.toIntOrNull() ?: 0
+            val second = timeParts.getOrNull(2)?.toIntOrNull() ?: 0
+            val localTime = LocalTime.of(hour, minute, second)
+            
+            val zdt = ZonedDateTime.of(date, localTime, zoneId)
+            val hktZdt = zdt.withZoneSameInstant(ZoneId.of("Asia/Hong_Kong"))
+            
+            val adjustedDate = hktZdt.toLocalDate()
+            val adjustedTime = String.format("%02d:%02d", hktZdt.hour, hktZdt.minute)
+            Pair(adjustedDate, adjustedTime)
+        } catch (e: Exception) {
+            Pair(date, timeStr.substring(0, 5))
+        }
     }
 
     private fun scanTimeAndTz(
         lines: List<String>,
         startIndex: Int,
         currentMarket: Market,
-        currentCurrency: String
-    ): Triple<Market, String, String?> {
+        currentCurrency: String,
+        tradeDate: LocalDate
+    ): LongBridgeScanResult {
         val timeRegex = Regex("""(\d{2}:\d{2}:\d{2})\s*"?\s*(HKT|EST|EDT)""")
         for (idx in startIndex until minOf(lines.size, startIndex + 15)) {
             val scanLine = lines[idx]
@@ -432,16 +582,22 @@ object LongBridgeStatementPdfParser {
                 val tz = match.groupValues[2]
                 val market = if (tz == "HKT") Market.HK else Market.US
                 val currency = if (tz == "HKT") "HKD" else "USD"
-                val tradeTime = match.groupValues[1].substring(0, 5)
-                return Triple(market, currency, tradeTime)
+                val rawTime = match.groupValues[1]
+                val (adjustedDate, adjustedTime) = convertTimezone(tradeDate, rawTime, tz)
+                return LongBridgeScanResult(market, currency, adjustedDate, adjustedTime)
             }
         }
-        return Triple(currentMarket, currentCurrency, null)
+        return LongBridgeScanResult(currentMarket, currentCurrency, tradeDate, null)
     }
 
-    private fun normalizeCjkCompatChars(text: String): String {
+    internal fun normalizeCjkCompatChars(text: String): String {
         var result = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC)
+        result = result.replace(Regex("[\u0000-\u0008\u000B-\u000C\u000E-\u001F]"), " ")
         result = result
+            .replace('\u2F29', '\u5C0F') // ⼩ -> 小
+            .replace('\u2ECB', '\u8F66') // ⻋ -> 车
+            .replace('\u2F50', '\u6BD4') // ⽐ -> 比
+            .replace('\u2F72', '\u79be') // ⽲ -> 禾
             .replace('\u2EA0', '\u6C11') // ⺠ -> 民
             .replace('\u2EC5', '\u89C1') // ⻅ -> 见
             .replace('\u2EE9', '\u9EC4') // ⻩ -> 黄

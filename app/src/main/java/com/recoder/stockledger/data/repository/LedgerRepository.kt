@@ -255,7 +255,70 @@ class DefaultLedgerRepository(
         get() = quoteDataSource.providerLabel
 
     override suspend fun seedIfEmpty() {
-        // Intentionally empty. The app should not ship with sample ledger data.
+        Log.d(TAG, "seedIfEmpty starting transaction cleanup and normalization...")
+        try {
+            val transactions = dao.getAllTransactions()
+            Log.d(TAG, "Retrieved ${transactions.size} transactions from database.")
+            var updatedCount = 0
+            for (txn in transactions) {
+                var updated = txn
+                
+                // 1. Clean name (CJK radicals & control characters)
+                val cleanName = cleanNameString(txn.name)
+                if (cleanName != txn.name) {
+                    updated = updated.copy(name = cleanName)
+                }
+                
+                // 2. HK Symbol normalization
+                if (txn.market == Market.HK.name) {
+                    val cleanSym = cleanHkSymbol(txn.symbol)
+                    if (cleanSym != txn.symbol) {
+                        updated = updated.copy(symbol = cleanSym)
+                    }
+                }
+                
+                // 3. US Index to ETF repair
+                if (txn.market == Market.US.name) {
+                    val cleanUpper = cleanName.uppercase().replace(" ", "")
+                    if (txn.symbol == ".INX" || txn.symbol == "SPY" || cleanUpper.contains("标普500") || cleanUpper.contains("SP500") || cleanUpper.contains("SPY")) {
+                        if (cleanUpper.contains("ETF") || cleanUpper.contains("SPDR")) {
+                            if (txn.symbol != "SPY" || txn.name != "SPDR标普500 ETF") {
+                                updated = updated.copy(symbol = "SPY", name = "SPDR标普500 ETF")
+                            }
+                        }
+                    }
+                    if (txn.symbol == ".NDX" || txn.symbol == ".IXIC" || txn.symbol == "QQQ" || cleanUpper.contains("纳指100") || cleanUpper.contains("纳斯达克100") || cleanUpper.contains("QQQ")) {
+                        if (cleanUpper.contains("ETF") || cleanUpper.contains("INVESCO") || cleanUpper.contains("纳指") || cleanUpper.contains("纳斯达克")) {
+                            if (txn.symbol != "QQQ" || txn.name != "Invesco NASDAQ 100 ETF") {
+                                updated = updated.copy(symbol = "QQQ", name = "Invesco NASDAQ 100 ETF")
+                            }
+                        }
+                    }
+                }
+                
+                // 4. Option-formatted symbol in STOCK transaction repair
+                if (txn.assetType == "STOCK" || txn.assetType == "stock") {
+                    val optionRegex = Regex("""^([A-Za-z]+)\s*(\d{6})([CP])(\d+).*$""")
+                    val match = optionRegex.matchEntire(updated.symbol)
+                    if (match != null) {
+                        val underlying = match.groupValues[1].uppercase()
+                        if (updated.symbol != underlying) {
+                            updated = updated.copy(symbol = underlying)
+                        }
+                    }
+                }
+                
+                if (updated != txn) {
+                    Log.d(TAG, "Updating transaction id=${txn.id}: symbol='${txn.symbol}'->'${updated.symbol}', name='${txn.name}'->'${updated.name}'")
+                    val rows = dao.updateTransaction(updated)
+                    Log.d(TAG, "Update result: $rows rows updated.")
+                    updatedCount++
+                }
+            }
+            Log.d(TAG, "seedIfEmpty completed. Total updated transactions: $updatedCount")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during seedIfEmpty migration", e)
+        }
     }
 
     override suspend fun purgeLegacySeedData() {
@@ -853,7 +916,7 @@ class DefaultLedgerRepository(
             var symbol = parsed.symbol.trim()
             var name = parsed.name.trim()
             if (symbol.isBlank() && name.isNotBlank()) {
-                val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name)
+                val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name, parsed.assetType)
                 if (resolvedSymbol != null && resolvedSymbol.isNotBlank()) {
                     symbol = resolvedSymbol
                     Log.d(TAG, "从历史交易中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
@@ -989,24 +1052,39 @@ class DefaultLedgerRepository(
         val results = mutableListOf<TradeImportResult>()
         val matchedDbTxIds = mutableSetOf<Long>()
         val normalizedTrades = normalizeStatementTrades(parsedTrades)
+        val batchSymbolMap = mutableMapOf<Triple<String, Market, String>, String>()
+        for (trade in normalizedTrades) {
+            val sym = trade.symbol.trim()
+            val name = trade.name.trim()
+            if (sym.isNotBlank() && name.isNotBlank()) {
+                batchSymbolMap[Triple(name, trade.market, trade.assetType)] = sym
+            }
+        }
+
         for (parsed in normalizedTrades) {
             var symbol = parsed.symbol.trim()
             var name = parsed.name.trim()
             if (symbol.isBlank() && name.isNotBlank()) {
-                val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name)
-                if (resolvedSymbol != null && resolvedSymbol.isNotBlank()) {
-                    symbol = resolvedSymbol
-                    Log.d(TAG, "从历史交易中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
+                val batchSymbol = batchSymbolMap[Triple(name, parsed.market, parsed.assetType)]
+                if (batchSymbol != null && batchSymbol.isNotBlank()) {
+                    symbol = batchSymbol
+                    Log.d(TAG, "从导入批次中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
                 } else {
-                    val lookup = runCatching {
-                        searchSecurities(name, parsed.market, limit = 1).firstOrNull()
-                    }.getOrNull()
-                    if (lookup != null && lookup.symbol.isNotBlank()) {
-                        symbol = lookup.symbol
-                        if (name.isBlank() || name == symbol) {
-                            name = lookup.name
+                    val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name, parsed.assetType)
+                    if (resolvedSymbol != null && resolvedSymbol.isNotBlank()) {
+                        symbol = resolvedSymbol
+                        Log.d(TAG, "从历史交易中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
+                    } else {
+                        val lookup = runCatching {
+                            searchSecurities(name, parsed.market, limit = 1).firstOrNull()
+                        }.getOrNull()
+                        if (lookup != null && lookup.symbol.isNotBlank()) {
+                            symbol = lookup.symbol
+                            if (name.isBlank() || name == symbol) {
+                                name = lookup.name
+                            }
+                            Log.d(TAG, "从网络检索中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
                         }
-                        Log.d(TAG, "从网络检索中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
                     }
                 }
             }
@@ -2164,6 +2242,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         }
     }
 
+
     override suspend fun searchSecurities(
         keyword: String,
         market: Market,
@@ -2171,8 +2250,22 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
     ): List<SecurityLookupResult> = withContext(Dispatchers.IO) {
         if (market == Market.CASH) return@withContext emptyList()
 
-        val raw = keyword.trim()
+        val raw = cleanNameString(keyword)
         if (raw.isBlank()) return@withContext emptyList()
+
+        val cleanUpper = raw.uppercase().replace(" ", "")
+        if (market == Market.US) {
+            if (cleanUpper.contains("标普500") || cleanUpper.contains("SP500") || cleanUpper.contains("SPY")) {
+                if (cleanUpper.contains("ETF") || cleanUpper.contains("SPDR")) {
+                    return@withContext listOf(SecurityLookupResult(symbol = "SPY", name = "SPDR标普500 ETF", market = Market.US))
+                }
+            }
+            if (cleanUpper.contains("纳指100") || cleanUpper.contains("纳斯达克100") || cleanUpper.contains("QQQ")) {
+                if (cleanUpper.contains("ETF") || cleanUpper.contains("INVESCO") || cleanUpper.contains("纳指") || cleanUpper.contains("纳斯达克")) {
+                    return@withContext listOf(SecurityLookupResult(symbol = "QQQ", name = "Invesco NASDAQ 100 ETF", market = Market.US))
+                }
+            }
+        }
 
         val encodedKeyword = URLEncoder.encode(raw, Charsets.UTF_8.name())
         val body = httpGet(
@@ -2443,7 +2536,7 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
                     Market.HK -> {
                         if (typeCode != "31") return@mapNotNull null
                         SecurityLookupResult(
-                            symbol = "${code.padStart(4, '0')}.HK",
+                            symbol = cleanHkSymbol(code),
                             name = name,
                             market = Market.HK,
                         )
@@ -2806,4 +2899,36 @@ class FakeQuoteDataSource : QuoteDataSource {
             "AAPL" to "苹果",
         )
     }
+}
+
+private fun cleanNameString(name: String): String {
+    var result = java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFKC)
+    result = result
+        .replace('\u2F29', '\u5C0F') // ⼩ -> 小
+        .replace('\u2ECB', '\u8F66') // ⻋ -> 车
+        .replace('\u2F50', '\u6BD4') // ⽐ -> 比
+        .replace('\u2F72', '\u79be') // ⽲ -> 禾
+        .replace('\u2EA0', '\u6C11') // ⺠ -> 民
+        .replace('\u2EC5', '\u89C1') // ⻅ -> 见
+        .replace('\u2EE9', '\u9EC4') // ⻩ -> 黄
+        .replace('\u2EF0', '\u9F99') // ⻰ -> 龙
+        .replace('\u6236', '\u6237') // 戶 -> 户
+    // Strip control characters (including \x01, \x02, etc.)
+    result = result.replace(Regex("[\\u0000-\\u001F\\u007F-\\u009F]"), "")
+    // Strip double quotes
+    result = result.replace("\"", "")
+    return result.trim()
+}
+
+private fun cleanHkSymbol(symbol: String): String {
+    val clean = symbol.substringBefore(".").trim()
+    val digits = clean.filter { it.isDigit() }
+    if (digits.isBlank()) return symbol
+    if (digits.length == 5 && digits.startsWith('0')) {
+        return "${digits.substring(1)}.HK"
+    }
+    if (digits.length in 1..4) {
+        return "${digits.padStart(4, '0')}.HK"
+    }
+    return symbol
 }

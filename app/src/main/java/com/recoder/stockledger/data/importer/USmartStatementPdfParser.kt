@@ -808,6 +808,7 @@ object USmartStatementPdfParser {
             sb.append(normalizedChar)
         }
         var result = sb.toString()
+        result = result.replace(Regex("[\u0000-\u0008\u000B-\u000C\u000E-\u001F]"), " ")
         result = result
             .replace('\u2EA0', '\u6C11') // ⺠ → 民
             .replace('\u2EC5', '\u89C1') // ⻅ → 见

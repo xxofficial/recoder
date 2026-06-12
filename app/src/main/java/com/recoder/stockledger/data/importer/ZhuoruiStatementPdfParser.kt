@@ -549,9 +549,14 @@ object ZhuoruiStatementPdfParser {
     private fun normalizeCjkCompatChars(text: String): String {
         // Step 1: NFKC 处理大部分 Kangxi Radicals
         var result = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC)
+        result = result.replace(Regex("[\u0000-\u0008\u000B-\u000C\u000E-\u001F]"), " ")
         // Step 2: 手动补全 NFKC 未覆盖的 CJK Radicals Supplement，
         // 以及将 NFKC 产生的繁体形式（如 戶）转为简体（户）
         result = result
+            .replace('\u2F29', '\u5C0F') // ⼩ -> 小
+            .replace('\u2ECB', '\u8F66') // ⻋ -> 车
+            .replace('\u2F50', '\u6BD4') // ⽐ -> 比
+            .replace('\u2F72', '\u79be') // ⽲ -> 禾
             .replace('\u2EA0', '\u6C11') // ⺠ -> 民
             .replace('\u2EC5', '\u89C1') // ⻅ -> 见
             .replace('\u2EE9', '\u9EC4') // ⻩ -> 黄
