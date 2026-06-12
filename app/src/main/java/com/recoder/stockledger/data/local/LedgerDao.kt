@@ -102,6 +102,16 @@ interface LedgerDao {
         """,
     )
     suspend fun findStockNameFromTransactions(symbol: String, market: String): String?
+    
+    @Query(
+        """
+        SELECT symbol FROM transactions
+        WHERE name = :name AND market = :market AND symbol != ''
+        ORDER BY tradeDate DESC, tradeTime DESC, id DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun findSymbolByName(name: String, market: String): String?
 
     @Query(
         """

@@ -108,6 +108,10 @@ object LongBridgeStatementPdfParser {
                         val joinedName = parts.subList(osIdx + 2, n - 4).joinToString(" ").trim()
                         val optionMatch = optionRegex.matchEntire(joinedName.replace(" ", ""))
                         
+                        val (tradeMarket, tradeCurrency, parsedTradeTime) = scanTimeAndTz(
+                            lines, i + 1, currentMarket, currentCurrency
+                        )
+
                         val symbol: String
                         val name: String
                         val assetType: String
@@ -138,11 +142,21 @@ object LongBridgeStatementPdfParser {
                             strikePrice = strike
                             optionType = optType
                         } else {
-                            val nameParts = joinedName.split("\\s+".toRegex(), limit = 2)
-                            val stockCode = nameParts[0]
-                            val stockName = nameParts.getOrNull(1) ?: stockCode
+                            val cleanedJoinedName = joinedName.replace("\"", "").trim()
+                            val nameParts = cleanedJoinedName.split("\\s+".toRegex(), limit = 2)
+                            val firstPart = nameParts.getOrNull(0) ?: ""
                             
-                            symbol = if (currentMarket == Market.HK) {
+                            val stockCode: String
+                            val stockName: String
+                            if (firstPart.all { it.isDigit() }) {
+                                stockCode = firstPart
+                                stockName = nameParts.getOrNull(1) ?: firstPart
+                            } else {
+                                stockCode = ""
+                                stockName = cleanedJoinedName
+                            }
+                            
+                            symbol = if (tradeMarket == Market.HK) {
                                 val digits = stockCode.filter { it.isDigit() }
                                 when {
                                     digits.length == 5 -> "$digits.HK"
@@ -164,14 +178,15 @@ object LongBridgeStatementPdfParser {
                         val trade = ParsedStatementTrade(
                             sourceChannel = ImportSourceChannel.PDF_STATEMENT,
                             tradeType = tradeType,
-                            market = currentMarket,
+                            market = tradeMarket,
                             symbol = symbol,
                             name = name,
-                            currencyCode = currentCurrency,
+                            currencyCode = tradeCurrency,
                             price = price,
                             quantity = qty,
                             amount = amount,
                             tradeDate = tradeDate,
+                            tradeTime = parsedTradeTime,
                             tradeRef = orderId,
                             rawLine = line,
                             commission = 0.0,
@@ -201,7 +216,7 @@ object LongBridgeStatementPdfParser {
                         val tradeDate = LocalDate.parse(tradeDateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
                         
                         val sideStr = lines.getOrNull(i + 1) ?: ""
-                        val tradeType = if (sideStr.contains("买") || sideStr.contains("买入") || sideStr.contains("买⼊")) {
+                        val tradeType = if (sideStr.contains("买") || sideStr.contains("买入") || sideStr.contains("买阻") || sideStr.contains("买⼊")) {
                             TradeType.BUY
                         } else {
                             TradeType.SELL
@@ -244,6 +259,10 @@ object LongBridgeStatementPdfParser {
                             }
                         }
 
+                        val (tradeMarket, tradeCurrency, parsedTradeTime) = scanTimeAndTz(
+                            lines, k, currentMarket, currentCurrency
+                        )
+
                         if (foundNumbers && nameLines.isNotEmpty()) {
                             val joinedName = nameLines.joinToString(" ").trim()
                             val optionMatch = optionRegex.matchEntire(joinedName.replace(" ", ""))
@@ -278,11 +297,21 @@ object LongBridgeStatementPdfParser {
                                 strikePrice = strike
                                 optionType = optType
                             } else {
-                                val partsName = joinedName.split("\\s+".toRegex(), limit = 2)
-                                val stockCode = partsName[0]
-                                val stockName = partsName.getOrNull(1) ?: stockCode
+                                val cleanedJoinedName = joinedName.replace("\"", "").trim()
+                                val partsName = cleanedJoinedName.split("\\s+".toRegex(), limit = 2)
+                                val firstPart = partsName.getOrNull(0) ?: ""
                                 
-                                symbol = if (currentMarket == Market.HK) {
+                                val stockCode: String
+                                val stockName: String
+                                if (firstPart.all { it.isDigit() }) {
+                                    stockCode = firstPart
+                                    stockName = partsName.getOrNull(1) ?: firstPart
+                                } else {
+                                    stockCode = ""
+                                    stockName = cleanedJoinedName
+                                }
+                                
+                                symbol = if (tradeMarket == Market.HK) {
                                     val digits = stockCode.filter { it.isDigit() }
                                     when {
                                         digits.length == 5 -> "$digits.HK"
@@ -304,14 +333,15 @@ object LongBridgeStatementPdfParser {
                             val trade = ParsedStatementTrade(
                                 sourceChannel = ImportSourceChannel.PDF_STATEMENT,
                                 tradeType = tradeType,
-                                market = currentMarket,
+                                market = tradeMarket,
                                 symbol = symbol,
                                 name = name,
-                                currencyCode = currentCurrency,
+                                currencyCode = tradeCurrency,
                                 price = price,
                                 quantity = qty,
                                 amount = amount,
                                 tradeDate = tradeDate,
+                                tradeTime = parsedTradeTime,
                                 tradeRef = orderId,
                                 rawLine = lines.subList(maxOf(0, i - 2), minOf(lines.size, k)).joinToString(" | "),
                                 commission = 0.0,
@@ -385,6 +415,28 @@ object LongBridgeStatementPdfParser {
         }
 
         return trades
+    }
+
+    private fun scanTimeAndTz(
+        lines: List<String>,
+        startIndex: Int,
+        currentMarket: Market,
+        currentCurrency: String
+    ): Triple<Market, String, String?> {
+        val timeRegex = Regex("""(\d{2}:\d{2}:\d{2})\s*"?\s*(HKT|EST|EDT)""")
+        for (idx in startIndex until minOf(lines.size, startIndex + 15)) {
+            val scanLine = lines[idx]
+            if (scanLine.startsWith("OS") && idx > startIndex) break
+            val match = timeRegex.find(scanLine)
+            if (match != null) {
+                val tz = match.groupValues[2]
+                val market = if (tz == "HKT") Market.HK else Market.US
+                val currency = if (tz == "HKT") "HKD" else "USD"
+                val tradeTime = match.groupValues[1].substring(0, 5)
+                return Triple(market, currency, tradeTime)
+            }
+        }
+        return Triple(currentMarket, currentCurrency, null)
     }
 
     private fun normalizeCjkCompatChars(text: String): String {

@@ -825,18 +825,41 @@ class DefaultLedgerRepository(
 
         val results = mutableListOf<TradeImportResult>()
         val matchedDbTxIds = mutableSetOf<Long>()
-        for (parsed in parsedTrades) {
-            val externalReference = "${platform.shortLabel}-STMT-${parsed.tradeRef}"
+        val normalizedTrades = normalizeStatementTrades(parsedTrades)
+        for (parsed in normalizedTrades) {
+            var symbol = parsed.symbol.trim()
+            var name = parsed.name.trim()
+            if (symbol.isBlank() && name.isNotBlank()) {
+                val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name)
+                if (resolvedSymbol != null && resolvedSymbol.isNotBlank()) {
+                    symbol = resolvedSymbol
+                    Log.d(TAG, "从历史交易中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
+                } else {
+                    val lookup = runCatching {
+                        searchSecurities(name, parsed.market, limit = 1).firstOrNull()
+                    }.getOrNull()
+                    if (lookup != null && lookup.symbol.isNotBlank()) {
+                        symbol = lookup.symbol
+                        if (name.isBlank() || name == symbol) {
+                            name = lookup.name
+                        }
+                        Log.d(TAG, "从网络检索中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
+                    }
+                }
+            }
+            val finalParsed = parsed.copy(symbol = symbol, name = name)
+            
+            val externalReference = "${platform.shortLabel}-STMT-${finalParsed.tradeRef}"
             val existing = dao.findTransactionByExternalReference(
                 platform = platform.name,
                 externalReference = externalReference,
             )
             if (existing != null) {
-                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}, extRef=$externalReference")
+                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, 类型=${finalParsed.tradeType}, 数量=${finalParsed.quantity}, 价格=${finalParsed.price}, extRef=$externalReference")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
-                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在，已跳过",
+                        message = "交易 ${finalParsed.symbol} ${finalParsed.quantity} 股已存在，已跳过",
                         externalReference = externalReference,
                     )
                 )
@@ -846,20 +869,20 @@ class DefaultLedgerRepository(
 
             val duplicates = dao.findDuplicateTransactions(
                 platform = platform.name,
-                symbol = parsed.symbol,
-                market = parsed.market.name,
-                tradeDate = parsed.tradeDate.toString(),
-                tradeType = parsed.tradeType.name,
-                quantity = parsed.quantity,
-                price = parsed.price,
+                symbol = finalParsed.symbol,
+                market = finalParsed.market.name,
+                tradeDate = finalParsed.tradeDate.toString(),
+                tradeType = finalParsed.tradeType.name,
+                quantity = finalParsed.quantity,
+                price = finalParsed.price,
             )
             val duplicate = duplicates.firstOrNull { it.id !in matchedDbTxIds }
             if (duplicate != null) {
-                Log.d(TAG, "发现重复交易(内容匹配): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}")
+                Log.d(TAG, "发现重复交易(内容匹配): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, 类型=${finalParsed.tradeType}, 数量=${finalParsed.quantity}, 价格=${finalParsed.price}")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
-                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在（按内容匹配），已跳过",
+                        message = "交易 ${finalParsed.symbol} ${finalParsed.quantity} 股已存在（按内容匹配），已跳过",
                         externalReference = externalReference,
                     )
                 )
@@ -867,21 +890,21 @@ class DefaultLedgerRepository(
                 continue
             }
 
-            val hasParsedFees = parsed.commission != null || parsed.tax != null || parsed.platformFee != null
+            val hasParsedFees = finalParsed.commission != null || finalParsed.tax != null || finalParsed.platformFee != null
             val feeEstimate = if (!hasParsedFees) {
                 estimateImportedTradeFees(
-                    tradeType = parsed.tradeType,
+                    tradeType = finalParsed.tradeType,
                     platform = platform,
-                    market = parsed.market,
-                    price = parsed.price,
-                    quantity = parsed.quantity,
-                    tradeDate = parsed.tradeDate.toString(),
-                    tradeTime = parsed.tradeTime ?: "00:00",
+                    market = finalParsed.market,
+                    price = finalParsed.price,
+                    quantity = finalParsed.quantity,
+                    tradeDate = finalParsed.tradeDate.toString(),
+                    tradeTime = finalParsed.tradeTime ?: "00:00",
                 )
             } else null
 
-            val commission = parsed.commission ?: feeEstimate?.commission ?: 0.0
-            val tax = parsed.tax ?: feeEstimate?.tax ?: 0.0
+            val commission = finalParsed.commission ?: feeEstimate?.commission ?: 0.0
+            val tax = finalParsed.tax ?: feeEstimate?.tax ?: 0.0
             val noteSuffix = if (hasParsedFees) {
                 "费用按结单原始数据导入"
             } else {
@@ -890,38 +913,38 @@ class DefaultLedgerRepository(
 
             addTrade(
                 TradeDraftInput(
-                    tradeType = parsed.tradeType,
+                    tradeType = finalParsed.tradeType,
                     platform = platform,
-                    sourceChannel = parsed.sourceChannel,
+                    sourceChannel = finalParsed.sourceChannel,
                     externalReference = externalReference,
-                    market = parsed.market,
-                    symbol = parsed.symbol,
-                    name = parsed.name,
-                    tradeDate = parsed.tradeDate.toString(),
-                    price = parsed.price,
-                    quantity = parsed.quantity,
+                    market = finalParsed.market,
+                    symbol = finalParsed.symbol,
+                    name = finalParsed.name,
+                    tradeDate = finalParsed.tradeDate.toString(),
+                    price = finalParsed.price,
+                    quantity = finalParsed.quantity,
                     commission = commission,
                     tax = tax,
                     note = buildImportedNote(
-                        sourceChannel = parsed.sourceChannel,
+                        sourceChannel = finalParsed.sourceChannel,
                         externalReference = externalReference,
-                        rawText = parsed.rawLine,
+                        rawText = finalParsed.rawLine,
                         suffix = noteSuffix,
                     ),
-                    tradeTime = parsed.tradeTime ?: "00:00",
-                    createdAt = System.currentTimeMillis(),
+                    tradeTime = finalParsed.tradeTime ?: "00:00",
+                    createdAt = finalParsed.createdAt ?: System.currentTimeMillis(),
                     ledgerId = ledgerId,
-                    assetType = parsed.assetType,
-                    underlyingSymbol = parsed.underlyingSymbol,
-                    expiryDate = parsed.expiryDate,
-                    strikePrice = parsed.strikePrice,
-                    optionType = parsed.optionType,
+                    assetType = finalParsed.assetType,
+                    underlyingSymbol = finalParsed.underlyingSymbol,
+                    expiryDate = finalParsed.expiryDate,
+                    strikePrice = finalParsed.strikePrice,
+                    optionType = finalParsed.optionType,
                 ),
             )
             results.add(
                 TradeImportResult(
                     outcome = TradeImportOutcome.IMPORTED,
-                    message = "已导入${parsed.tradeType.label} ${parsed.symbol} ${parsed.quantity} 股",
+                    message = "已导入${finalParsed.tradeType.label} ${finalParsed.symbol} ${finalParsed.quantity} 股",
                     externalReference = externalReference,
                 )
             )
@@ -942,18 +965,40 @@ class DefaultLedgerRepository(
         val refPrefix = if (platform == BrokerPlatform.ZHUORUI) "ZR-STMT-" else "PDF-STMT-"
         val results = mutableListOf<TradeImportResult>()
         val matchedDbTxIds = mutableSetOf<Long>()
-        for (parsed in parsedTrades) {
-            val externalReference = "${refPrefix}${parsed.tradeRef}"
+        val normalizedTrades = normalizeStatementTrades(parsedTrades)
+        for (parsed in normalizedTrades) {
+            var symbol = parsed.symbol.trim()
+            var name = parsed.name.trim()
+            if (symbol.isBlank() && name.isNotBlank()) {
+                val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name)
+                if (resolvedSymbol != null && resolvedSymbol.isNotBlank()) {
+                    symbol = resolvedSymbol
+                    Log.d(TAG, "从历史交易中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
+                } else {
+                    val lookup = runCatching {
+                        searchSecurities(name, parsed.market, limit = 1).firstOrNull()
+                    }.getOrNull()
+                    if (lookup != null && lookup.symbol.isNotBlank()) {
+                        symbol = lookup.symbol
+                        if (name.isBlank() || name == symbol) {
+                            name = lookup.name
+                        }
+                        Log.d(TAG, "从网络检索中自动修复空代码: 证券名称=$name, 匹配代码=$symbol")
+                    }
+                }
+            }
+            val finalParsed = parsed.copy(symbol = symbol, name = name)
+            val externalReference = "${refPrefix}${finalParsed.tradeRef}"
             val existing = dao.findTransactionByExternalReference(
                 platform = platform.name,
                 externalReference = externalReference,
             )
             if (existing != null) {
-                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}, extRef=$externalReference")
+                Log.d(TAG, "发现重复交易(ExternalReference): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, 类型=${finalParsed.tradeType}, 数量=${finalParsed.quantity}, 价格=${finalParsed.price}, extRef=$externalReference")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
-                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在，已跳过",
+                        message = "交易 ${finalParsed.symbol} ${finalParsed.quantity} 股已存在，已跳过",
                         externalReference = externalReference,
                     )
                 )
@@ -963,20 +1008,20 @@ class DefaultLedgerRepository(
 
             val duplicates = dao.findDuplicateTransactions(
                 platform = platform.name,
-                symbol = parsed.symbol,
-                market = parsed.market.name,
-                tradeDate = parsed.tradeDate.toString(),
-                tradeType = parsed.tradeType.name,
-                quantity = parsed.quantity,
-                price = parsed.price,
+                symbol = finalParsed.symbol,
+                market = finalParsed.market.name,
+                tradeDate = finalParsed.tradeDate.toString(),
+                tradeType = finalParsed.tradeType.name,
+                quantity = finalParsed.quantity,
+                price = finalParsed.price,
             )
             val duplicate = duplicates.firstOrNull { it.id !in matchedDbTxIds }
             if (duplicate != null) {
-                Log.d(TAG, "发现重复交易(内容匹配): 证券=${parsed.symbol}, 日期=${parsed.tradeDate}, 类型=${parsed.tradeType}, 数量=${parsed.quantity}, 价格=${parsed.price}")
+                Log.d(TAG, "发现重复交易(内容匹配): 证券=${finalParsed.symbol}, 日期=${finalParsed.tradeDate}, 类型=${finalParsed.tradeType}, 数量=${finalParsed.quantity}, 价格=${finalParsed.price}")
                 results.add(
                     TradeImportResult(
                         outcome = TradeImportOutcome.DUPLICATE,
-                        message = "交易 ${parsed.symbol} ${parsed.quantity} 股已存在（按内容匹配），已跳过",
+                        message = "交易 ${finalParsed.symbol} ${finalParsed.quantity} 股已存在（按内容匹配），已跳过",
                         externalReference = externalReference,
                     )
                 )
@@ -984,21 +1029,21 @@ class DefaultLedgerRepository(
                 continue
             }
 
-            val hasParsedFees = parsed.commission != null || parsed.tax != null || parsed.platformFee != null
+            val hasParsedFees = finalParsed.commission != null || finalParsed.tax != null || finalParsed.platformFee != null
             val feeEstimate = if (!hasParsedFees) {
                 estimateImportedTradeFees(
-                    tradeType = parsed.tradeType,
+                    tradeType = finalParsed.tradeType,
                     platform = platform,
-                    market = parsed.market,
-                    price = parsed.price,
-                    quantity = parsed.quantity,
-                    tradeDate = parsed.tradeDate.toString(),
-                    tradeTime = parsed.tradeTime ?: "00:00",
+                    market = finalParsed.market,
+                    price = finalParsed.price,
+                    quantity = finalParsed.quantity,
+                    tradeDate = finalParsed.tradeDate.toString(),
+                    tradeTime = finalParsed.tradeTime ?: "00:00",
                 )
             } else null
 
-            val commission = parsed.commission ?: feeEstimate?.commission ?: 0.0
-            val tax = parsed.tax ?: feeEstimate?.tax ?: 0.0
+            val commission = finalParsed.commission ?: feeEstimate?.commission ?: 0.0
+            val tax = finalParsed.tax ?: feeEstimate?.tax ?: 0.0
             val noteSuffix = if (hasParsedFees) {
                 "费用按结单原始数据导入"
             } else {
@@ -1007,38 +1052,38 @@ class DefaultLedgerRepository(
 
             addTrade(
                 TradeDraftInput(
-                    tradeType = parsed.tradeType,
+                    tradeType = finalParsed.tradeType,
                     platform = platform,
-                    sourceChannel = parsed.sourceChannel,
+                    sourceChannel = finalParsed.sourceChannel,
                     externalReference = externalReference,
-                    market = parsed.market,
-                    symbol = parsed.symbol,
-                    name = parsed.name,
-                    tradeDate = parsed.tradeDate.toString(),
-                    price = parsed.price,
-                    quantity = parsed.quantity,
+                    market = finalParsed.market,
+                    symbol = finalParsed.symbol,
+                    name = finalParsed.name,
+                    tradeDate = finalParsed.tradeDate.toString(),
+                    price = finalParsed.price,
+                    quantity = finalParsed.quantity,
                     commission = commission,
                     tax = tax,
                     note = buildImportedNote(
-                        sourceChannel = parsed.sourceChannel,
+                        sourceChannel = finalParsed.sourceChannel,
                         externalReference = externalReference,
-                        rawText = parsed.rawLine,
+                        rawText = finalParsed.rawLine,
                         suffix = noteSuffix,
                     ),
-                    tradeTime = parsed.tradeTime ?: "00:00",
-                    createdAt = System.currentTimeMillis(),
+                    tradeTime = finalParsed.tradeTime ?: "00:00",
+                    createdAt = finalParsed.createdAt ?: System.currentTimeMillis(),
                     ledgerId = ledgerId,
-                    assetType = parsed.assetType,
-                    underlyingSymbol = parsed.underlyingSymbol,
-                    expiryDate = parsed.expiryDate,
-                    strikePrice = parsed.strikePrice,
-                    optionType = parsed.optionType,
+                    assetType = finalParsed.assetType,
+                    underlyingSymbol = finalParsed.underlyingSymbol,
+                    expiryDate = finalParsed.expiryDate,
+                    strikePrice = finalParsed.strikePrice,
+                    optionType = finalParsed.optionType,
                 ),
             )
             results.add(
                 TradeImportResult(
                     outcome = TradeImportOutcome.IMPORTED,
-                    message = "已导入${parsed.tradeType.label} ${parsed.symbol} ${parsed.quantity} 股",
+                    message = "已导入${finalParsed.tradeType.label} ${finalParsed.symbol} ${finalParsed.quantity} 股",
                     externalReference = externalReference,
                 )
             )
@@ -1049,6 +1094,48 @@ class DefaultLedgerRepository(
         }
 
         results
+    }
+
+    private fun normalizeStatementTrades(trades: List<ParsedStatementTrade>): List<ParsedStatementTrade> {
+        val result = mutableListOf<ParsedStatementTrade>()
+        val groups = LinkedHashMap<String, MutableList<ParsedStatementTrade>>()
+        for (trade in trades) {
+            val defaultTime = when (trade.market) {
+                Market.HK, Market.A_SHARE -> "09:30"
+                else -> "21:30"
+            }
+            val baseTime = trade.tradeTime?.ifBlank { null } ?: defaultTime
+            val cleanBaseTime = if (baseTime.length >= 5) baseTime.substring(0, 5) else baseTime
+            val key = "${trade.tradeDate}_${trade.symbol}_${trade.tradeType.name}_$cleanBaseTime"
+            groups.getOrPut(key) { mutableListOf() }.add(trade.copy(tradeTime = cleanBaseTime))
+        }
+        var currentEpochTime = System.currentTimeMillis() - trades.size * 1000L
+        for ((_, groupTrades) in groups) {
+            for (idx in groupTrades.indices) {
+                val t = groupTrades[idx]
+                val baseTime = t.tradeTime ?: "09:30"
+                val offsetTime = try {
+                    val parts = baseTime.split(":")
+                    val hour = parts.getOrNull(0)?.toIntOrNull() ?: 9
+                    val min = parts.getOrNull(1)?.toIntOrNull() ?: 30
+                    val newMin = min + idx
+                    val overflowHours = newMin / 60
+                    val finalMin = newMin % 60
+                    val finalHour = (hour + overflowHours) % 24
+                    String.format("%02d:%02d", finalHour, finalMin)
+                } catch (e: Exception) {
+                    baseTime
+                }
+                result.add(
+                    t.copy(
+                        tradeTime = offsetTime,
+                        createdAt = currentEpochTime
+                    )
+                )
+                currentEpochTime += 1000L
+            }
+        }
+        return result
     }
 
     override suspend fun deleteHolding(symbol: String, market: Market): Int {

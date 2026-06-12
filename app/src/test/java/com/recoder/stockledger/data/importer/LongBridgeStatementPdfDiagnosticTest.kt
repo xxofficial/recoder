@@ -62,9 +62,13 @@ class LongBridgeStatementPdfDiagnosticTest {
                     println("  Total OS occurrences: $osCount")
 
                     val trades = LongBridgeStatementPdfParser.parseText(rawText)
+                    val sb = StringBuilder()
                     for ((idx, trade) in trades.withIndex()) {
-                        println("    Trade #${idx + 1}: ${trade.tradeDate} | ${trade.tradeType} | ${trade.symbol} | ${trade.name} | qty=${trade.quantity} | price=${trade.price} | amt=${trade.amount} | comm=${trade.commission} | tax=${trade.tax} | assetType=${trade.assetType} | under=${trade.underlyingSymbol} | exp=${trade.expiryDate} | strike=${trade.strikePrice}")
+                        sb.append("    Trade #${idx + 1}: ${trade.tradeDate} | ${trade.tradeType} | ${trade.market} | ${trade.symbol} | ${trade.name} | qty=${trade.quantity} | price=${trade.price} | amt=${trade.amount} | comm=${trade.commission} | tax=${trade.tax} | assetType=${trade.assetType} | under=${trade.underlyingSymbol} | exp=${trade.expiryDate} | strike=${trade.strikePrice}\n")
                     }
+                    val outFile = File("e:\\AndroidWorkSpace\\recoder\\Statements\\longBridge\\diagnose_" + file.name.replace(".pdf", ".txt"))
+                    outFile.writeText(sb.toString(), Charsets.UTF_8)
+                    println("  Wrote parsed trades to: ${outFile.name}")
                 }
             } catch (e: Exception) {
                 println("  Failed to process ${file.name}: ${e.message}")

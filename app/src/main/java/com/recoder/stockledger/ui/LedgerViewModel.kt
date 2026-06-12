@@ -519,7 +519,7 @@ class LedgerViewModel(
                     dayProfit = "${formatSignedDisplayAmount(context.portfolio.dayProfitCny * ratio, selectedDisplayCurrency, repository.exchangeRates.value)} (${formatSignedPercent(context.portfolio.dayProfitPercent)})"
                 )
                 val holdings = context.portfolio.positions.values
-                    .filter { it.quantity != 0.0 }
+                    .filter { !isAlmostZero(it.quantity) }
                     .map { position ->
                         val quote = context.quotes.firstOrNull { it.symbol == position.symbol && it.market == position.market.name }
                         val currentPrice = quote?.currentPrice
@@ -529,7 +529,7 @@ class LedgerViewModel(
                         val mult = if (isOpt) 100.0 else 1.0
                         val scaledQty = position.quantity * ratio
                         val scaledCost = position.remainingCost * ratio
-                        val scaledAvgCost = if (position.quantity != 0.0) position.remainingCost / (position.quantity * mult) else 0.0
+                        val scaledAvgCost = if (!isAlmostZero(position.quantity)) position.remainingCost / (position.quantity * mult) else 0.0
                         
                         val unrealized = currentPrice?.let { (it - scaledAvgCost) * scaledQty * mult }
                         val dayProfit = if (currentPrice != null && previousClose != null) {
@@ -2978,12 +2978,12 @@ class LedgerViewModel(
 
                 TradeType.SPLIT -> {
                     val current = positions[key]
-                    if (current != null && current.quantity != 0.0) {
+                    if (current != null && !isAlmostZero(current.quantity)) {
                         val nextQuantity = current.quantity * transaction.price
                         val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         positions[key] = current.copy(
                             quantity = nextQuantity,
-                            averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
                         )
                     }
                 }
@@ -2994,7 +2994,7 @@ class LedgerViewModel(
         if (realtimeDate != null) {
             activityDates += realtimeDate
             positions.values.forEach { position ->
-                if (position.quantity == 0.0) return@forEach
+                if (isAlmostZero(position.quantity)) return@forEach
                 val key = positionKey(position.symbol, position.market)
                 val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
                 val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
@@ -3361,12 +3361,12 @@ class LedgerViewModel(
                 TradeType.SPLIT -> {
                     val key = positionKey(transaction.symbol, market)
                     val current = positions[key]
-                    if (current != null && current.quantity != 0.0) {
+                    if (current != null && !isAlmostZero(current.quantity)) {
                         val nextQuantity = current.quantity * transaction.price
                         val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
                         positions[key] = current.copy(
                             quantity = nextQuantity,
-                            averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
                         )
                     }
                 }
@@ -3375,7 +3375,7 @@ class LedgerViewModel(
 
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
         val holdings = positions.values
-            .filter { it.quantity != 0.0 }
+            .filter { !isAlmostZero(it.quantity) }
             .map { position ->
                 val quote = quoteMap[positionKey(position.symbol, position.market)]
                 val currentPrice = quote?.currentPrice
@@ -4627,6 +4627,8 @@ private data class RefreshMeta(
             )
         }
     }
+
+    private fun isAlmostZero(value: Double): Boolean = kotlin.math.abs(value) < EPSILON
 
     private fun isOptionSymbol(symbol: String): Boolean {
         val parts = symbol.trim().split(" ")

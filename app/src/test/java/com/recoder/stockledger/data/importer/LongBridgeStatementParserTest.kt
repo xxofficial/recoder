@@ -102,4 +102,30 @@ class LongBridgeStatementParserTest {
         assertEquals(1.99, usTrade.commission ?: 0.0, 0.001)
         assertEquals(0.0, usTrade.tax ?: 0.0, 0.001)
     }
+
+    @Test
+    fun testParseTimeAndTimezoneAndCleanName() {
+        val sampleText = """
+            2026.04.01
+            2026.04.08
+            OS20260401252868
+            买⼊
+            " "蜜雪集团
+            20.00
+            24.00
+            480.00
+            -495.07
+            下单时间 / 成交时间
+            2026.04.01 09:30:15 HKT
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+        val trade = trades[0]
+        assertEquals("OS20260401252868", trade.tradeRef)
+        assertEquals(Market.HK, trade.market)
+        assertEquals("蜜雪集团", trade.name)
+        assertEquals("", trade.symbol)
+        assertEquals("09:30", trade.tradeTime)
+    }
 }
