@@ -1052,7 +1052,8 @@ class LedgerViewModel(
                 val txns = repository.transactions.first()
                 val securityTxns = txns.filter {
                     val tType = runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()
-                    tType != null && tType.isSecurityTrade && it.symbol.isNotBlank()
+                    tType != null && tType.isSecurityTrade && it.symbol.isNotBlank() &&
+                            it.assetType.uppercase() != "OPTION" && !isOptionSymbol(it.symbol)
                 }
 
                 // Get all unique symbols

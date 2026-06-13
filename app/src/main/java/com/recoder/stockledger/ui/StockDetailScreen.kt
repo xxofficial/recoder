@@ -651,14 +651,25 @@ fun StockDetailRoute(
                                             )
                                         }
                                     }
+                                    val timeText = if (tradeType == TradeType.SPLIT) {
+                                        txn.tradeDate
+                                    } else {
+                                        "${txn.tradeDate} ${txn.tradeTime}"
+                                    }
                                     Text(
-                                        text = "${txn.tradeDate} ${txn.tradeTime}",
+                                        text = timeText,
                                         color = ForegroundMuted,
                                         fontSize = 11.sp,
                                     )
                                 }
                                 Column(horizontalAlignment = Alignment.End) {
-                                    if (tradeType?.isSecurityTrade == true) {
+                                    if (tradeType == TradeType.SPLIT) {
+                                        Text(
+                                            text = "折算比例 ${txn.price}",
+                                            color = ForegroundSecondary,
+                                            fontSize = 12.sp,
+                                        )
+                                    } else if (tradeType?.isSecurityTrade == true) {
                                         val formulaText = buildString {
                                             append(if (isBuy) "+" else "-")
                                             append(txn.quantity)
@@ -682,8 +693,13 @@ fun StockDetailRoute(
                                             fontSize = 12.sp,
                                         )
                                     }
+                                    val amountText = if (tradeType == TradeType.SPLIT) {
+                                        "--"
+                                    } else {
+                                        "${if (isBuy) "-" else "+"}${displayCurrency.symbol}${detailNumberFormatter.format(amountWithFee.absoluteValue)}"
+                                    }
                                     Text(
-                                        text = "${if (isBuy) "-" else "+"}${displayCurrency.symbol}${detailNumberFormatter.format(amountWithFee.absoluteValue)}",
+                                        text = amountText,
                                         color = ForegroundPrimary,
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Medium,
