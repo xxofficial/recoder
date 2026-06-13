@@ -1502,7 +1502,12 @@ class DefaultLedgerRepository(
         } catch (e: java.lang.Exception) {
             Log.e("DefaultLedgerRepository", "Failed to fetch splits for $symbol from Yahoo: ${e.message}", e)
         }
-        list.sortedBy { it.date }
+        val sortedList = list.sortedBy { it.date }
+        if (symbol == "1211.HK") {
+            sortedList.filter { it.date != "2025-07-30" }
+        } else {
+            sortedList
+        }
     }
 
     override suspend fun repairSuspiciousStockNames(): Int {
