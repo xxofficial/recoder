@@ -2536,9 +2536,9 @@ class LedgerViewModel(
                             } else {
                                 formatSignedMarketAmount(cashFlow, market)
                             },
-                            timeLabel = transaction.tradeTime,
+                            timeLabel = if (tradeType == TradeType.SPLIT) "" else transaction.tradeTime,
                             feeLabel = if (tradeType == TradeType.SPLIT) {
-                                transaction.note.ifBlank { "股票拆分/合并折算" }
+                                "股票拆分/合并折算"
                             } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
                                 "费用 ${formatMarketAmount(transaction.commission + transaction.tax, market)}"
                             } else {
