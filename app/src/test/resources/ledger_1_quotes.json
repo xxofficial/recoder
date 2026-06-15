@@ -1,0 +1,116 @@
+[
+  {
+    "symbol": "GLWG",
+    "market": "US",
+    "currentPrice": 23.15,
+    "previousClose": 23.15
+  },
+  {
+    "symbol": "NASA",
+    "market": "US",
+    "currentPrice": 35.24,
+    "previousClose": 35.24
+  },
+  {
+    "symbol": "DRAM",
+    "market": "US",
+    "currentPrice": 65.12,
+    "previousClose": 65.12
+  },
+  {
+    "symbol": "SNXX",
+    "market": "US",
+    "currentPrice": 32.26,
+    "previousClose": 32.26
+  },
+  {
+    "symbol": "POET",
+    "market": "US",
+    "currentPrice": 11.25,
+    "previousClose": 11.25
+  },
+  {
+    "symbol": "AAPU",
+    "market": "US",
+    "currentPrice": 37.08,
+    "previousClose": 37.08
+  },
+  {
+    "symbol": "LITX",
+    "market": "US",
+    "currentPrice": 38.44,
+    "previousClose": 38.44
+  },
+  {
+    "symbol": "EUV",
+    "market": "US",
+    "currentPrice": 28.61,
+    "previousClose": 28.61
+  },
+  {
+    "symbol": "2476.HK",
+    "market": "HK",
+    "currentPrice": 378.8,
+    "previousClose": 378.8
+  },
+  {
+    "symbol": "PXLW",
+    "market": "US",
+    "currentPrice": 6.97,
+    "previousClose": 6.97
+  },
+  {
+    "symbol": "2097.HK",
+    "market": "HK",
+    "currentPrice": 277.4,
+    "previousClose": 273.2
+  },
+  {
+    "symbol": "2525.HK",
+    "market": "HK",
+    "currentPrice": 143.7,
+    "previousClose": 138.0
+  },
+  {
+    "symbol": "SPY",
+    "market": "US",
+    "currentPrice": 737.76,
+    "previousClose": 725.43
+  },
+  {
+    "symbol": "QQQ",
+    "market": "US",
+    "currentPrice": 717.12,
+    "previousClose": 693.69
+  },
+  {
+    "symbol": "02097.HK",
+    "market": "HK",
+    "currentPrice": 276.4,
+    "previousClose": 273.2
+  },
+  {
+    "symbol": "NOK 261016C17",
+    "market": "US",
+    "currentPrice": 1.78,
+    "previousClose": 1.78
+  },
+  {
+    "symbol": "DRAM 260618C65",
+    "market": "US",
+    "currentPrice": 3.75,
+    "previousClose": 3.75
+  },
+  {
+    "symbol": "LWLG 260618C20",
+    "market": "US",
+    "currentPrice": 0.04,
+    "previousClose": 0.04
+  },
+  {
+    "symbol": "9868.HK",
+    "market": "HK",
+    "currentPrice": 57.7,
+    "previousClose": 56.2
+  }
+]

@@ -22,6 +22,7 @@ data class ProfitAnalysisUiModel(
     val totalTaxCny: Double = 0.0,
     val securityTradeCount: Int = 0,
     val transactions: List<TransactionEntity> = emptyList(),
+    val isHistoricalDataFallback: Boolean = false,
 )
 
 data class ProfitAnalysisPointUiModel(

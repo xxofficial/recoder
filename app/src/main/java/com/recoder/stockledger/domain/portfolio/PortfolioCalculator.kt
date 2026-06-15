@@ -18,6 +18,7 @@ data class PortfolioTrade(
     val commission: Double,
     val tax: Double,
     val createdAt: Long,
+    val assetType: String = "",
 )
 
 data class PortfolioQuote(
@@ -35,6 +36,7 @@ data class PortfolioPosition(
     val averageCost: Double,
     val remainingCost: Double,
     val realizedProfit: Double,
+    val assetType: String = "",
 )
 
 data class PortfolioSnapshot(
@@ -77,14 +79,53 @@ class PortfolioCalculator {
             .forEach { transaction ->
                 when (transaction.tradeType) {
                     TradeType.DEPOSIT -> {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
-                        cashBalanceCny += amountCny
+                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                        val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
+                        if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
+                            cashBalanceCny += amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, transaction.market)
+                            val current = positions[key] ?: PortfolioPosition(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = transaction.market,
+                                quantity = 0.0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                            )
+                            val rawQty = current.quantity + transaction.quantity
+                            val nextQuantity = cleanQuantity(rawQty)
+                            val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * mult)
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                remainingCost = nextRemaining,
+                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
+                            )
+                        }
                         totalDepositCny += amountCny
                     }
 
                     TradeType.WITHDRAW -> {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
-                        cashBalanceCny -= amountCny
+                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                        val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
+                        if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
+                            cashBalanceCny -= amountCny
+                        } else {
+                            val key = positionKey(transaction.symbol, transaction.market)
+                            val current = positions[key]
+                            if (current != null) {
+                                val rawQty = current.quantity - transaction.quantity
+                                val nextQuantity = cleanQuantity(rawQty)
+                                val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - (transaction.price * transaction.quantity * mult)
+                                positions[key] = current.copy(
+                                    quantity = nextQuantity,
+                                    remainingCost = nextRemaining,
+                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
+                                )
+                            }
+                        }
                         totalWithdrawCny += amountCny
                     }
 
@@ -106,9 +147,9 @@ class PortfolioCalculator {
                     }
 
                     TradeType.TRANSFER_IN -> {
-                        val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
-                        if (transaction.symbol == "CASH") {
+                        if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
                             cashBalanceCny += amountCny
                         } else {
                             val key = positionKey(transaction.symbol, transaction.market)
@@ -120,6 +161,7 @@ class PortfolioCalculator {
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
+                                assetType = transaction.assetType,
                             )
                             val rawQty = current.quantity + transaction.quantity
                             val nextQuantity = cleanQuantity(rawQty)
@@ -134,9 +176,9 @@ class PortfolioCalculator {
                     }
 
                     TradeType.TRANSFER_OUT -> {
-                        val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
-                        if (transaction.symbol == "CASH") {
+                        if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
                             cashBalanceCny -= amountCny
                         } else {
                             val key = positionKey(transaction.symbol, transaction.market)
@@ -148,6 +190,7 @@ class PortfolioCalculator {
                                 averageCost = 0.0,
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
+                                assetType = transaction.assetType,
                             )
                             val rawQty = current.quantity - transaction.quantity
                             val nextQuantity = cleanQuantity(rawQty)
@@ -167,7 +210,7 @@ class PortfolioCalculator {
                         if (current != null && !isAlmostZero(current.quantity)) {
                             val rawQty = current.quantity * transaction.price
                             val nextQuantity = cleanQuantity(rawQty)
-                            val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                            val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
@@ -180,7 +223,7 @@ class PortfolioCalculator {
         val quoteMap = quotes.associateBy { positionKey(it.symbol, it.market) }
         val holdingsValueCny = positions.values.sumOf { position ->
             val quote = quoteMap[positionKey(position.symbol, position.market)]
-            val mult = if (isOptionSymbol(position.symbol)) 100.0 else 1.0
+            val mult = if (isOption(position.symbol, position.assetType)) 100.0 else 1.0
             convertToCny(position.quantity * (quote?.currentPrice ?: position.averageCost) * mult, position.market, exchangeRates)
         }
         val holdingsCostCny = positions.values.sumOf { position ->
@@ -191,13 +234,13 @@ class PortfolioCalculator {
             val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
             val current = quote.currentPrice ?: return@sumOf 0.0
             val previous = quote.previousClose ?: return@sumOf 0.0
-            val mult = if (isOptionSymbol(position.symbol)) 100.0 else 1.0
+            val mult = if (isOption(position.symbol, position.assetType)) 100.0 else 1.0
             convertToCny((current - previous) * position.quantity * mult, position.market, exchangeRates)
         }
         val previousHoldingsValueCny = positions.values.sumOf { position ->
             val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
             val previous = quote.previousClose ?: return@sumOf 0.0
-            val mult = if (isOptionSymbol(position.symbol)) 100.0 else 1.0
+            val mult = if (isOption(position.symbol, position.assetType)) 100.0 else 1.0
             convertToCny(previous * position.quantity * mult, position.market, exchangeRates)
         }
         val netInflowCny = totalDepositCny - totalWithdrawCny
@@ -228,6 +271,10 @@ class PortfolioCalculator {
         )
     }
 
+    private fun isOption(symbol: String, assetType: String): Boolean {
+        return assetType.uppercase(java.util.Locale.US) == "OPTION" || isOptionSymbol(symbol)
+    }
+
     private fun isOptionSymbol(symbol: String): Boolean {
         val parts = symbol.trim().split(" ")
         if (parts.size != 2) return false
@@ -254,9 +301,10 @@ class PortfolioCalculator {
             averageCost = 0.0,
             remainingCost = 0.0,
             realizedProfit = 0.0,
+            assetType = transaction.assetType,
         )
 
-        val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
         val cashDelta = if (transaction.tradeType == TradeType.BUY) {
             -convertToCny(
                 transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax,
@@ -280,7 +328,7 @@ class PortfolioCalculator {
     }
 
     private fun applyBuy(current: PortfolioPosition, transaction: PortfolioTrade): PortfolioPosition {
-        val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
         if (current.quantity < 0.0) {
             val coverQuantity = minOf(-current.quantity, transaction.quantity)
             val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
@@ -296,6 +344,7 @@ class PortfolioCalculator {
                     remainingCost = transaction.price * remainingBuyQty * mult,
                     averageCost = transaction.price,
                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
+                    assetType = transaction.assetType,
                 )
             } else {
                 val rawNextQty = current.quantity + transaction.quantity
@@ -326,7 +375,7 @@ class PortfolioCalculator {
     }
 
     private fun applySell(current: PortfolioPosition, transaction: PortfolioTrade): PortfolioPosition {
-        val mult = if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
         if (current.quantity > 0.0) {
             val closeQuantity = minOf(current.quantity, transaction.quantity)
             val removedCost = current.averageCost * closeQuantity * mult
@@ -343,6 +392,7 @@ class PortfolioCalculator {
                     remainingCost = -(transaction.price * remainingSellQty * mult),
                     averageCost = transaction.price,
                     realizedProfit = current.realizedProfit + closeProfit,
+                    assetType = transaction.assetType,
                 )
             } else {
                 val rawNextQty = current.quantity - closeQuantity
@@ -391,7 +441,7 @@ class PortfolioCalculator {
         positions[key] = current.copy(
             quantity = nextQuantity,
             remainingCost = current.remainingCost - closedCost,
-            averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
+            averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0)),
             realizedProfit = current.realizedProfit + coverProfit
         )
     }

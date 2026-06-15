@@ -76,10 +76,23 @@ interface LedgerDao {
     @Query("DELETE FROM quote_snapshots WHERE symbol = :symbol AND market = :market")
     suspend fun deleteQuoteByHolding(symbol: String, market: String): Int
 
+    @Upsert
+    suspend fun upsertHistoricalCloses(points: List<HistoricalCloseEntity>)
+
+    @Query("SELECT * FROM historical_closes")
+    suspend fun getAllHistoricalCloses(): List<HistoricalCloseEntity>
+
+    @Query("DELETE FROM historical_closes")
+    suspend fun clearHistoricalCloses()
+
+    @Query("DELETE FROM historical_closes WHERE symbol = :symbol AND market = :market")
+    suspend fun deleteHistoricalClosesByHolding(symbol: String, market: String): Int
+
     @Transaction
     suspend fun deleteHolding(symbol: String, market: String): Int {
         val deletedCount = deleteTransactionsByHolding(symbol, market)
         deleteQuoteByHolding(symbol, market)
+        deleteHistoricalClosesByHolding(symbol, market)
         return deletedCount
     }
 
@@ -87,6 +100,7 @@ interface LedgerDao {
     suspend fun replaceTransactions(transactions: List<TransactionEntity>): List<Long> {
         clearTransactions()
         clearQuotes()
+        clearHistoricalCloses()
         return insertTransactions(transactions)
     }
 

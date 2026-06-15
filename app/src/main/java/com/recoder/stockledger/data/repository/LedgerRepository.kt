@@ -31,11 +31,17 @@ import jakarta.mail.Multipart
 import jakarta.mail.Session
 import jakarta.mail.Store
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import com.recoder.stockledger.data.local.HistoricalCloseEntity
+import com.recoder.stockledger.data.local.toDomain
+import com.recoder.stockledger.data.local.toEntity
+import com.recoder.stockledger.domain.market.MarketTradingSessions
 import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
@@ -248,6 +254,18 @@ class DefaultLedgerRepository(
     override val exchangeRates: StateFlow<ExchangeRates> = _exchangeRates
     private var lastQuotesRefreshTimeMillis: Long = 0L
 
+    init {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val cached = dao.getAllHistoricalCloses().map { it.toDomain() }
+                _historicalCloses.value = cached
+                Log.d("DefaultLedgerRepository", "Loaded ${cached.size} cached historical closes from database")
+            } catch (e: Exception) {
+                Log.e("DefaultLedgerRepository", "Failed to load cached historical closes", e)
+            }
+        }
+    }
+
     override val isUsingRealtimeQuotes: Boolean
         get() = quoteDataSource.isConfigured
 
@@ -425,7 +443,9 @@ class DefaultLedgerRepository(
     }
 
     private suspend fun resolveConsistentName(symbol: String, market: Market, providedName: String): String {
-        if (symbol.isBlank()) return providedName
+        if (symbol.isBlank() || symbol == "CASH") {
+            return providedName.ifBlank { "资金账户" }
+        }
 
         // 1. Try to find from existing transactions to maintain ledger-wide consistency
         val existingName = dao.findStockNameFromTransactions(symbol, market.name)
@@ -1362,8 +1382,26 @@ class DefaultLedgerRepository(
         if (deduped.isNotEmpty() && refreshed.isEmpty()) {
             throw IOException("未能从 ${quoteDataSource.providerLabel} 获取行情")
         }
-        if (refreshed.isNotEmpty()) {
-            dao.upsertQuotes(refreshed)
+
+        // Align quotes with the latest historical close if the market is closed/pre-market
+        val historical = _historicalCloses.value.groupBy { it.market to it.symbol }
+        val now = Instant.now()
+        val alignedRefreshed = refreshed.map { quote ->
+            val market = Market.fromString(quote.market) ?: return@map quote
+            val history = historical[market to quote.symbol] ?: return@map quote
+            val latestPoint = history.maxByOrNull { it.date } ?: return@map quote
+            
+            if (!MarketTradingSessions.hasOpenedForTrading(market, now)) {
+                if (latestPoint.closePrice != quote.currentPrice) {
+                    Log.d("LedgerRepository", "Aligning quote for ${quote.symbol} (${quote.market}) to pre-market price ${latestPoint.closePrice} (was ${quote.currentPrice})")
+                    return@map quote.copy(currentPrice = latestPoint.closePrice)
+                }
+            }
+            quote
+        }
+
+        if (alignedRefreshed.isNotEmpty()) {
+            dao.upsertQuotes(alignedRefreshed)
         }
         return dao.latestQuoteRefreshTimestamp() ?: System.currentTimeMillis()
     }
@@ -1409,9 +1447,53 @@ class DefaultLedgerRepository(
             .coerceAtLeast(90)
             .coerceAtMost(2_400) + 10
 
-        _historicalCloses.value = runCatching {
-            quoteDataSource.fetchHistoricalCloses(requests, lookbackDays)
-        }.getOrElse { emptyList() }
+        val historicalClosesFromDb = dao.getAllHistoricalCloses().map { it.toDomain() }
+        val historicalGrouped = historicalClosesFromDb.groupBy { it.market to it.symbol }
+
+        val prefs = context.getSharedPreferences("historical_closes_prefs", Context.MODE_PRIVATE)
+        val cacheExpiry = 12 * 60 * 60 * 1000L // 12 hours
+
+        val (toFetch, toUseCache) = requests.partition { request ->
+            val lastFetched = prefs.getLong("fetch_${request.market.name}_${request.symbol}", 0L)
+            force || (now - lastFetched >= cacheExpiry) || !historicalGrouped.containsKey(request.market to request.symbol)
+        }
+
+        val fetchedPoints = if (toFetch.isNotEmpty()) {
+            runCatching {
+                quoteDataSource.fetchHistoricalCloses(toFetch, lookbackDays)
+            }.getOrElse { emptyList() }
+        } else {
+            emptyList()
+        }
+
+        if (fetchedPoints.isNotEmpty()) {
+            val fetchedGrouped = fetchedPoints.groupBy { it.market to it.symbol }
+            dao.upsertHistoricalCloses(fetchedPoints.map { it.toEntity() })
+            
+            val edit = prefs.edit()
+            fetchedGrouped.keys.forEach { (market, symbol) ->
+                edit.putLong("fetch_${market.name}_$symbol", now)
+            }
+            edit.apply()
+        }
+
+        val combinedPoints = buildList {
+            toUseCache.forEach { request ->
+                addAll(historicalGrouped[request.market to request.symbol].orEmpty())
+            }
+            val fetchedGrouped = fetchedPoints.groupBy { it.market to it.symbol }
+            toFetch.forEach { request ->
+                val key = request.market to request.symbol
+                val points = fetchedGrouped[key]
+                if (!points.isNullOrEmpty()) {
+                    addAll(points)
+                } else {
+                    addAll(historicalGrouped[key].orEmpty())
+                }
+            }
+        }
+
+        _historicalCloses.value = combinedPoints
 
         // Filter requests: only refresh quotes for active holdings (quantity != 0)
         val activeKeys = securityTransactions.groupBy { it.market to it.symbol }.filter { (_, txns) ->
@@ -1789,7 +1871,7 @@ class DefaultLedgerRepository(
 
         // 2. Extract unique (symbol, market)
         val targetHoldings = importedTxns
-            .filter { it.symbol.isNotBlank() && it.market != Market.CASH.name }
+            .filter { it.symbol.isNotBlank() && it.symbol != "CASH" && it.market != Market.CASH.name }
             .map { it.symbol to it.market }
             .distinct()
 

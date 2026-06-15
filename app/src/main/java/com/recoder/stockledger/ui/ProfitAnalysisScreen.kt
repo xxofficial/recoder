@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -98,6 +99,7 @@ private val yearFormatter = DateTimeFormatter.ofPattern("yyyy年")
 private val weekFields: WeekFields = WeekFields.of(DayOfWeek.SUNDAY, 1)
 
 private enum class ProfitRange(val label: String) {
+    ALL("全部"),
     THIS_MONTH("本月"),
     ONE_MONTH("近1月"),
     SIX_MONTHS("近6月"),
@@ -170,9 +172,11 @@ fun ProfitAnalysisRoute(
             range = selectedRange,
         )
     }
-    val (rangeStart, rangeEnd) = remember(analysis.latestDate, selectedRange) {
+    val firstDate = remember(allPoints) { allPoints.firstOrNull()?.date ?: analysis.latestDate }
+    val (rangeStart, rangeEnd) = remember(analysis.latestDate, selectedRange, firstDate) {
         resolveRangeWindow(
             latestDate = analysis.latestDate,
+            firstDate = firstDate,
             range = selectedRange,
         )
     }
@@ -214,10 +218,38 @@ fun ProfitAnalysisRoute(
                     onSelected = onDisplayCurrencySelected,
                 )
 
+                if (analysis.isHistoricalDataFallback) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFFFBEB))
+                            .border(1.dp, Color(0xFFFDE68A), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Warning",
+                            tint = Color(0xFFB45309),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "未获取到历史收盘价数据，部分历史区间的盈亏统计可能存在偏差（今日持仓总盈亏已自动对齐持仓界面）。请检查网络或稍后重试。",
+                            color = Color(0xFFB45309),
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+
                 SummaryBlock(
                     stats = rangeStats,
                     displayCurrency = displayCurrency,
                     exchangeRates = exchangeRates,
+                    selectedRange = selectedRange,
                 )
 
                 Row(
@@ -275,14 +307,20 @@ private fun SummaryBlock(
     stats: RangeStats,
     displayCurrency: DisplayCurrency,
     exchangeRates: ExchangeRates,
+    selectedRange: ProfitRange,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        val titleText = if (selectedRange == ProfitRange.ALL) {
+            "累计总盈亏 (${displayCurrency.code})"
+        } else {
+            "区间盈亏 (${displayCurrency.code})"
+        }
         Text(
-            text = "盈亏总额 (${displayCurrency.code})",
+            text = titleText,
             color = ForegroundSecondary,
             fontSize = 14.sp,
         )
@@ -986,12 +1024,13 @@ private fun filterPointsForRange(
     range: ProfitRange,
 ): List<ProfitAnalysisPointUiModel> {
     val startDate = when (range) {
+        ProfitRange.ALL -> points.firstOrNull()?.date ?: latestDate
         ProfitRange.THIS_MONTH -> latestDate.withDayOfMonth(1)
         ProfitRange.ONE_MONTH -> latestDate.minusMonths(1).plusDays(1)
         ProfitRange.SIX_MONTHS -> latestDate.minusMonths(6).plusDays(1)
         ProfitRange.THIS_YEAR -> latestDate.withDayOfYear(1)
     }
-    val priorCumulative = points.lastOrNull { it.date.isBefore(startDate) }?.cumulativeProfitCny ?: 0.0
+    val priorCumulative = if (range == ProfitRange.ALL) 0.0 else points.lastOrNull { it.date.isBefore(startDate) }?.cumulativeProfitCny ?: 0.0
     val filtered = points.filter { !it.date.isBefore(startDate) && !it.date.isAfter(latestDate) }
 
     return if (filtered.isEmpty()) {
@@ -1057,9 +1096,11 @@ private fun buildRangeStats(
 
 private fun resolveRangeWindow(
     latestDate: LocalDate,
+    firstDate: LocalDate,
     range: ProfitRange,
 ): Pair<LocalDate, LocalDate> {
     val startDate = when (range) {
+        ProfitRange.ALL -> firstDate
         ProfitRange.THIS_MONTH -> latestDate.withDayOfMonth(1)
         ProfitRange.ONE_MONTH -> latestDate.minusMonths(1).plusDays(1)
         ProfitRange.SIX_MONTHS -> latestDate.minusMonths(6).plusDays(1)

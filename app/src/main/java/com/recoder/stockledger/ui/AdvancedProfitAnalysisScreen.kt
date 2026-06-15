@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -328,6 +329,33 @@ fun AdvancedProfitAnalysisRoute(
                     .padding(start = 20.dp, end = 20.dp, top = 0.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
+                if (analysis.isHistoricalDataFallback) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFFFBEB))
+                            .border(1.dp, Color(0xFFFDE68A), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Warning",
+                            tint = Color(0xFFB45309),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "未获取到历史收盘价数据，部分历史区间的盈亏统计可能存在偏差（今日持仓总盈亏已自动对齐持仓界面）。请检查网络或稍后重试。",
+                            color = Color(0xFFB45309),
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+
                 AdvancedSummaryBlock(
                     stats = rangeStats,
                     displayCurrency = displayCurrency,

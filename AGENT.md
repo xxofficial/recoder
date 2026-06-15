@@ -75,3 +75,25 @@ Backups exported by the application are usually saved under:
   * `type = "JOINT"`: Multi-investor portfolios supporting dynamic contribution ratios.
 * **Transactions (`transactions` table)**: References `ledgerId` to partition trades.
   * Room Migration `MIGRATION_3_4` automatically populates existing records under the default ledger `1`.
+
+---
+
+## 5. Development Workflow for Bug Fixing (Bug 修复开发流程规范)
+
+To ensure high-quality fixes and maintain project stability, the AI agent must strictly follow this communication and approval workflow when handling user-reported bugs:
+
+1. **Bug Analysis (问题分析与方案设计)**:
+   - Analyze the codebase to find where the bug resides and its root cause.
+   - Explain **in Chinese** where the problem is located.
+   - Outline the proposed **modification plan in Chinese**.
+   - **STOP** and wait for explicit approval from the user before executing the changes.
+
+2. **Implementation & Verification (修复与验证)**:
+   - Perform the code changes and verify correctness (e.g., compile and run tests).
+   - **Do not commit to Git** (e.g., do not perform git commit commands) immediately.
+   - Present the changes and verification results to the user.
+
+3. **Approval & Commit (确认与代码提交)**:
+   - Wait for the user's agreement.
+   - Once approved, commit the changes to Git using a **Chinese commit message**.
+

@@ -439,4 +439,25 @@ class JointLedgerMathTest {
     private fun assertFalse(value: Boolean) {
         org.junit.Assert.assertFalse(value)
     }
+
+    @Test
+    fun testFormatQuantity() {
+        fun formatQuantity(qty: Double): String {
+            val formatted = String.format(java.util.Locale.US, "%.2f", qty)
+            return if (formatted.contains(".")) {
+                formatted.dropLastWhile { it == '0' }.removeSuffix(".")
+            } else {
+                formatted
+            }
+        }
+
+        assertEquals("20", formatQuantity(20.0))
+        assertEquals("20.5", formatQuantity(20.5))
+        assertEquals("20.55", formatQuantity(20.55))
+        assertEquals("100", formatQuantity(100.0))
+        assertEquals("0", formatQuantity(0.0))
+        assertEquals("0.1", formatQuantity(0.1))
+        assertEquals("10", formatQuantity(10.0))
+        assertEquals("2", formatQuantity(2.0))
+    }
 }

@@ -10,6 +10,50 @@ class PortfolioCalculatorTest {
     private val calculator = PortfolioCalculator()
 
     @Test
+    fun testFormatQuantity() {
+        listOf(20.0, 2.0, 20.5, 20.05, 0.0, 200.0, 20.0001).forEach { qty ->
+            val formatted = String.format(java.util.Locale.US, "%.2f", qty)
+            val res = if (formatted.contains(".")) {
+                formatted.dropLastWhile { it == '0' }.removeSuffix(".")
+            } else {
+                formatted
+            }
+            println("formatQuantity($qty) = '$res'")
+        }
+    }
+
+    @Test
+    fun testDramCalculation() {
+        val trades = listOf(
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 27.17, quantity = 6.0, tradeDate = "2026-04-02", tradeTime = "22:01"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 32.31, quantity = 8.0, tradeDate = "2026-04-08", tradeTime = "23:59"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 32.3, quantity = 5.0, tradeDate = "2026-04-09", tradeTime = "11:16"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 34.0, quantity = 5.0, tradeDate = "2026-04-15", tradeTime = "23:02"),
+            trade(type = TradeType.SELL, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 34.97, quantity = 4.0, tradeDate = "2026-04-17", tradeTime = "09:37"),
+            trade(type = TradeType.SELL, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 35.72, quantity = 10.0, tradeDate = "2026-04-17", tradeTime = "23:51"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 36.37, quantity = 2.0, tradeDate = "2026-04-25", tradeTime = "09:37"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 38.9, quantity = 3.0, tradeDate = "2026-04-30", tradeTime = "08:23"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 42.15, quantity = 5.0, tradeDate = "2026-05-04", tradeTime = "17:11"),
+            trade(type = TradeType.SELL, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 48.01, quantity = 3.0, tradeDate = "2026-05-07", tradeTime = "00:31"),
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM", name = "存储ETF", price = 51.03, quantity = 3.0, tradeDate = "2026-05-18", tradeTime = "22:06"),
+            // Option trade
+            trade(type = TradeType.BUY, market = Market.US, symbol = "DRAM 260618C65", name = "DRAM Jun 2026 65.000 call", price = 3.8, quantity = 1.0, tradeDate = "2026-05-11", tradeTime = "22:06")
+        )
+        val snapshot = calculator.calculate(
+            transactions = trades,
+            quotes = listOf(
+                PortfolioQuote(symbol = "DRAM", market = Market.US, currentPrice = 65.12, previousClose = 65.12),
+                PortfolioQuote(symbol = "DRAM 260618C65", market = Market.US, currentPrice = 3.75, previousClose = 3.75)
+            ),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 1.0)
+        )
+        println("COMPUTED POSITIONS:")
+        snapshot.positions.forEach { (key, pos) ->
+            println("$key: qty=${pos.quantity}, avgCost=${pos.averageCost}, remainingCost=${pos.remainingCost}")
+        }
+    }
+
+    @Test
     fun `calculate handles cash deposit and usd buy with quote`() {
         val snapshot = calculator.calculate(
             transactions = listOf(
@@ -190,6 +234,159 @@ class PortfolioCalculatorTest {
         assertEquals(-100.0, pos.realizedProfit, 0.0001)
     }
 
+    @Test
+    fun testCalculateAllLedger1() {
+        val txnsJson = java.io.File("src/test/resources/ledger_1_txns.json").readText()
+        val quotesJson = java.io.File("src/test/resources/ledger_1_quotes.json").readText()
+        
+        val trades = parseTransactionsJson(txnsJson)
+        val quotes = parseQuotesJson(quotesJson)
+        
+        val snapshot = calculator.calculate(
+            transactions = trades,
+            quotes = quotes,
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 0.9)
+        )
+        
+        println("ALL COMPUTED POSITIONS:")
+        snapshot.positions.forEach { (key, pos) ->
+            println("$key: name=${pos.name}, qty=${pos.quantity}, avgCost=${pos.averageCost}, remainingCost=${pos.remainingCost}")
+        }
+    }
+
+    @Test
+    fun testCashAndStockDepositWithdrawal() {
+        val usdRate = 7.0
+        // Scenario:
+        // 1. Deposit cash: 10,000 USD (market = Market.CASH, symbol = "CASH")
+        // 2. Deposit stock: 100 shares of TSLA at $200 (market = Market.US, symbol = "TSLA")
+        // 3. Withdraw stock: 20 shares of TSLA at $200 (market = Market.US, symbol = "TSLA")
+        // 4. Withdraw cash: 1,000 USD (market = Market.CASH, symbol = "CASH")
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(
+                    type = TradeType.DEPOSIT,
+                    market = Market.CASH,
+                    symbol = "CASH",
+                    price = 10000.0,
+                    quantity = 1.0
+                ),
+                trade(
+                    type = TradeType.DEPOSIT,
+                    market = Market.US,
+                    symbol = "TSLA",
+                    price = 200.0,
+                    quantity = 100.0
+                ),
+                trade(
+                    type = TradeType.WITHDRAW,
+                    market = Market.US,
+                    symbol = "TSLA",
+                    price = 200.0,
+                    quantity = 20.0
+                ),
+                trade(
+                    type = TradeType.WITHDRAW,
+                    market = Market.CASH,
+                    symbol = "CASH",
+                    price = 1000.0,
+                    quantity = 1.0
+                )
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
+        )
+
+        // Cash balance should reflect only cash transactions: 10,000 - 1,000 = 9,000 USD.
+        // In CNY: 9,000 * 1.0 = 9000.0
+        assertEquals(9000.0, snapshot.cashBalanceCny, 0.0001)
+
+        // Stock position for TSLA should reflect deposits/withdrawals: 100 - 20 = 80 shares.
+        val tslaPos = snapshot.positions.getValue("US:TSLA")
+        assertEquals(80.0, tslaPos.quantity, 0.0001)
+        // Average cost and remaining cost:
+        // Initial deposit remaining cost: 100 * 200 = 20,000 USD.
+        // Withdrawal of 20 shares: remaining cost decreases by 20 * 200 = 4,000 USD.
+        // Final remaining cost: 16,000 USD. Average cost: 200.0.
+        assertEquals(16000.0, tslaPos.remainingCost, 0.0001)
+        assertEquals(200.0, tslaPos.averageCost, 0.0001)
+    }
+
+    private fun parseTransactionsJson(json: String): List<PortfolioTrade> {
+        val list = mutableListOf<PortfolioTrade>()
+        val objRegex = Regex("""\{([^}]+)}""", RegexOption.DOT_MATCHES_ALL)
+        objRegex.findAll(json).forEach { match ->
+            val content = match.groupValues[1]
+            val symbol = extractStringField(content, "symbol")
+            val name = extractStringField(content, "name")
+            val market = extractStringField(content, "market")
+            val tradeType = extractStringField(content, "tradeType")
+            val price = extractDoubleField(content, "price")
+            val quantity = extractDoubleField(content, "quantity")
+            val commission = extractDoubleField(content, "commission")
+            val tax = extractDoubleField(content, "tax")
+            val tradeDate = extractStringField(content, "tradeDate")
+            val tradeTime = extractStringField(content, "tradeTime")
+            val createdAt = extractLongField(content, "createdAt")
+            val assetType = extractStringField(content, "assetType")
+            
+            list.add(PortfolioTrade(
+                tradeType = TradeType.valueOf(tradeType),
+                market = Market.valueOf(market),
+                symbol = symbol,
+                name = name,
+                tradeDate = tradeDate,
+                tradeTime = tradeTime,
+                price = price,
+                quantity = quantity,
+                commission = commission,
+                tax = tax,
+                createdAt = createdAt,
+                assetType = assetType,
+            ))
+        }
+        return list
+    }
+
+    private fun parseQuotesJson(json: String): List<PortfolioQuote> {
+        val list = mutableListOf<PortfolioQuote>()
+        val objRegex = Regex("""\{([^}]+)}""", RegexOption.DOT_MATCHES_ALL)
+        objRegex.findAll(json).forEach { match ->
+            val content = match.groupValues[1]
+            val symbol = extractStringField(content, "symbol")
+            val market = extractStringField(content, "market")
+            val currentPrice = extractDoubleFieldOrNull(content, "currentPrice")
+            val previousClose = extractDoubleFieldOrNull(content, "previousClose")
+            list.add(PortfolioQuote(
+                symbol = symbol,
+                market = Market.valueOf(market),
+                currentPrice = currentPrice,
+                previousClose = previousClose
+            ))
+        }
+        return list
+    }
+
+    private fun extractStringField(jsonObj: String, fieldName: String): String {
+        val regex = Regex("\"$fieldName\"\\s*:\\s*\"([^\"]*)\"")
+        return regex.find(jsonObj)?.groupValues?.get(1) ?: ""
+    }
+
+    private fun extractDoubleField(jsonObj: String, fieldName: String): Double {
+        val regex = Regex("\"$fieldName\"\\s*:\\s*([0-9.-]+)")
+        return regex.find(jsonObj)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+    }
+
+    private fun extractDoubleFieldOrNull(jsonObj: String, fieldName: String): Double? {
+        val regex = Regex("\"$fieldName\"\\s*:\\s*([0-9.-]+)")
+        return regex.find(jsonObj)?.groupValues?.get(1)?.toDoubleOrNull()
+    }
+
+    private fun extractLongField(jsonObj: String, fieldName: String): Long {
+        val regex = Regex("\"$fieldName\"\\s*:\\s*([0-9]+)")
+        return regex.find(jsonObj)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+    }
+
     private fun trade(
         type: TradeType,
         market: Market,
@@ -214,4 +411,77 @@ class PortfolioCalculatorTest {
         tax = tax,
         createdAt = 1L,
     )
+
+    @Test
+    fun testUserDatabase() {
+        val txsFile = java.io.File("e:\\AndroidWorkSpace\\recoder\\tmp\\transactions.json")
+        val quotesFile = java.io.File("e:\\AndroidWorkSpace\\recoder\\tmp\\quotes.json")
+        if (!txsFile.exists()) {
+            println("transactions.json does not exist!")
+            return
+        }
+        val txsContent = txsFile.readText()
+        val quotesContent = quotesFile.readText()
+        println("txsContent length: ${txsContent.length}")
+        println("txsContent prefix: ${txsContent.take(100)}")
+        
+        val txsArray = org.json.JSONArray(txsContent)
+        val quotesArray = org.json.JSONArray(quotesContent)
+        
+        val trades = mutableListOf<PortfolioTrade>()
+        for (i in 0 until txsArray.length()) {
+            val obj = txsArray.getJSONObject(i)
+            trades.add(PortfolioTrade(
+                tradeType = TradeType.valueOf(obj.getString("tradeType")),
+                market = Market.fromString(obj.getString("market")) ?: Market.CASH,
+                symbol = obj.getString("symbol"),
+                name = obj.getString("name"),
+                tradeDate = obj.getString("tradeDate"),
+                tradeTime = obj.getString("tradeTime"),
+                price = obj.getDouble("price"),
+                quantity = obj.getDouble("quantity"),
+                commission = obj.getDouble("commission"),
+                tax = obj.getDouble("tax"),
+                createdAt = obj.optLong("createdAt", 1L),
+                assetType = obj.optString("assetType", ""),
+            ))
+        }
+        
+        val quotes = mutableListOf<PortfolioQuote>()
+        for (i in 0 until quotesArray.length()) {
+            val obj = quotesArray.getJSONObject(i)
+            quotes.add(PortfolioQuote(
+                symbol = obj.getString("symbol"),
+                market = Market.fromString(obj.getString("market")) ?: Market.CASH,
+                currentPrice = if (obj.isNull("currentPrice")) null else obj.getDouble("currentPrice"),
+                previousClose = if (obj.isNull("previousClose")) null else obj.getDouble("previousClose"),
+            ))
+        }
+
+        
+        val exchangeRates = ExchangeRates(usdToCny = 6.7658, hkdToCny = 0.86247)
+        println("Parsed trades size: ${trades.size}")
+        println("Parsed quotes size: ${quotes.size}")
+        if (trades.isNotEmpty()) {
+            println("First trade: ${trades.first()}")
+        }
+        val snapshot = calculator.calculate(trades, quotes, exchangeRates)
+        println("--- KOTLIN PORTFOLIO CALCULATOR SNAPSHOT ---")
+        println("Total Assets CNY: ${snapshot.totalAssetsCny}")
+        println("Holdings Value CNY: ${snapshot.holdingsValueCny}")
+        println("Cash Balance CNY: ${snapshot.cashBalanceCny}")
+        println("Total Deposit CNY: ${snapshot.totalDepositCny}")
+        println("Total Withdraw CNY: ${snapshot.totalWithdrawCny}")
+        println("Net Inflow CNY: ${snapshot.netInflowCny}")
+        println("Total Profit CNY: ${snapshot.totalAssetsCny - snapshot.netInflowCny}")
+        println("unrealizedProfitCny: ${snapshot.unrealizedProfitCny}")
+        
+        println("--- Computed Positions ---")
+        snapshot.positions.forEach { (key, pos) ->
+            if (pos.quantity != 0.0) {
+                println("Key: $key, Qty: ${pos.quantity}, AvgCost: ${pos.averageCost}, RemCost: ${pos.remainingCost}, Realized: ${pos.realizedProfit}")
+            }
+        }
+    }
 }
+

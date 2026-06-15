@@ -95,6 +95,7 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
     ksp("androidx.room:room-compiler:2.8.4")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     testImplementation("org.apache.pdfbox:pdfbox:2.0.29")
     androidTestImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

@@ -6,8 +6,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [TransactionEntity::class, QuoteSnapshotEntity::class, LedgerEntity::class],
-    version = 6,
+    entities = [TransactionEntity::class, QuoteSnapshotEntity::class, LedgerEntity::class, HistoricalCloseEntity::class],
+    version = 7,
     exportSchema = false,
 )
 abstract class StockLedgerDatabase : RoomDatabase() {
@@ -175,6 +175,22 @@ abstract class StockLedgerDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE `transactions_new` RENAME TO `transactions`")
                 database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_symbol_market` ON `transactions` (`symbol`, `market`)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_ledgerId` ON `transactions` (`ledgerId`)")
+            }
+        }
+
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `historical_closes` (
+                        `symbol` TEXT NOT NULL,
+                        `market` TEXT NOT NULL,
+                        `date` TEXT NOT NULL,
+                        `closePrice` REAL NOT NULL,
+                        PRIMARY KEY(`symbol`, `market`, `date`)
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }
