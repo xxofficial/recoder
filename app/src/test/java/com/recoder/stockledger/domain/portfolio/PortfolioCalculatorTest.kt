@@ -154,6 +154,31 @@ class PortfolioCalculatorTest {
     }
 
     @Test
+    fun `calculate handles US stock split timezone sorting`() {
+        // Test that a US split on 2026-03-10 00:00:00 (which is the effective date of the split)
+        // is sorted BEFORE a US trade on 2026-03-11 05:44 HKT (which gets shifted to 2026-03-10 effective date)
+        // and also BEFORE a US trade on 2026-03-10 22:06 HKT (which is on the same effective date).
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.BUY, market = Market.US, symbol = "LITX", price = 10.0, quantity = 7.0, tradeDate = "2026-03-09", tradeTime = "17:14"),
+                // Sell execution recorded at 2026-03-10 22:06 HKT (effective date 2026-03-10)
+                trade(type = TradeType.SELL, market = Market.US, symbol = "LITX", price = 10.0, quantity = 6.0, tradeDate = "2026-03-10", tradeTime = "22:06"),
+                // Split recorded on 2026-03-10 with time 00:00:00 (due to date shifting to match US execution date)
+                trade(type = TradeType.SPLIT, market = Market.US, symbol = "LITX", price = 3.0, quantity = 1.0, tradeDate = "2026-03-10", tradeTime = "00:00:00"),
+                // Sell execution recorded at 2026-03-11 05:44 HKT (effective date 2026-03-10)
+                trade(type = TradeType.SELL, market = Market.US, symbol = "LITX", price = 10.0, quantity = 5.0, tradeDate = "2026-03-11", tradeTime = "05:44"),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 1.0),
+        )
+        
+        // 7.0 (buy) * 3 (split) = 21.0
+        // 21.0 - 6.0 (sell 1) - 5.0 (sell 2) = 10.0
+        val pos = snapshot.positions.getValue("US:LITX")
+        assertEquals(10.0, pos.quantity, 0.0001)
+    }
+
+    @Test
     fun `calculate handles option expiration`() {
         val usdRate = 7.0
         val optSymbol = "AAPL 260618C00150000"
@@ -414,49 +439,47 @@ class PortfolioCalculatorTest {
 
     @Test
     fun testUserDatabase() {
-        val txsFile = java.io.File("e:\\AndroidWorkSpace\\recoder\\tmp\\transactions.json")
-        val quotesFile = java.io.File("e:\\AndroidWorkSpace\\recoder\\tmp\\quotes.json")
-        if (!txsFile.exists()) {
-            println("transactions.json does not exist!")
+        val dbFile = java.io.File("e:\\AndroidWorkSpace\\recoder\\tmp\\stock-ledger-emulator.db")
+        if (!dbFile.exists()) {
+            println("stock-ledger-emulator.db does not exist!")
             return
         }
-        val txsContent = txsFile.readText()
-        val quotesContent = quotesFile.readText()
-        println("txsContent length: ${txsContent.length}")
-        println("txsContent prefix: ${txsContent.take(100)}")
-        
-        val txsArray = org.json.JSONArray(txsContent)
-        val quotesArray = org.json.JSONArray(quotesContent)
-        
         val trades = mutableListOf<PortfolioTrade>()
-        for (i in 0 until txsArray.length()) {
-            val obj = txsArray.getJSONObject(i)
+        val conn = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbFile.absolutePath)
+        val stmt = conn.createStatement()
+        val rs = stmt.executeQuery("SELECT * FROM transactions WHERE ledgerId = 1")
+        while (rs.next()) {
             trades.add(PortfolioTrade(
-                tradeType = TradeType.valueOf(obj.getString("tradeType")),
-                market = Market.fromString(obj.getString("market")) ?: Market.CASH,
-                symbol = obj.getString("symbol"),
-                name = obj.getString("name"),
-                tradeDate = obj.getString("tradeDate"),
-                tradeTime = obj.getString("tradeTime"),
-                price = obj.getDouble("price"),
-                quantity = obj.getDouble("quantity"),
-                commission = obj.getDouble("commission"),
-                tax = obj.getDouble("tax"),
-                createdAt = obj.optLong("createdAt", 1L),
-                assetType = obj.optString("assetType", ""),
+                tradeType = TradeType.valueOf(rs.getString("tradeType")),
+                market = Market.fromString(rs.getString("market")) ?: Market.CASH,
+                symbol = rs.getString("symbol"),
+                name = rs.getString("name"),
+                tradeDate = rs.getString("tradeDate"),
+                tradeTime = rs.getString("tradeTime"),
+                price = rs.getDouble("price"),
+                quantity = rs.getDouble("quantity"),
+                commission = rs.getDouble("commission"),
+                tax = rs.getDouble("tax"),
+                createdAt = rs.getLong("createdAt"),
+                assetType = rs.getString("assetType"),
             ))
         }
+        conn.close()
         
         val quotes = mutableListOf<PortfolioQuote>()
-        for (i in 0 until quotesArray.length()) {
-            val obj = quotesArray.getJSONObject(i)
+        val connQuotes = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbFile.absolutePath)
+        val stmtQuotes = connQuotes.createStatement()
+        val rsQuotes = stmtQuotes.executeQuery("SELECT * FROM quote_snapshots")
+        while (rsQuotes.next()) {
             quotes.add(PortfolioQuote(
-                symbol = obj.getString("symbol"),
-                market = Market.fromString(obj.getString("market")) ?: Market.CASH,
-                currentPrice = if (obj.isNull("currentPrice")) null else obj.getDouble("currentPrice"),
-                previousClose = if (obj.isNull("previousClose")) null else obj.getDouble("previousClose"),
+                symbol = rsQuotes.getString("symbol"),
+                market = Market.fromString(rsQuotes.getString("market")) ?: Market.CASH,
+                currentPrice = if (rsQuotes.getObject("currentPrice") == null) null else rsQuotes.getDouble("currentPrice"),
+                previousClose = if (rsQuotes.getObject("previousClose") == null) null else rsQuotes.getDouble("previousClose"),
             ))
         }
+        connQuotes.close()
+
 
         
         val exchangeRates = ExchangeRates(usdToCny = 6.7658, hkdToCny = 0.86247)
@@ -478,10 +501,33 @@ class PortfolioCalculatorTest {
         
         println("--- Computed Positions ---")
         snapshot.positions.forEach { (key, pos) ->
-            if (pos.quantity != 0.0) {
+            if (pos.quantity != 0.0 || key.contains("LITX")) {
                 println("Key: $key, Qty: ${pos.quantity}, AvgCost: ${pos.averageCost}, RemCost: ${pos.remainingCost}, Realized: ${pos.realizedProfit}")
             }
         }
+    }
+
+    @Test
+    fun `calculate handles dividend and tax`() {
+        val usdRate = 7.0
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.BUY, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 10.0),
+                trade(type = TradeType.DIVIDEND, market = Market.US, symbol = "AAPL", price = 1.5, quantity = 10.0),
+                trade(type = TradeType.TAX, market = Market.US, symbol = "AAPL", price = 0.15, quantity = 10.0),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
+        )
+
+        // Cash balance should be -1000 + 15 - 1.5 = -986.5 USD. In CNY: -986.5 * 7 = -6905.5
+        assertEquals(-986.5 * usdRate, snapshot.cashBalanceCny, 0.0001)
+
+        val position = snapshot.positions.getValue("US:AAPL")
+        assertEquals(10.0, position.quantity, 0.0001)
+        assertEquals(100.0, position.averageCost, 0.0001)
+        // realizedProfit = 15 - 1.5 = 13.5
+        assertEquals(13.5, position.realizedProfit, 0.0001)
     }
 }
 

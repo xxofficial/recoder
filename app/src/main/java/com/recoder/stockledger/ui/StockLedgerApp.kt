@@ -287,6 +287,14 @@ fun StockLedgerApp(
                             ledgerViewModel.openTradeEntry(TradeType.INTEREST)
                             navController.navigate(Routes.tradeEntry(TradeType.INTEREST))
                         },
+                        onDividendClick = {
+                            ledgerViewModel.openTradeEntry(TradeType.DIVIDEND)
+                            navController.navigate(Routes.tradeEntry(TradeType.DIVIDEND))
+                        },
+                        onTaxClick = {
+                            ledgerViewModel.openTradeEntry(TradeType.TAX)
+                            navController.navigate(Routes.tradeEntry(TradeType.TAX))
+                        },
                         onExportBackupClick = {
                             selectedLedgerIdsForExport = uiState.ledgers.map { it.id }.toSet()
                             val platformsWithTx = ledgerViewModel.transactionSnapshot.value.map { it.platform }.filter { it.isNotBlank() }.toSet()

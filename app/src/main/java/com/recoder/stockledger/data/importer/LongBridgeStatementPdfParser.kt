@@ -438,10 +438,227 @@ object LongBridgeStatementPdfParser {
             i++
         }
 
-        // 5. Parse Other Position In/Out Details (其他持仓出⼊明细) for IPO Allotment
+        // 4.5 Parse Other Cash Movements (其他资金出入明细)
+        val otherCashHeaderIdx = lines.indexOfFirst {
+            it.contains("其他资金出") || it.contains("其他资金出入") || it.contains("其他资金出⼊") ||
+            it.contains("其他資金出") || it.contains("其他資金出入") || it.contains("其他資金出⼊")
+        }
         val otherPositionsHeaderIdx = lines.indexOfFirst {
             it.contains("其他持仓出") || it.contains("其他持倉出")
         }
+
+        if (otherCashHeaderIdx != -1) {
+            var idx = otherCashHeaderIdx + 1
+            val limit = if (otherPositionsHeaderIdx != -1) otherPositionsHeaderIdx else lines.size
+            var currentOtherMarket = Market.US
+            var currentOtherCurrency = "USD"
+            
+            while (idx < limit) {
+                val line = lines[idx]
+                if (line.contains("责任说明") || line.contains("说明") || line.contains("Page") || line.contains("综合账")) {
+                    break
+                }
+                
+                if (line.contains("市场: 港市场") || line.contains("市场: ⾹港市场") || line.contains("市场: 香港市场")) {
+                    currentOtherMarket = Market.HK
+                    currentOtherCurrency = "HKD"
+                    idx++
+                    continue
+                }
+                if (line.contains("市场: 美国市场")) {
+                    currentOtherMarket = Market.US
+                    currentOtherCurrency = "USD"
+                    idx++
+                    continue
+                }
+                
+                val dateMatch = Regex("""^(\d{4})\.(\d{2})\.(\d{2})$""").matchEntire(line)
+                if (dateMatch != null && idx + 1 < limit) {
+                    val dateStr = line
+                    val tradeDate = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+                    val typeStr = lines[idx + 1]
+                    
+                    var scan = idx + 2
+                    val remarks = mutableListOf<String>()
+                    var amount: Double? = null
+                    
+                    while (scan < limit) {
+                        val sLine = lines[scan]
+                        if (Regex("""^\d{4}\.\d{2}\.\d{2}$""").matches(sLine) || sLine.contains("币种") || sLine.contains("汇总") || sLine.contains("市场:")) {
+                            break
+                        }
+                        val cleaned = sLine.replace(",", "")
+                        val numericMatch = Regex("""^-?\d+\.\d+$""").matchEntire(cleaned)
+                        if (numericMatch != null) {
+                            amount = cleaned.toDoubleOrNull()
+                            scan++
+                            break
+                        } else {
+                            remarks.add(sLine)
+                            scan++
+                        }
+                    }
+                    
+                    if (amount != null) {
+                        val remarkText = remarks.joinToString(" ")
+                        val tradeRef = "${dateStr.replace(".", "")}-${typeStr.replace(" ", "")}-${kotlin.math.abs(amount)}"
+                        
+                        when {
+                            typeStr.contains("现金分红") || typeStr.contains("代收股息") -> {
+                                var symbol = "CASH"
+                                val usTickerMatch = Regex("""\b([A-Z]+)\.US\b""").find(remarkText)
+                                val usParenMatch = Regex("""\b([A-Z]+)\(US[A-Z0-9]+\)""").find(remarkText)
+                                if (usTickerMatch != null) {
+                                    symbol = usTickerMatch.groupValues[1]
+                                } else if (usParenMatch != null) {
+                                    symbol = usParenMatch.groupValues[1]
+                                } else {
+                                    val firstWordMatch = Regex("""^[A-Z0-9]+""").find(remarkText)
+                                    if (firstWordMatch != null) {
+                                        symbol = firstWordMatch.value
+                                    }
+                                }
+                                
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.DIVIDEND,
+                                    market = currentOtherMarket,
+                                    symbol = symbol,
+                                    name = if (symbol != "CASH") symbol else "现金分红",
+                                    currencyCode = currentOtherCurrency,
+                                    price = amount,
+                                    quantity = 1.0,
+                                    amount = amount,
+                                    tradeDate = tradeDate,
+                                    tradeTime = "09:00",
+                                    tradeRef = "DIV-$tradeRef",
+                                    rawLine = "$line | $typeStr | $remarkText",
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                            
+                            typeStr.contains("融资利息") || typeStr.contains("融券利息") -> {
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.INTEREST,
+                                    market = Market.CASH,
+                                    symbol = "INTEREST",
+                                    name = typeStr,
+                                    currencyCode = currentOtherCurrency,
+                                    price = kotlin.math.abs(amount),
+                                    quantity = 1.0,
+                                    amount = kotlin.math.abs(amount),
+                                    tradeDate = tradeDate,
+                                    tradeTime = "23:59",
+                                    tradeRef = "INT-$tradeRef",
+                                    rawLine = "$line | $typeStr | $remarkText",
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                            
+                            typeStr.contains("活动礼包") || typeStr.contains("现金奖励") -> {
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.DIVIDEND,
+                                    market = Market.CASH,
+                                    symbol = "CASH",
+                                    name = "活动礼包",
+                                    currencyCode = currentOtherCurrency,
+                                    price = amount,
+                                    quantity = 1.0,
+                                    amount = amount,
+                                    tradeDate = tradeDate,
+                                    tradeTime = "09:00",
+                                    tradeRef = "GIFT-$tradeRef",
+                                    rawLine = "$line | $typeStr | $remarkText",
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                            
+                            typeStr.contains("公司行动其他费用") || typeStr.contains("扣收") || typeStr.contains("税") || typeStr.contains("Withholding Tax") || typeStr.contains("Dividend Fee") -> {
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.TAX,
+                                    market = Market.CASH,
+                                    symbol = "CASH",
+                                    name = if (remarkText.isNotBlank()) remarkText else typeStr,
+                                    currencyCode = currentOtherCurrency,
+                                    price = kotlin.math.abs(amount),
+                                    quantity = 1.0,
+                                    amount = kotlin.math.abs(amount),
+                                    tradeDate = tradeDate,
+                                    tradeTime = "09:00",
+                                    tradeRef = "TAX-$tradeRef",
+                                    rawLine = "$line | $typeStr | $remarkText",
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                            
+                            typeStr.contains("存入资金") || typeStr.contains("入金") || typeStr.contains("货币兑换入账") -> {
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.DEPOSIT,
+                                    market = Market.CASH,
+                                    symbol = "CASH",
+                                    name = typeStr,
+                                    currencyCode = currentOtherCurrency,
+                                    price = kotlin.math.abs(amount),
+                                    quantity = 1.0,
+                                    amount = kotlin.math.abs(amount),
+                                    tradeDate = tradeDate,
+                                    tradeTime = "09:00",
+                                    tradeRef = "DEP-$tradeRef",
+                                    rawLine = "$line | $typeStr | $remarkText",
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                            
+                            typeStr.contains("提取资金") || typeStr.contains("出金") || typeStr.contains("货币兑换出账") -> {
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.WITHDRAW,
+                                    market = Market.CASH,
+                                    symbol = "CASH",
+                                    name = typeStr,
+                                    currencyCode = currentOtherCurrency,
+                                    price = kotlin.math.abs(amount),
+                                    quantity = 1.0,
+                                    amount = kotlin.math.abs(amount),
+                                    tradeDate = tradeDate,
+                                    tradeTime = "09:00",
+                                    tradeRef = "WTH-$tradeRef",
+                                    rawLine = "$line | $typeStr | $remarkText",
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                        }
+                        
+                        idx = scan - 1
+                    }
+                }
+                idx++
+            }
+        }
+
+        // 5. Parse Other Position In/Out Details (其他持仓出⼊明细) for IPO Allotment, Option Expiration, and Split
         if (otherPositionsHeaderIdx != -1) {
             var idx = otherPositionsHeaderIdx + 1
             var currentOtherMarket = Market.HK
@@ -470,68 +687,154 @@ object LongBridgeStatementPdfParser {
                     val qtyStr = match.groupValues[4]
                     
                     val qty = qtyStr.replace(",", "").toDoubleOrNull()
-                    if (qty != null && (typeStr.contains("中签") || typeStr.contains("中簽") || typeStr.contains("新股"))) {
-                        val tradeDate = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
-                        
-                        var symbol = ""
-                        val remarkSymbolMatch = Regex("""\b(\d+)\.HK\b""").find(contentStr)
-                        if (remarkSymbolMatch != null) {
-                            symbol = remarkSymbolMatch.groupValues[1].padStart(4, '0') + ".HK"
-                        } else {
-                            val itemSymbolMatch = Regex("""^(\d+)\s+""").find(contentStr)
-                            if (itemSymbolMatch != null) {
-                                val digits = itemSymbolMatch.groupValues[1]
-                                symbol = digits.padStart(4, '0') + ".HK"
-                            }
-                        }
-                        
-                        var name = contentStr
-                        if (symbol.isNotEmpty()) {
-                            name = name.replace(Regex("""^\d+\s+"""), "")
-                            val ipoIndex = name.indexOf("IPO ")
-                            if (ipoIndex != -1) {
-                                name = name.substring(0, ipoIndex).trim()
-                            }
-                        }
-                        name = name.replace("\"", "").trim()
-                        
-                        var price = 0.0
-                        for (cashLine in lines) {
-                            if ((cashLine.contains("中签") || cashLine.contains("中簽")) && cashLine.contains(symbol.replace(".HK", ""))) {
-                                val amtMatch = Regex("""@(?:HKD|USD)?\s*([\d,]+\.?\d*)""").find(cashLine)
-                                if (amtMatch != null) {
-                                    val totalAmt = amtMatch.groupValues[1].replace(",", "").toDoubleOrNull() ?: 0.0
-                                    if (totalAmt > 0 && qty > 0) {
-                                        price = totalAmt / qty
+                    val tradeDate = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+                    
+                    if (qty != null) {
+                        when {
+                            typeStr.contains("中签") || typeStr.contains("中簽") || typeStr.contains("新股") -> {
+                                var symbol = ""
+                                val remarkSymbolMatch = Regex("""\b(\d+)\.HK\b""").find(contentStr)
+                                if (remarkSymbolMatch != null) {
+                                    symbol = remarkSymbolMatch.groupValues[1].padStart(4, '0') + ".HK"
+                                } else {
+                                    val itemSymbolMatch = Regex("""^(\d+)\s+""").find(contentStr)
+                                    if (itemSymbolMatch != null) {
+                                        val digits = itemSymbolMatch.groupValues[1]
+                                        symbol = digits.padStart(4, '0') + ".HK"
                                     }
+                                }
+                                
+                                var name = contentStr
+                                if (symbol.isNotEmpty()) {
+                                    name = name.replace(Regex("""^\d+\s+"""), "")
+                                    val ipoIndex = name.indexOf("IPO ")
+                                    if (ipoIndex != -1) {
+                                        name = name.substring(0, ipoIndex).trim()
+                                    }
+                                }
+                                name = name.replace("\"", "").trim()
+                                
+                                var price = 0.0
+                                for (cashLine in lines) {
+                                    if ((cashLine.contains("中签") || cashLine.contains("中簽")) && cashLine.contains(symbol.replace(".HK", ""))) {
+                                        val amtMatch = Regex("""@(?:HKD|USD)?\s*([\d,]+\.?\d*)""").find(cashLine)
+                                        if (amtMatch != null) {
+                                            val totalAmt = amtMatch.groupValues[1].replace(",", "").toDoubleOrNull() ?: 0.0
+                                            if (totalAmt > 0 && qty > 0) {
+                                                price = totalAmt / qty
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                trades.add(ParsedStatementTrade(
+                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                    tradeType = TradeType.BUY,
+                                    market = currentOtherMarket,
+                                    symbol = symbol,
+                                    name = name,
+                                    currencyCode = if (currentOtherMarket == Market.HK) "HKD" else "USD",
+                                    price = price,
+                                    quantity = qty,
+                                    amount = price * qty,
+                                    tradeDate = tradeDate,
+                                    tradeTime = "09:00",
+                                    tradeRef = "IPO-${symbol}-${dateStr.replace(".", "")}",
+                                    rawLine = line,
+                                    commission = 0.0,
+                                    tax = 0.0,
+                                    platformFee = 0.0,
+                                    assetType = "STOCK"
+                                ))
+                            }
+                            
+                            typeStr.contains("期权到期") || typeStr.contains("到期") -> {
+                                val optionRegex = Regex("""([A-Za-z]+)(\d{6})([CP])(\d+).*""")
+                                val optionMatch = optionRegex.find(contentStr.replace(" ", ""))
+                                if (optionMatch != null) {
+                                    val underlying = optionMatch.groupValues[1].uppercase()
+                                    val expiryCompact = optionMatch.groupValues[2]
+                                    val typeChar = optionMatch.groupValues[3]
+                                    val strikeRaw = optionMatch.groupValues[4].toDouble()
+                                    val strike = strikeRaw / 1000.0
+                                    val optType = if (typeChar == "C") "CALL" else "PUT"
+                                    
+                                    val year = 2000 + expiryCompact.substring(0, 2).toInt()
+                                    val month = expiryCompact.substring(2, 4).toInt()
+                                    val day = expiryCompact.substring(4, 6).toInt()
+                                    val expiryStr = String.format("%04d-%02d-%02d", year, month, day)
+
+                                    val strikeLabel = if (strike == strike.toLong().toDouble()) strike.toLong().toString() else strike.toString()
+                                    val symbol = "$underlying $expiryCompact$typeChar$strikeLabel"
+                                    val name = "$underlying $expiryStr ${if (optType == "CALL") "Call" else "Put"} @ $strikeLabel"
+                                    
+                                    trades.add(ParsedStatementTrade(
+                                        sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                        tradeType = TradeType.EXPIRE,
+                                        market = currentOtherMarket,
+                                        symbol = symbol,
+                                        name = name,
+                                        currencyCode = if (currentOtherMarket == Market.HK) "HKD" else "USD",
+                                        price = 0.0,
+                                        quantity = kotlin.math.abs(qty),
+                                        amount = 0.0,
+                                        tradeDate = tradeDate,
+                                        tradeTime = "23:59",
+                                        tradeRef = "EXP-$symbol-${dateStr.replace(".", "")}",
+                                        rawLine = line,
+                                        commission = 0.0,
+                                        tax = 0.0,
+                                        platformFee = 0.0,
+                                        assetType = "OPTION",
+                                        underlyingSymbol = underlying,
+                                        expiryDate = expiryStr,
+                                        strikePrice = strike,
+                                        optionType = optType
+                                    ))
+                                }
+                            }
+                            
+                            typeStr.contains("公司行动股票进账") || typeStr.contains("股票拆分") || typeStr.contains("Split") -> {
+                                val splitRegex = Regex("""Stock Split Amount:\s*(\d+)\s+for\s+(\d+)""")
+                                val splitMatch = splitRegex.find(contentStr)
+                                if (splitMatch != null) {
+                                    val ratio = splitMatch.groupValues[1].toDouble() / splitMatch.groupValues[2].toDouble()
+                                    
+                                    val parts = contentStr.trim().split("\\s+".toRegex())
+                                    val stockCode = parts.firstOrNull()?.uppercase() ?: ""
+                                    val symbol = if (currentOtherMarket == Market.HK) {
+                                        val digits = stockCode.filter { it.isDigit() }
+                                        when {
+                                            digits.length == 5 -> "$digits.HK"
+                                            digits.length in 1..4 -> digits.padStart(4, '0') + ".HK"
+                                            else -> stockCode
+                                        }
+                                    } else {
+                                        stockCode
+                                    }
+                                    
+                                    trades.add(ParsedStatementTrade(
+                                        sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+                                        tradeType = TradeType.SPLIT,
+                                        market = currentOtherMarket,
+                                        symbol = symbol,
+                                        name = parts.drop(1).joinToString(" ").substringBefore("Stock Split").trim(),
+                                        currencyCode = if (currentOtherMarket == Market.HK) "HKD" else "USD",
+                                        price = ratio,
+                                        quantity = 1.0,
+                                        amount = 0.0,
+                                        tradeDate = if (currentOtherMarket == Market.US) tradeDate.minusDays(1) else tradeDate,
+                                        tradeTime = "00:00",
+                                        tradeRef = "SPLIT-$symbol-${dateStr.replace(".", "")}",
+                                        rawLine = line,
+                                        commission = 0.0,
+                                        tax = 0.0,
+                                        platformFee = 0.0,
+                                        assetType = "STOCK"
+                                    ))
                                 }
                             }
                         }
-                        
-                        val trade = ParsedStatementTrade(
-                            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                            tradeType = TradeType.BUY,
-                            market = currentOtherMarket,
-                            symbol = symbol,
-                            name = name,
-                            currencyCode = if (currentOtherMarket == Market.HK) "HKD" else "USD",
-                            price = price,
-                            quantity = qty,
-                            amount = price * qty,
-                            tradeDate = tradeDate,
-                            tradeTime = "09:00",
-                            tradeRef = "IPO-${symbol}-${dateStr.replace(".", "")}",
-                            rawLine = line,
-                            commission = 0.0,
-                            tax = 0.0,
-                            platformFee = 0.0,
-                            assetType = "STOCK",
-                            underlyingSymbol = null,
-                            expiryDate = null,
-                            strikePrice = null,
-                            optionType = null
-                        )
-                        trades.add(trade)
                     }
                 }
                 idx++

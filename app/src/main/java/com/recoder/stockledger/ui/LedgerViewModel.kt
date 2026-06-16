@@ -1106,7 +1106,7 @@ class LedgerViewModel(
                                             commission = 0.0,
                                             tax = 0.0,
                                             note = "自动同步补全：折算比例 ${event.ratio}",
-                                            tradeTime = "09:00:00",
+                                            tradeTime = "00:00:00",
                                             createdAt = System.currentTimeMillis(),
                                             ledgerId = selectedLedgerId.value,
                                             investorName = representativeTxn.investorName,
@@ -2009,7 +2009,8 @@ class LedgerViewModel(
     ): String? {
         val isOption = draft.assetType == "OPTION"
         val symbolInput = if (isOption) draft.optionUnderlyingSymbol else draft.symbolOrName
-        val noInputYet = if (draft.selectedType.isSecurityTrade) {
+        val needsSecuritySymbol = draft.selectedType.isSecurityTrade || (draft.selectedType == TradeType.DIVIDEND && draft.symbolOrName != "CASH")
+        val noInputYet = if (needsSecuritySymbol) {
             symbolInput.isBlank() &&
                 draft.priceLabel.isBlank() &&
                 draft.quantityLabel.isBlank()
@@ -2023,13 +2024,13 @@ class LedgerViewModel(
         if (draft.tradeTime.isBlank()) return "请输入交易时间"
         if (parseTradeTimeOrNull(draft.tradeTime) == null) return "请输入有效的交易时间（HH:MM:SS）"
 
-        if (!draft.selectedType.isSecurityTrade) {
+        if (!needsSecuritySymbol) {
             val amount = parseDecimal(draft.priceLabel)
             if (amount <= 0.0) return "金额必须大于 0"
 
             val amountCny = convertToCny(amount, normalizeCashMarket(draft.market), repository.exchangeRates.value)
-            if (draft.selectedType == TradeType.WITHDRAW && portfolio.cashBalanceCny + EPSILON < amountCny) {
-                return "可用现金不足，无法完成出金"
+            if ((draft.selectedType == TradeType.WITHDRAW || draft.selectedType == TradeType.TAX) && portfolio.cashBalanceCny + EPSILON < amountCny) {
+                return "可用现金不足，无法完成交易"
             }
             return null
         }
@@ -2505,29 +2506,34 @@ class LedgerViewModel(
                         val tradeType = TradeType.valueOf(transaction.tradeType)
                         val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
                         val cashFlow = transactionCashFlow(transaction, tradeType)
+                        val isStockOrOptDiv = tradeType == TradeType.DIVIDEND && transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH"
                         TransactionUiModel(
                             id = transaction.id,
                             tradeType = tradeType,
-                            stockName = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
+                            stockName = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) || isStockOrOptDiv) {
                                 "${transaction.symbol} ${transaction.name}"
                             } else if (tradeType == TradeType.INTEREST) {
                                 "融资利息"
+                            } else if (tradeType == TradeType.TAX) {
+                                transaction.name.ifBlank { "公司行动费用" }
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
-                            primaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
+                            primaryMeta = if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) || isStockOrOptDiv) {
                                 "${platform.label} · ${market.label}"
                             } else {
                                 platform.label
                             },
                             secondaryMeta = if (tradeType == TradeType.SPLIT) {
                                 "折算比例 ${transaction.price}"
-                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
+                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) || isStockOrOptDiv) {
                                 val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
                                 val unit = if (isOpt) "张" else "股"
-                                "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
+                                "分红价/成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
                             } else if (tradeType == TradeType.INTEREST) {
                                 transaction.note.ifBlank { "融资利息支出" }
+                            } else if (tradeType == TradeType.TAX) {
+                                transaction.note.ifBlank { "税费支出" }
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
@@ -2539,7 +2545,7 @@ class LedgerViewModel(
                             timeLabel = if (tradeType == TradeType.SPLIT) "" else transaction.tradeTime,
                             feeLabel = if (tradeType == TradeType.SPLIT) {
                                 "股票拆分/合并折算"
-                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL)) {
+                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) || isStockOrOptDiv) {
                                 "费用 ${formatMarketAmount(transaction.commission + transaction.tax, market)}"
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
@@ -2560,7 +2566,7 @@ class LedgerViewModel(
         quotes: List<QuoteSnapshotEntity>,
     ): ProfitAnalysisUiModel {
         val securityMeta = transactions
-            .filter { TradeType.valueOf(it.tradeType).isSecurityTrade && it.symbol.isNotBlank() }
+            .filter { (TradeType.valueOf(it.tradeType).isSecurityTrade || TradeType.valueOf(it.tradeType) == TradeType.DIVIDEND) && it.symbol.isNotBlank() && it.symbol != "CASH" }
             .map { transaction ->
                 val market = Market.fromString(transaction.market) ?: Market.CASH
                 val resolvedSymbol = if (transaction.assetType == "OPTION") {
@@ -2601,7 +2607,7 @@ class LedgerViewModel(
         )
         val datedTransactions = ordered.mapNotNull { transaction ->
             val market = Market.fromString(transaction.market) ?: Market.CASH
-            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
+            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market, transaction.tradeType)
             date to transaction
         }
         val transactionMap = datedTransactions.groupBy({ it.first }, { it.second })
@@ -2766,6 +2772,50 @@ class LedgerViewModel(
                                     averageCost = if (nextQuantity <= 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
                                 )
                             }
+                        }
+                    }
+
+                    TradeType.DIVIDEND -> {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                        cashBalanceCny += amountCny
+                        if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
+                            val key = positionKey(transaction.symbol, market)
+                            val current = positions[key] ?: PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = 0.0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
+                            )
+                            positions[key] = current.copy(
+                                realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                            )
+                        }
+                    }
+
+                    TradeType.TAX -> {
+                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                        cashBalanceCny -= amountCny
+                        if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
+                            val key = positionKey(transaction.symbol, market)
+                            val current = positions[key] ?: PositionComputation(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = market,
+                                quantity = 0.0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
+                            )
+                            positions[key] = current.copy(
+                                realizedProfit = current.realizedProfit - (transaction.price * transaction.quantity)
+                            )
                         }
                     }
 
@@ -3029,7 +3079,7 @@ class LedgerViewModel(
                 transaction.symbol
             }
             val effectiveKey = positionKey(resolvedSymbol, market)
-            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market)
+            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market, transaction.tradeType)
             activityDates += date
             when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
                 TradeType.EXPIRE -> {
@@ -3241,36 +3291,60 @@ class LedgerViewModel(
                     }
                 }
 
-                TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT, TradeType.INTEREST -> {
-                    if (tradeType == TradeType.TRANSFER_IN || tradeType == TradeType.TRANSFER_OUT) {
-                        val multiplier = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
-                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                        val amountCny = convertToCny(transaction.price * transaction.quantity * multiplier * mult, market, exchangeRates)
-                        netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
-                        if (transaction.symbol != CASH_ACCOUNT_SYMBOL) {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key] ?: PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = 0.0,
-                                averageCost = 0.0,
-                                remainingCost = 0.0,
-                                realizedProfit = 0.0,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                            val nextQuantity = current.quantity + (transaction.quantity * multiplier)
-                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * multiplier * mult)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
-                            )
-                        }
-                    } else {
-                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
-                        dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) - amountCny
+                TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT -> {
+                    val multiplier = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
+                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                    val amountCny = convertToCny(transaction.price * transaction.quantity * multiplier * mult, market, exchangeRates)
+                    netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
+                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL) {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0.0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                        val nextQuantity = current.quantity + (transaction.quantity * multiplier)
+                        val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * multiplier * mult)
+                        positions[key] = current.copy(
+                            quantity = nextQuantity,
+                            remainingCost = nextRemaining,
+                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
+                        )
+                    }
+                }
+
+                TradeType.INTEREST, TradeType.TAX -> {
+                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) - amountCny
+                }
+
+                TradeType.DIVIDEND -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + amountCny
+                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
+                        val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
+                        securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + amountCny
+                        
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0.0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                        positions[key] = current.copy(
+                            realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                        )
                     }
                 }
 
@@ -3474,7 +3548,7 @@ class LedgerViewModel(
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({
                 val m = Market.fromString(it.market) ?: Market.CASH
-                effectiveTradeDate(it.tradeDate, it.tradeTime, m).toString()
+                effectiveTradeDate(it.tradeDate, it.tradeTime, m, it.tradeType).toString()
             }, { it.tradeTime }, { it.createdAt }),
         )
 
@@ -3618,7 +3692,48 @@ class LedgerViewModel(
                 TradeType.INTEREST -> {
                     val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
                     cashBalanceCny -= amountCny
-
+                }
+                TradeType.TAX -> {
+                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
+                    cashBalanceCny -= amountCny
+                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0.0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                        positions[key] = current.copy(
+                            realizedProfit = current.realizedProfit - (transaction.price * transaction.quantity)
+                        )
+                    }
+                }
+                TradeType.DIVIDEND -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    cashBalanceCny += amountCny
+                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key] ?: PositionComputation(
+                            symbol = transaction.symbol,
+                            name = transaction.name,
+                            market = market,
+                            quantity = 0.0,
+                            averageCost = 0.0,
+                            remainingCost = 0.0,
+                            realizedProfit = 0.0,
+                            assetType = transaction.assetType,
+                            underlyingSymbol = transaction.underlyingSymbol,
+                        )
+                        positions[key] = current.copy(
+                            realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                        )
+                    }
                 }
 
                 TradeType.BUY, TradeType.SELL -> {
@@ -3818,7 +3933,6 @@ class LedgerViewModel(
             }
             .sortedByDescending { it.second }
             .map { it.first }
-
         val holdingsValueCny = positions.values.sumOf { position ->
             val quote = quoteMap[positionKey(position.symbol, position.market)]
             val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
@@ -3963,8 +4077,9 @@ class LedgerViewModel(
         LocalDate.parse(value)
     }.getOrNull()
 
-    private fun effectiveTradeDate(tradeDate: String, tradeTime: String, market: Market): LocalDate {
+    private fun effectiveTradeDate(tradeDate: String, tradeTime: String, market: Market, tradeType: String? = null): LocalDate {
         val date = parseTradeDateOrNull(tradeDate) ?: LocalDate.parse(tradeDate)
+        if (tradeType == "SPLIT" || tradeType == TradeType.SPLIT.name) return date
         return if (market == Market.US && tradeTime < US_TIMEZONE_CUTOFF) {
             date.minusDays(1)
         } else {
@@ -4228,6 +4343,8 @@ class LedgerViewModel(
                 }
             }
             TradeType.INTEREST -> -(transaction.price * transaction.quantity * mult)
+            TradeType.TAX -> -(transaction.price * transaction.quantity * mult)
+            TradeType.DIVIDEND -> transaction.price * transaction.quantity * mult
             TradeType.SPLIT -> 0.0
         }
     }
@@ -4835,6 +4952,12 @@ private data class RefreshMeta(
                 TradeType.SPLIT -> {
                     // Split events do not affect cash balance
                 }
+                TradeType.DIVIDEND -> {
+                    balance += tx.price * tx.quantity
+                }
+                TradeType.TAX -> {
+                    balance -= kotlin.math.abs(tx.price * tx.quantity)
+                }
             }
         }
         return balance
@@ -4914,7 +5037,7 @@ private data class RefreshMeta(
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({
                 val m = Market.fromString(it.market) ?: Market.CASH
-                effectiveTradeDate(it.tradeDate, it.tradeTime, m).toString()
+                effectiveTradeDate(it.tradeDate, it.tradeTime, m, it.tradeType).toString()
             }, { it.tradeTime }, { it.createdAt }),
         )
 
@@ -5014,6 +5137,23 @@ private data class RefreshMeta(
                         }
                         stockQuantities[key] = (stockQuantities[key] ?: 0.0) + tx.quantity
                     }
+                }
+                TradeType.INTEREST, TradeType.TAX -> {
+                    val amountCny = convertToCny(kotlin.math.abs(tx.price * tx.quantity), market, exchangeRates)
+                    cashBalanceCny -= amountCny
+                }
+                TradeType.DIVIDEND -> {
+                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    cashBalanceCny += amountCny
+                    if (tx.symbol != CASH_ACCOUNT_SYMBOL && tx.symbol != "CASH") {
+                        if (stockPrices[key] == null || stockPrices[key] == 0.0) {
+                            stockPrices[key] = convertToCny(tx.price, market, exchangeRates)
+                        }
+                    }
+                }
+                TradeType.SPLIT -> {
+                    val qty = stockQuantities[key] ?: 0.0
+                    stockQuantities[key] = qty * tx.price
                 }
                 else -> {}
             }

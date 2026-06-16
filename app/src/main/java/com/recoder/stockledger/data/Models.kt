@@ -47,13 +47,15 @@ enum class TradeType(val label: String) {
     INTEREST("利息"),
     SPLIT("拆并股"),
     EXPIRE("期权到期"),
+    DIVIDEND("分红"),
+    TAX("税费"),
     ;
 
     val isSecurityTrade: Boolean
         get() = this == BUY || this == SELL || this == SPLIT || this == EXPIRE
 
     val isCashFlowPositive: Boolean
-        get() = this == SELL || this == DEPOSIT || this == TRANSFER_IN
+        get() = this == SELL || this == DEPOSIT || this == TRANSFER_IN || this == DIVIDEND
 }
 
 enum class RefreshState(val title: String) {
@@ -90,6 +92,8 @@ enum class TransactionFilter(
     TRANSFER_OUT("划出/转出", TradeType.TRANSFER_OUT),
     SPLIT("拆并股", TradeType.SPLIT),
     EXPIRE("期权到期", TradeType.EXPIRE),
+    DIVIDEND("分红", TradeType.DIVIDEND),
+    TAX("税费", TradeType.TAX),
 }
 
 enum class MarketFilter(

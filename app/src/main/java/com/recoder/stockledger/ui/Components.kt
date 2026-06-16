@@ -271,6 +271,8 @@ fun TradeActionButtons(
     onTransferClick: () -> Unit,
     onInterestClick: () -> Unit,
     onSplitClick: () -> Unit = {},
+    onDividendClick: () -> Unit = {},
+    onTaxClick: () -> Unit = {},
     enabled: Boolean = true,
 ) {
     Column(
@@ -329,8 +331,24 @@ fun TradeActionButtons(
                 modifier = Modifier.weight(1f),
             )
             OutlineActionButton(
+                text = "分红派息",
+                onClick = onDividendClick,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlineActionButton(
                 text = "拆股并股",
                 onClick = onSplitClick,
+                modifier = Modifier.weight(1f),
+            )
+            OutlineActionButton(
+                text = "税费支出",
+                onClick = onTaxClick,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1453,8 +1471,8 @@ fun TradeTypeSelector(
     }
 }
 fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
-    TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN -> MarketUpSoft to MarketUp
-    TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT, TradeType.INTEREST -> MarketDownSoft to MarketDown
+    TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN, TradeType.DIVIDEND -> MarketUpSoft to MarketUp
+    TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT, TradeType.INTEREST, TradeType.TAX -> MarketDownSoft to MarketDown
     TradeType.SPLIT -> SurfaceSecondary to MarketNeutral
     TradeType.EXPIRE -> SurfaceMuted to MarketNeutral
 }

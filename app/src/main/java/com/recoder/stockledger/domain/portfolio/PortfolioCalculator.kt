@@ -204,6 +204,48 @@ class PortfolioCalculator {
                         totalWithdrawCny += amountCny
                     }
 
+                    TradeType.DIVIDEND -> {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
+                        cashBalanceCny += amountCny
+                        if (transaction.symbol != "CASH") {
+                            val key = positionKey(transaction.symbol, transaction.market)
+                            val current = positions[key] ?: PortfolioPosition(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = transaction.market,
+                                quantity = 0.0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                            )
+                            positions[key] = current.copy(
+                                realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                            )
+                        }
+                    }
+
+                    TradeType.TAX -> {
+                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), transaction.market, exchangeRates)
+                        cashBalanceCny -= amountCny
+                        if (transaction.symbol != "CASH") {
+                            val key = positionKey(transaction.symbol, transaction.market)
+                            val current = positions[key] ?: PortfolioPosition(
+                                symbol = transaction.symbol,
+                                name = transaction.name,
+                                market = transaction.market,
+                                quantity = 0.0,
+                                averageCost = 0.0,
+                                remainingCost = 0.0,
+                                realizedProfit = 0.0,
+                                assetType = transaction.assetType,
+                            )
+                            positions[key] = current.copy(
+                                realizedProfit = current.realizedProfit - (transaction.price * transaction.quantity)
+                            )
+                        }
+                    }
+
                     TradeType.SPLIT -> {
                         val key = positionKey(transaction.symbol, transaction.market)
                         val current = positions[key]
@@ -448,6 +490,7 @@ class PortfolioCalculator {
 
     private fun effectiveTradeDate(transaction: PortfolioTrade): LocalDate {
         val date = LocalDate.parse(transaction.tradeDate)
+        if (transaction.tradeType == TradeType.SPLIT) return date
         return if (transaction.market == Market.US && transaction.tradeTime < US_TIMEZONE_CUTOFF) {
             date.minusDays(1)
         } else {

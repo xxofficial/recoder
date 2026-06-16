@@ -490,6 +490,8 @@ fun OperationsRoute(
     onWithdrawClick: () -> Unit,
     onTransferClick: () -> Unit = {},
     onInterestClick: () -> Unit,
+    onDividendClick: () -> Unit = {},
+    onTaxClick: () -> Unit = {},
     onExportBackupClick: () -> Unit,
     onImportBackupClick: () -> Unit,
     backupStatusMessage: String?,
@@ -639,6 +641,8 @@ fun OperationsRoute(
                     onTransferClick = onTransferClick,
                     onInterestClick = onInterestClick,
                     onSplitClick = onSplitClick,
+                    onDividendClick = onDividendClick,
+                    onTaxClick = onTaxClick,
                 )
 
                 Column(
@@ -2000,6 +2004,8 @@ fun TradeEntryRoute(
                             TradeType.TRANSFER_OUT -> "确认转出"
                             TradeType.SPLIT -> "确认折算记录"
                             TradeType.EXPIRE -> "确认过期失效"
+                            TradeType.DIVIDEND -> "确认分红"
+                            TradeType.TAX -> "确认税费支出"
                         }
                     },
                     onClick = onSubmit,
