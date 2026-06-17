@@ -68,6 +68,7 @@ import com.recoder.stockledger.ui.theme.ForegroundSecondary
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import com.recoder.stockledger.data.local.LedgerEntity
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -79,13 +80,17 @@ private object Routes {
     const val TradeEntry = "trade-entry"
     const val Settings = "settings"
     const val FullRanking = "full-ranking"
+    const val ProfitCalendarDetail = "profit-calendar-detail"
     const val StockDetail = "stock-detail"
     const val TradeTypeArg = "tradeType"
     const val SymbolArg = "symbol"
     const val MarketArg = "market"
+    const val CalendarModeArg = "calendarMode"
+    const val CalendarDateArg = "calendarDate"
 
     fun tradeEntry(type: TradeType): String = "$TradeEntry/${type.name}"
     fun stockDetail(symbol: String, market: String): String = "$StockDetail/$symbol/$market"
+    fun profitCalendarDetail(mode: String, date: String): String = "$ProfitCalendarDetail/$mode/$date"
 }
 
 @Composable
@@ -104,6 +109,7 @@ fun StockLedgerApp(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val drawerGesturesEnabled = currentRoute != Routes.FullRanking &&
         currentRoute?.startsWith("${Routes.StockDetail}/") != true &&
+        currentRoute?.startsWith("${Routes.ProfitCalendarDetail}/") != true &&
         drawerState.isOpen
     val coroutineScope = rememberCoroutineScope()
     val activeLedger = uiState.ledgers.firstOrNull { it.id == uiState.selectedLedgerId }
@@ -255,6 +261,9 @@ fun StockLedgerApp(
                         },
                         onViewFullRanking = {
                             navController.navigate(Routes.FullRanking)
+                        },
+                        onCalendarDetailClick = { mode, date ->
+                            navController.navigate(Routes.profitCalendarDetail(mode, date.toString()))
                         },
                     )
                 }
@@ -529,6 +538,30 @@ fun StockLedgerApp(
                         onSelectedRangeChange = { analysisRange = it },
                         onCustomStartChange = { analysisCustomStart = it },
                         onCustomEndChange = { analysisCustomEnd = it },
+                        onBack = { navController.popBackStack() },
+                        onSecurityClick = { symbol, market ->
+                            navController.navigate(Routes.stockDetail(symbol, market))
+                        },
+                    )
+                }
+
+                composable(
+                    route = "${Routes.ProfitCalendarDetail}/{${Routes.CalendarModeArg}}/{${Routes.CalendarDateArg}}",
+                    arguments = listOf(
+                        navArgument(Routes.CalendarModeArg) { type = NavType.StringType },
+                        navArgument(Routes.CalendarDateArg) { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val mode = backStackEntry.arguments?.getString(Routes.CalendarModeArg).orEmpty()
+                    val dateText = backStackEntry.arguments?.getString(Routes.CalendarDateArg).orEmpty()
+                    val initialDate = runCatching { LocalDate.parse(dateText) }.getOrNull() ?: uiState.profitAnalysis.latestDate
+                    ProfitCalendarDetailRoute(
+                        analysis = uiState.profitAnalysis,
+                        displayCurrency = uiState.displayCurrency,
+                        exchangeRates = uiState.exchangeRates,
+                        initialMode = mode,
+                        initialDate = initialDate,
+                        onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
                         onBack = { navController.popBackStack() },
                         onSecurityClick = { symbol, market ->
                             navController.navigate(Routes.stockDetail(symbol, market))
