@@ -447,216 +447,20 @@ object LongBridgeStatementPdfParser {
             it.contains("其他持仓出") || it.contains("其他持倉出")
         }
 
-        if (otherCashHeaderIdx != -1) {
-            var idx = otherCashHeaderIdx + 1
-            val limit = if (otherPositionsHeaderIdx != -1) otherPositionsHeaderIdx else lines.size
-            var currentOtherMarket = Market.US
-            var currentOtherCurrency = "USD"
-            
-            while (idx < limit) {
-                val line = lines[idx]
-                if (line.contains("责任说明") || line.contains("说明") || line.contains("Page") || line.contains("综合账")) {
-                    break
-                }
-                
-                if (line.contains("市场: 港市场") || line.contains("市场: ⾹港市场") || line.contains("市场: 香港市场")) {
-                    currentOtherMarket = Market.HK
-                    currentOtherCurrency = "HKD"
-                    idx++
-                    continue
-                }
-                if (line.contains("市场: 美国市场")) {
-                    currentOtherMarket = Market.US
-                    currentOtherCurrency = "USD"
-                    idx++
-                    continue
-                }
-                
-                val dateMatch = Regex("""^(\d{4})\.(\d{2})\.(\d{2})$""").matchEntire(line)
-                if (dateMatch != null && idx + 1 < limit) {
-                    val dateStr = line
-                    val tradeDate = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
-                    val typeStr = lines[idx + 1]
-                    
-                    var scan = idx + 2
-                    val remarks = mutableListOf<String>()
-                    var amount: Double? = null
-                    
-                    while (scan < limit) {
-                        val sLine = lines[scan]
-                        if (Regex("""^\d{4}\.\d{2}\.\d{2}$""").matches(sLine) || sLine.contains("币种") || sLine.contains("汇总") || sLine.contains("市场:")) {
-                            break
-                        }
-                        val cleaned = sLine.replace(",", "")
-                        val numericMatch = Regex("""^-?\d+\.\d+$""").matchEntire(cleaned)
-                        if (numericMatch != null) {
-                            amount = cleaned.toDoubleOrNull()
-                            scan++
-                            break
-                        } else {
-                            remarks.add(sLine)
-                            scan++
-                        }
-                    }
-                    
-                    if (amount != null) {
-                        val remarkText = remarks.joinToString(" ")
-                        val tradeRef = "${dateStr.replace(".", "")}-${typeStr.replace(" ", "")}-${kotlin.math.abs(amount)}"
-                        
-                        when {
-                            typeStr.contains("现金分红") || typeStr.contains("代收股息") -> {
-                                var symbol = "CASH"
-                                val usTickerMatch = Regex("""\b([A-Z]+)\.US\b""").find(remarkText)
-                                val usParenMatch = Regex("""\b([A-Z]+)\(US[A-Z0-9]+\)""").find(remarkText)
-                                if (usTickerMatch != null) {
-                                    symbol = usTickerMatch.groupValues[1]
-                                } else if (usParenMatch != null) {
-                                    symbol = usParenMatch.groupValues[1]
-                                } else {
-                                    val firstWordMatch = Regex("""^[A-Z0-9]+""").find(remarkText)
-                                    if (firstWordMatch != null) {
-                                        symbol = firstWordMatch.value
-                                    }
-                                }
-                                
-                                trades.add(ParsedStatementTrade(
-                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.DIVIDEND,
-                                    market = currentOtherMarket,
-                                    symbol = symbol,
-                                    name = if (symbol != "CASH") symbol else "现金分红",
-                                    currencyCode = currentOtherCurrency,
-                                    price = amount,
-                                    quantity = 1.0,
-                                    amount = amount,
-                                    tradeDate = tradeDate,
-                                    tradeTime = "09:00",
-                                    tradeRef = "DIV-$tradeRef",
-                                    rawLine = "$line | $typeStr | $remarkText",
-                                    commission = 0.0,
-                                    tax = 0.0,
-                                    platformFee = 0.0,
-                                    assetType = "STOCK"
-                                ))
-                            }
-                            
-                            typeStr.contains("融资利息") || typeStr.contains("融券利息") -> {
-                                trades.add(ParsedStatementTrade(
-                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.INTEREST,
-                                    market = Market.CASH,
-                                    symbol = "INTEREST",
-                                    name = typeStr,
-                                    currencyCode = currentOtherCurrency,
-                                    price = kotlin.math.abs(amount),
-                                    quantity = 1.0,
-                                    amount = kotlin.math.abs(amount),
-                                    tradeDate = tradeDate,
-                                    tradeTime = "23:59",
-                                    tradeRef = "INT-$tradeRef",
-                                    rawLine = "$line | $typeStr | $remarkText",
-                                    commission = 0.0,
-                                    tax = 0.0,
-                                    platformFee = 0.0,
-                                    assetType = "STOCK"
-                                ))
-                            }
-                            
-                            typeStr.contains("活动礼包") || typeStr.contains("现金奖励") -> {
-                                trades.add(ParsedStatementTrade(
-                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.DIVIDEND,
-                                    market = Market.CASH,
-                                    symbol = "CASH",
-                                    name = "活动礼包",
-                                    currencyCode = currentOtherCurrency,
-                                    price = amount,
-                                    quantity = 1.0,
-                                    amount = amount,
-                                    tradeDate = tradeDate,
-                                    tradeTime = "09:00",
-                                    tradeRef = "GIFT-$tradeRef",
-                                    rawLine = "$line | $typeStr | $remarkText",
-                                    commission = 0.0,
-                                    tax = 0.0,
-                                    platformFee = 0.0,
-                                    assetType = "STOCK"
-                                ))
-                            }
-                            
-                            typeStr.contains("公司行动其他费用") || typeStr.contains("扣收") || typeStr.contains("税") || typeStr.contains("Withholding Tax") || typeStr.contains("Dividend Fee") -> {
-                                trades.add(ParsedStatementTrade(
-                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.TAX,
-                                    market = Market.CASH,
-                                    symbol = "CASH",
-                                    name = if (remarkText.isNotBlank()) remarkText else typeStr,
-                                    currencyCode = currentOtherCurrency,
-                                    price = kotlin.math.abs(amount),
-                                    quantity = 1.0,
-                                    amount = kotlin.math.abs(amount),
-                                    tradeDate = tradeDate,
-                                    tradeTime = "09:00",
-                                    tradeRef = "TAX-$tradeRef",
-                                    rawLine = "$line | $typeStr | $remarkText",
-                                    commission = 0.0,
-                                    tax = 0.0,
-                                    platformFee = 0.0,
-                                    assetType = "STOCK"
-                                ))
-                            }
-                            
-                            typeStr.contains("存入资金") || typeStr.contains("入金") || typeStr.contains("货币兑换入账") -> {
-                                trades.add(ParsedStatementTrade(
-                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.DEPOSIT,
-                                    market = Market.CASH,
-                                    symbol = "CASH",
-                                    name = typeStr,
-                                    currencyCode = currentOtherCurrency,
-                                    price = kotlin.math.abs(amount),
-                                    quantity = 1.0,
-                                    amount = kotlin.math.abs(amount),
-                                    tradeDate = tradeDate,
-                                    tradeTime = "09:00",
-                                    tradeRef = "DEP-$tradeRef",
-                                    rawLine = "$line | $typeStr | $remarkText",
-                                    commission = 0.0,
-                                    tax = 0.0,
-                                    platformFee = 0.0,
-                                    assetType = "STOCK"
-                                ))
-                            }
-                            
-                            typeStr.contains("提取资金") || typeStr.contains("出金") || typeStr.contains("货币兑换出账") -> {
-                                trades.add(ParsedStatementTrade(
-                                    sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.WITHDRAW,
-                                    market = Market.CASH,
-                                    symbol = "CASH",
-                                    name = typeStr,
-                                    currencyCode = currentOtherCurrency,
-                                    price = kotlin.math.abs(amount),
-                                    quantity = 1.0,
-                                    amount = kotlin.math.abs(amount),
-                                    tradeDate = tradeDate,
-                                    tradeTime = "09:00",
-                                    tradeRef = "WTH-$tradeRef",
-                                    rawLine = "$line | $typeStr | $remarkText",
-                                    commission = 0.0,
-                                    tax = 0.0,
-                                    platformFee = 0.0,
-                                    assetType = "STOCK"
-                                ))
-                            }
-                        }
-                        
-                        idx = scan - 1
-                    }
-                }
-                idx++
-            }
+        val cashScanStart = if (otherCashHeaderIdx != -1) otherCashHeaderIdx + 1 else 0
+        val cashScanLimit = if (otherCashHeaderIdx != -1 && otherPositionsHeaderIdx != -1) {
+            otherPositionsHeaderIdx
+        } else {
+            lines.size
         }
+        trades.addAll(
+            parseOtherCashMovements(
+                lines = lines,
+                startIndex = cashScanStart,
+                limitIndex = cashScanLimit,
+                stopAtSectionEnd = otherCashHeaderIdx != -1
+            )
+        )
 
         // 5. Parse Other Position In/Out Details (其他持仓出⼊明细) for IPO Allotment, Option Expiration, and Split
         if (otherPositionsHeaderIdx != -1) {
@@ -842,6 +646,359 @@ object LongBridgeStatementPdfParser {
         }
 
         return trades
+    }
+
+    private data class CashContext(
+        val market: Market,
+        val currencyCode: String
+    )
+
+    private data class LongBridgeCashMovement(
+        val dateStr: String,
+        val typeStr: String,
+        val remarkText: String,
+        val amount: Double,
+        val rawLine: String,
+        val sourceIndex: Int,
+        val context: CashContext
+    )
+
+    private fun parseOtherCashMovements(
+        lines: List<String>,
+        startIndex: Int,
+        limitIndex: Int,
+        stopAtSectionEnd: Boolean
+    ): List<ParsedStatementTrade> {
+        val movements = mutableListOf<ParsedStatementTrade>()
+        var idx = startIndex
+        var context = CashContext(Market.US, "USD")
+
+        while (idx < limitIndex) {
+            val line = lines[idx]
+
+            if (stopAtSectionEnd && isOtherCashSectionEnd(line)) {
+                break
+            }
+
+            val headerContext = cashContextFromHeaderLine(line)
+            if (headerContext != null) {
+                context = headerContext
+                idx++
+                continue
+            }
+
+            if (isStatementNoiseLine(line) || isOtherCashTableHeaderLine(line)) {
+                idx++
+                continue
+            }
+
+            val singleLineMovement = parseSingleLineCashMovement(
+                line = line,
+                sourceIndex = idx,
+                context = context,
+                allowBareFundingTypes = stopAtSectionEnd
+            )
+            if (singleLineMovement != null) {
+                cashMovementToTrade(singleLineMovement)?.let { movements.add(it) }
+                idx++
+                continue
+            }
+
+            if (stopAtSectionEnd && isStatementDateLine(line) && idx + 1 < limitIndex) {
+                val typeStr = lines[idx + 1]
+                if (!isCashMovementType(typeStr)) {
+                    idx++
+                    continue
+                }
+
+                var scan = idx + 2
+                val remarks = mutableListOf<String>()
+                var amount: Double? = null
+                while (scan < limitIndex) {
+                    val scanLine = lines[scan]
+                    if (
+                        isStatementDateLine(scanLine) ||
+                        cashContextFromHeaderLine(scanLine) != null ||
+                        scanLine.contains("汇总") ||
+                        scanLine.contains("合计") ||
+                        scanLine.contains("其他持仓")
+                    ) {
+                        break
+                    }
+                    if (isStatementNoiseLine(scanLine) || isOtherCashTableHeaderLine(scanLine)) {
+                        scan++
+                        continue
+                    }
+
+                    val numericAmount = parseStatementAmount(scanLine)
+                    if (numericAmount != null) {
+                        amount = numericAmount
+                        scan++
+                        break
+                    }
+
+                    remarks.add(scanLine)
+                    scan++
+                }
+
+                if (amount != null) {
+                    val remarkText = remarks.joinToString(" ").trim()
+                    val inferredContext = inferCashMovementContext(
+                        typeStr = typeStr,
+                        remarkText = remarkText,
+                        fallback = context
+                    )
+                    cashMovementToTrade(
+                        LongBridgeCashMovement(
+                            dateStr = line,
+                            typeStr = typeStr,
+                            remarkText = remarkText,
+                            amount = amount,
+                            rawLine = listOf(line, typeStr, remarkText, amount.toString())
+                                .filter { it.isNotBlank() }
+                                .joinToString(" | "),
+                            sourceIndex = idx,
+                            context = inferredContext
+                        )
+                    )?.let { movements.add(it) }
+                    idx = scan
+                    continue
+                }
+            }
+
+            idx++
+        }
+
+        return movements
+    }
+
+    private fun parseSingleLineCashMovement(
+        line: String,
+        sourceIndex: Int,
+        context: CashContext,
+        allowBareFundingTypes: Boolean
+    ): LongBridgeCashMovement? {
+        val fullMatch = Regex("""^(\d{4}\.\d{2}\.\d{2})\s+(\S+)\s+(.*?)\s+(-?[\d,]+(?:\.\d+)?)$""")
+            .matchEntire(line)
+        val compactMatch = Regex("""^(\d{4}\.\d{2}\.\d{2})\s+(\S+)\s+(-?[\d,]+(?:\.\d+)?)$""")
+            .matchEntire(line)
+        val dateStr: String
+        val typeStr: String
+        val remarkText: String
+        val amount: Double
+
+        if (fullMatch != null) {
+            dateStr = fullMatch.groupValues[1]
+            typeStr = fullMatch.groupValues[2]
+            remarkText = fullMatch.groupValues[3].trim()
+            amount = parseStatementAmount(fullMatch.groupValues[4]) ?: return null
+        } else if (compactMatch != null) {
+            dateStr = compactMatch.groupValues[1]
+            typeStr = compactMatch.groupValues[2]
+            remarkText = ""
+            amount = parseStatementAmount(compactMatch.groupValues[3]) ?: return null
+        } else {
+            return null
+        }
+
+        if (!isCashMovementType(typeStr, remarkText)) return null
+        if (!allowBareFundingTypes && isBareFundingType(typeStr)) return null
+
+        return LongBridgeCashMovement(
+            dateStr = dateStr,
+            typeStr = typeStr,
+            remarkText = remarkText,
+            amount = amount,
+            rawLine = line,
+            sourceIndex = sourceIndex,
+            context = inferCashMovementContext(typeStr, remarkText, context)
+        )
+    }
+
+    private fun cashMovementToTrade(movement: LongBridgeCashMovement): ParsedStatementTrade? {
+        val tradeType = when {
+            isDividendType(movement.typeStr, movement.remarkText) -> TradeType.DIVIDEND
+            isInterestType(movement.typeStr) -> TradeType.INTEREST
+            isTaxType(movement.typeStr, movement.remarkText) -> TradeType.TAX
+            isDepositType(movement.typeStr) -> TradeType.DEPOSIT
+            isWithdrawType(movement.typeStr) -> TradeType.WITHDRAW
+            else -> return null
+        }
+        val amount = kotlin.math.abs(movement.amount)
+        val tradeDate = LocalDate.parse(movement.dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+        val securitySymbol = extractCashMovementSecuritySymbol(movement.remarkText)
+        val symbol = when (tradeType) {
+            TradeType.DIVIDEND -> securitySymbol ?: "CASH"
+            TradeType.TAX -> securitySymbol ?: "CASH"
+            TradeType.INTEREST -> "INTEREST"
+            else -> "CASH"
+        }
+        val name = when (tradeType) {
+            TradeType.DIVIDEND -> if (symbol != "CASH") symbol else movement.typeStr
+            TradeType.TAX -> if (symbol != "CASH") symbol else movement.remarkText.ifBlank { movement.typeStr }
+            TradeType.INTEREST -> movement.typeStr
+            else -> movement.typeStr
+        }
+        val refPrefix = when (tradeType) {
+            TradeType.DIVIDEND -> if (movement.typeStr.contains("活动礼包") || movement.remarkText.contains("现金奖励")) "GIFT" else "DIV"
+            TradeType.TAX -> "TAX"
+            TradeType.INTEREST -> "INT"
+            TradeType.DEPOSIT -> "DEP"
+            TradeType.WITHDRAW -> "WTH"
+            else -> "CASH"
+        }
+        val refType = movement.typeStr.replace(Regex("""\s+"""), "")
+        val tradeRef = "$refPrefix-${movement.dateStr.replace(".", "")}-$refType-$amount-${movement.sourceIndex}"
+
+        return ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = tradeType,
+            market = movement.context.market,
+            symbol = symbol,
+            name = name,
+            currencyCode = movement.context.currencyCode,
+            price = amount,
+            quantity = 1.0,
+            amount = amount,
+            tradeDate = tradeDate,
+            tradeTime = if (tradeType == TradeType.INTEREST) "23:59" else "09:00",
+            tradeRef = tradeRef,
+            rawLine = movement.rawLine,
+            commission = 0.0,
+            tax = 0.0,
+            platformFee = 0.0,
+            assetType = "STOCK"
+        )
+    }
+
+    private fun isCashMovementType(typeStr: String, remarkText: String = ""): Boolean {
+        return isDividendType(typeStr, remarkText) ||
+            isInterestType(typeStr) ||
+            isTaxType(typeStr, remarkText) ||
+            isDepositType(typeStr) ||
+            isWithdrawType(typeStr)
+    }
+
+    private fun isDividendType(typeStr: String, remarkText: String): Boolean {
+        return typeStr.contains("现金分红") ||
+            typeStr.contains("代收股息") ||
+            typeStr.contains("活动礼包") ||
+            typeStr.contains("现金奖励") ||
+            remarkText.contains("现金奖励")
+    }
+
+    private fun isInterestType(typeStr: String): Boolean {
+        return typeStr.contains("融资利息") || typeStr.contains("融券利息")
+    }
+
+    private fun isTaxType(typeStr: String, remarkText: String): Boolean {
+        return typeStr.contains("公司行动其他费用") ||
+            typeStr.contains("扣收") ||
+            typeStr.contains("税") ||
+            typeStr.contains("Withholding Tax", ignoreCase = true) ||
+            typeStr.contains("Dividend Fee", ignoreCase = true) ||
+            remarkText.contains("Withholding Tax", ignoreCase = true) ||
+            remarkText.contains("Dividend Fee", ignoreCase = true)
+    }
+
+    private fun isDepositType(typeStr: String): Boolean {
+        return typeStr.contains("存入资金") ||
+            typeStr.contains("入金") ||
+            typeStr.contains("货币兑换入账")
+    }
+
+    private fun isWithdrawType(typeStr: String): Boolean {
+        return typeStr.contains("提取资金") ||
+            typeStr.contains("出金") ||
+            typeStr.contains("货币兑换出账")
+    }
+
+    private fun isBareFundingType(typeStr: String): Boolean {
+        return (typeStr.contains("存入资金") || typeStr.contains("入金") || typeStr.contains("提取资金") || typeStr.contains("出金")) &&
+            !typeStr.contains("货币兑换")
+    }
+
+    private fun inferCashMovementContext(
+        typeStr: String,
+        remarkText: String,
+        fallback: CashContext
+    ): CashContext {
+        val fxMatch = Regex("""\b(USD|HKD|CNY)\b.*?(?:换汇至|換匯至|至|to)\s*(USD|HKD|CNY)\b""", RegexOption.IGNORE_CASE)
+            .find(remarkText)
+        if (fxMatch != null) {
+            val fromCurrency = fxMatch.groupValues[1].uppercase()
+            val toCurrency = fxMatch.groupValues[2].uppercase()
+            val currency = if (isWithdrawType(typeStr)) fromCurrency else if (isDepositType(typeStr)) toCurrency else fallback.currencyCode
+            return cashContextFromCurrency(currency)
+        }
+        return fallback
+    }
+
+    private fun cashContextFromHeaderLine(line: String): CashContext? {
+        if (!line.contains("币种") && !line.contains("市场:")) return null
+        return when {
+            line.contains("港市场") || line.contains("香港市场") || line.contains("港元") || line.contains("HKD", ignoreCase = true) ->
+                CashContext(Market.HK, "HKD")
+            line.contains("美国市场") || line.contains("美元") || line.contains("USD", ignoreCase = true) ->
+                CashContext(Market.US, "USD")
+            line.contains("人民币") || line.contains("CNY", ignoreCase = true) ->
+                CashContext(Market.CASH, "CNY")
+            else -> null
+        }
+    }
+
+    private fun cashContextFromCurrency(currencyCode: String): CashContext {
+        return when (currencyCode.uppercase()) {
+            "HKD" -> CashContext(Market.HK, "HKD")
+            "USD" -> CashContext(Market.US, "USD")
+            "CNY" -> CashContext(Market.CASH, "CNY")
+            else -> CashContext(Market.CASH, currencyCode.uppercase())
+        }
+    }
+
+    private fun extractCashMovementSecuritySymbol(remarkText: String): String? {
+        val usTickerMatch = Regex("""\b([A-Z][A-Z0-9.\-]*)\.US\b""").find(remarkText)
+        if (usTickerMatch != null) return usTickerMatch.groupValues[1].uppercase()
+
+        val usParenMatch = Regex("""\b([A-Z][A-Z0-9.\-]*)\(US[A-Z0-9]+\)""").find(remarkText)
+        if (usParenMatch != null) return usParenMatch.groupValues[1].uppercase()
+
+        val hkTickerMatch = Regex("""\b(\d{1,5})\.HK\b""").find(remarkText)
+        if (hkTickerMatch != null) {
+            val digits = hkTickerMatch.groupValues[1]
+            return digits.padStart(4, '0') + ".HK"
+        }
+
+        val leadingTickerMatch = Regex("""^([A-Z][A-Z0-9.\-]{0,10})\s+(?:Cash Dividend|Payment in Lieu)""").find(remarkText)
+        return leadingTickerMatch?.groupValues?.get(1)?.uppercase()
+    }
+
+    private fun isStatementDateLine(line: String): Boolean {
+        return Regex("""^\d{4}\.\d{2}\.\d{2}$""").matches(line)
+    }
+
+    private fun parseStatementAmount(raw: String): Double? {
+        val cleaned = raw.replace(",", "").trim()
+        if (!Regex("""^-?\d+(?:\.\d+)?$""").matches(cleaned)) return null
+        return cleaned.toDoubleOrNull()
+    }
+
+    private fun isOtherCashTableHeaderLine(line: String): Boolean {
+        return line in setOf("发生日期", "发生日期 业务类型 项目 金额 结余 备注", "业务类型", "类型", "备注", "金额", "项目", "结余")
+    }
+
+    private fun isOtherCashSectionEnd(line: String): Boolean {
+        return line.contains("责任说明") || line.contains("其他持仓出") || line.contains("其他持倉出")
+    }
+
+    private fun isStatementNoiseLine(line: String): Boolean {
+        return line.startsWith("--- PAGE") ||
+            line.contains("Page") ||
+            line.contains("综合账户") ||
+            line.contains("综合账号") ||
+            line.contains("综合账⼾") ||
+            line.contains("综合账户月结单") ||
+            Regex("""^\d{4}\.\d{2}$""").matches(line)
     }
 
     private fun convertTimezone(date: LocalDate, timeStr: String, tz: String): Pair<LocalDate, String> {

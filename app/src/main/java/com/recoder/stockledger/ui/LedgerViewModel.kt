@@ -2526,14 +2526,41 @@ class LedgerViewModel(
                             },
                             secondaryMeta = if (tradeType == TradeType.SPLIT) {
                                 "折算比例 ${transaction.price}"
-                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) || isStockOrOptDiv) {
+                            } else if (tradeType == TradeType.BUY || tradeType == TradeType.SELL) {
                                 val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
                                 val unit = if (isOpt) "张" else "股"
-                                "分红价/成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
+                                "成交价 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
+                            } else if (tradeType == TradeType.EXPIRE) {
+                                val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
+                                val unit = if (isOpt) "张" else "股"
+                                "到期数量 ${transaction.quantity} $unit"
+                            } else if (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) {
+                                val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
+                                val unit = if (isOpt) "张" else "股"
+                                val label = if (tradeType == TradeType.TRANSFER_IN) "转入成本" else "转出成本"
+                                "$label ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
+                            } else if (isStockOrOptDiv) {
+                                val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
+                                val unit = if (isOpt) "张" else "股"
+                                if (transaction.quantity == 1.0) {
+                                    "分红金额 ${formatMarketAmount(transaction.price, market)}"
+                                } else {
+                                    "每股分红 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
+                                }
+                            } else if (tradeType == TradeType.DIVIDEND) {
+                                "分红/奖励金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.INTEREST) {
-                                transaction.note.ifBlank { "融资利息支出" }
+                                "利息金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.TAX) {
-                                transaction.note.ifBlank { "税费支出" }
+                                "税费金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                            } else if (tradeType == TradeType.DEPOSIT) {
+                                "入金金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                            } else if (tradeType == TradeType.WITHDRAW) {
+                                "出金金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                            } else if (tradeType == TradeType.TRANSFER_IN) {
+                                "转入金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                            } else if (tradeType == TradeType.TRANSFER_OUT) {
+                                "转出金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
@@ -2545,8 +2572,18 @@ class LedgerViewModel(
                             timeLabel = if (tradeType == TradeType.SPLIT) "" else transaction.tradeTime,
                             feeLabel = if (tradeType == TradeType.SPLIT) {
                                 "股票拆分/合并折算"
-                            } else if (tradeType.isSecurityTrade || (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) || isStockOrOptDiv) {
+                            } else if (tradeType == TradeType.EXPIRE) {
+                                "期权到期"
+                            } else if (tradeType == TradeType.BUY || tradeType == TradeType.SELL) {
                                 "费用 ${formatMarketAmount(transaction.commission + transaction.tax, market)}"
+                            } else if (tradeType in listOf(TradeType.TRANSFER_OUT, TradeType.TRANSFER_IN) && transaction.symbol != CASH_ACCOUNT_SYMBOL) {
+                                "证券划转"
+                            } else if (tradeType == TradeType.DIVIDEND) {
+                                if (isStockOrOptDiv) "分红入账" else "现金入账"
+                            } else if (tradeType == TradeType.TAX) {
+                                "税费支出"
+                            } else if (tradeType == TradeType.INTEREST) {
+                                "利息支出"
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             },

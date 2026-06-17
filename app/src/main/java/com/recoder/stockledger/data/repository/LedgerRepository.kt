@@ -935,7 +935,7 @@ class DefaultLedgerRepository(
         for (parsed in normalizedTrades) {
             var symbol = parsed.symbol.trim()
             var name = parsed.name.trim()
-            if (symbol.isBlank() && name.isNotBlank()) {
+            if (parsed.tradeType.isSecurityTrade && symbol.isBlank() && name.isNotBlank()) {
                 val resolvedSymbol = dao.findSymbolByName(name, parsed.market.name, parsed.assetType)
                 if (resolvedSymbol != null && resolvedSymbol.isNotBlank()) {
                     symbol = resolvedSymbol
@@ -997,7 +997,7 @@ class DefaultLedgerRepository(
             }
 
             val hasParsedFees = finalParsed.commission != null || finalParsed.tax != null || finalParsed.platformFee != null
-            val feeEstimate = if (!hasParsedFees) {
+            val feeEstimate = if (!hasParsedFees && finalParsed.tradeType.isSecurityTrade) {
                 estimateImportedTradeFees(
                     tradeType = finalParsed.tradeType,
                     platform = platform,
@@ -1076,7 +1076,7 @@ class DefaultLedgerRepository(
         for (trade in normalizedTrades) {
             val sym = trade.symbol.trim()
             val name = trade.name.trim()
-            if (sym.isNotBlank() && name.isNotBlank()) {
+            if (trade.tradeType.isSecurityTrade && sym.isNotBlank() && name.isNotBlank()) {
                 batchSymbolMap[Triple(name, trade.market, trade.assetType)] = sym
             }
         }
@@ -1084,7 +1084,7 @@ class DefaultLedgerRepository(
         for (parsed in normalizedTrades) {
             var symbol = parsed.symbol.trim()
             var name = parsed.name.trim()
-            if (symbol.isBlank() && name.isNotBlank()) {
+            if (parsed.tradeType.isSecurityTrade && symbol.isBlank() && name.isNotBlank()) {
                 val batchSymbol = batchSymbolMap[Triple(name, parsed.market, parsed.assetType)]
                 if (batchSymbol != null && batchSymbol.isNotBlank()) {
                     symbol = batchSymbol
@@ -1194,7 +1194,7 @@ class DefaultLedgerRepository(
             }
 
             val hasParsedFees = finalParsed.commission != null || finalParsed.tax != null || finalParsed.platformFee != null
-            val feeEstimate = if (!hasParsedFees) {
+            val feeEstimate = if (!hasParsedFees && finalParsed.tradeType.isSecurityTrade) {
                 estimateImportedTradeFees(
                     tradeType = finalParsed.tradeType,
                     platform = platform,
