@@ -422,7 +422,7 @@ class PortfolioCalculator {
             val closeQuantity = minOf(current.quantity, transaction.quantity)
             val removedCost = current.averageCost * closeQuantity * mult
             val closeProceeds = transaction.price * closeQuantity * mult
-            val closeProfit = closeProceeds - removedCost
+            val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
             val rawRemainingSellQty = transaction.quantity - closeQuantity
             val remainingSellQty = cleanQuantity(rawRemainingSellQty)
             return if (remainingSellQty > 0.0) {

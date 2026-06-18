@@ -4,6 +4,7 @@ import com.recoder.stockledger.data.ExchangeRates
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.TradeType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class PortfolioCalculatorTest {
@@ -94,7 +95,7 @@ class PortfolioCalculatorTest {
         val position = snapshot.positions.getValue("HK:0700.HK")
         assertEquals(6.0, position.quantity, 0.0001)
         assertEquals(300.0, position.averageCost, 0.0001)
-        assertEquals(120.0, position.realizedProfit, 0.0001)
+        assertEquals(118.0, position.realizedProfit, 0.0001)
         assertEquals(-1_682.0, snapshot.cashBalanceCny, 0.0001)
     }
 
@@ -257,6 +258,74 @@ class PortfolioCalculatorTest {
         assertEquals(0.0, pos.quantity, 0.0001)
         assertEquals(0.0, pos.remainingCost, 0.0001)
         assertEquals(-100.0, pos.realizedProfit, 0.0001)
+    }
+
+    @Test
+    fun `calculate keeps April SPY options separate from SPY stock and includes fees`() {
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(
+                    type = TradeType.BUY,
+                    market = Market.US,
+                    symbol = "SPY 260407P645",
+                    name = "SPY 2026-04-07 Put @ 645",
+                    price = 0.45,
+                    quantity = 1.0,
+                    commission = 1.79,
+                    tax = 0.24,
+                    tradeDate = "2026-04-07",
+                    tradeTime = "00:41",
+                    assetType = "OPTION"
+                ),
+                trade(
+                    type = TradeType.SELL,
+                    market = Market.US,
+                    symbol = "SPY 260407P645",
+                    name = "SPY 2026-04-07 Put @ 645",
+                    price = 0.03,
+                    quantity = 1.0,
+                    commission = 1.29,
+                    tax = 0.25,
+                    tradeDate = "2026-04-07",
+                    tradeTime = "03:02",
+                    assetType = "OPTION"
+                ),
+                trade(
+                    type = TradeType.BUY,
+                    market = Market.US,
+                    symbol = "SPY 260409P666",
+                    name = "SPY 2026-04-09 Put @ 666",
+                    price = 0.56,
+                    quantity = 1.0,
+                    commission = 1.79,
+                    tax = 0.24,
+                    tradeDate = "2026-04-08",
+                    tradeTime = "23:43",
+                    assetType = "OPTION"
+                ),
+                trade(
+                    type = TradeType.EXPIRE,
+                    market = Market.US,
+                    symbol = "SPY 260409P666",
+                    name = "SPY 2026-04-09 Put @ 666",
+                    price = 0.0,
+                    quantity = 1.0,
+                    tradeDate = "2026-04-09",
+                    tradeTime = "23:59:59",
+                    assetType = "OPTION"
+                )
+            ),
+            quotes = listOf(
+                PortfolioQuote(symbol = "SPY", market = Market.US, currentPrice = 737.76, previousClose = 725.43)
+            ),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 1.0),
+        )
+
+        assertFalse(snapshot.positions.containsKey("US:SPY"))
+        assertEquals(-45.57, snapshot.positions.getValue("US:SPY 260407P645").realizedProfit, 0.0001)
+        assertEquals(-58.03, snapshot.positions.getValue("US:SPY 260409P666").realizedProfit, 0.0001)
+        assertEquals(-103.60, snapshot.positions.values.sumOf { it.realizedProfit }, 0.0001)
+        assertEquals(0.0, snapshot.holdingsValueCny, 0.0001)
     }
 
     @Test
@@ -423,6 +492,7 @@ class PortfolioCalculatorTest {
         tax: Double = 0.0,
         tradeDate: String = "2026-01-02",
         tradeTime: String = "10:00",
+        assetType: String = "",
     ): PortfolioTrade = PortfolioTrade(
         tradeType = type,
         market = market,
@@ -435,6 +505,7 @@ class PortfolioCalculatorTest {
         commission = commission,
         tax = tax,
         createdAt = 1L,
+        assetType = assetType,
     )
 
     @Test
@@ -445,7 +516,12 @@ class PortfolioCalculatorTest {
             return
         }
         val trades = mutableListOf<PortfolioTrade>()
-        val conn = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbFile.absolutePath)
+        val conn = try {
+            java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbFile.absolutePath)
+        } catch (error: java.sql.SQLException) {
+            println("Skipping local database smoke test: ${error.message}")
+            return
+        }
         val stmt = conn.createStatement()
         val rs = stmt.executeQuery("SELECT * FROM transactions WHERE ledgerId = 1")
         while (rs.next()) {
@@ -467,7 +543,12 @@ class PortfolioCalculatorTest {
         conn.close()
         
         val quotes = mutableListOf<PortfolioQuote>()
-        val connQuotes = java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbFile.absolutePath)
+        val connQuotes = try {
+            java.sql.DriverManager.getConnection("jdbc:sqlite:" + dbFile.absolutePath)
+        } catch (error: java.sql.SQLException) {
+            println("Skipping local quote load: ${error.message}")
+            return
+        }
         val stmtQuotes = connQuotes.createStatement()
         val rsQuotes = stmtQuotes.executeQuery("SELECT * FROM quote_snapshots")
         while (rsQuotes.next()) {

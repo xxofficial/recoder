@@ -300,30 +300,21 @@ class DefaultLedgerRepository(
                     recoverLongBridgeSpxsPollution(updated)?.let { repaired ->
                         updated = repaired
                     }
+                    repairOptionContractTransaction(updated)?.let { repaired ->
+                        updated = repaired
+                    }
 
                     val cleanUpper = cleanNameString(updated.name).uppercase().replace(" ", "")
-                    if (shouldNormalizeUsSpyToEtf(updated.symbol, cleanUpper)) {
+                    if (!isOptionTransaction(updated) && shouldNormalizeUsSpyToEtf(updated.symbol, cleanUpper)) {
                         if (updated.symbol != "SPY" || updated.name != "SPDR标普500 ETF") {
                             updated = updated.copy(symbol = "SPY", name = "SPDR标普500 ETF")
                         }
                     }
-                    if (txn.symbol == ".NDX" || txn.symbol == ".IXIC" || txn.symbol == "QQQ" || cleanUpper.contains("纳指100") || cleanUpper.contains("纳斯达克100") || cleanUpper.contains("QQQ")) {
+                    if (!isOptionTransaction(updated) && (txn.symbol == ".NDX" || txn.symbol == ".IXIC" || txn.symbol == "QQQ" || cleanUpper.contains("纳指100") || cleanUpper.contains("纳斯达克100") || cleanUpper.contains("QQQ"))) {
                         if (cleanUpper.contains("ETF") || cleanUpper.contains("INVESCO") || cleanUpper.contains("纳指") || cleanUpper.contains("纳斯达克")) {
                             if (txn.symbol != "QQQ" || txn.name != "Invesco NASDAQ 100 ETF") {
                                 updated = updated.copy(symbol = "QQQ", name = "Invesco NASDAQ 100 ETF")
                             }
-                        }
-                    }
-                }
-                
-                // 4. Option-formatted symbol in STOCK transaction repair
-                if (txn.assetType == "STOCK" || txn.assetType == "stock") {
-                    val optionRegex = Regex("""^([A-Za-z]+)\s*(\d{6})([CP])(\d+).*$""")
-                    val match = optionRegex.matchEntire(updated.symbol)
-                    if (match != null) {
-                        val underlying = match.groupValues[1].uppercase()
-                        if (updated.symbol != underlying) {
-                            updated = updated.copy(symbol = underlying)
                         }
                     }
                 }
@@ -356,6 +347,75 @@ class DefaultLedgerRepository(
         return txn.copy(
             symbol = "SPXS",
             name = "3 倍做空标普 500 ETF"
+        )
+    }
+
+    private data class ParsedOptionContract(
+        val symbol: String,
+        val name: String,
+        val underlyingSymbol: String,
+        val expiryDate: String,
+        val strikePrice: Double,
+        val optionType: String,
+    )
+
+    private fun repairOptionContractTransaction(txn: TransactionEntity): TransactionEntity? {
+        if (txn.market != Market.US.name) return null
+        val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull() ?: return null
+        if (!tradeType.isSecurityTrade) return null
+
+        val directContract = parseOptionContract(txn.symbol)
+        val looksLikePollutedSpy = txn.symbol.equals("SPY", ignoreCase = true) || txn.name == "SPDR标普500 ETF"
+        val evidenceContract = directContract ?: if (looksLikePollutedSpy) {
+            parseOptionContract(
+                listOfNotNull(txn.note, txn.externalReference, txn.name)
+                    .joinToString(" ")
+            )
+        } else {
+            null
+        }
+        val contract = evidenceContract ?: return null
+
+        val repaired = txn.copy(
+            symbol = contract.symbol,
+            name = contract.name,
+            assetType = "OPTION",
+            underlyingSymbol = contract.underlyingSymbol,
+            expiryDate = contract.expiryDate,
+            strikePrice = contract.strikePrice,
+            optionType = contract.optionType,
+        )
+        return if (repaired == txn) null else repaired
+    }
+
+    private fun isOptionTransaction(txn: TransactionEntity): Boolean {
+        return txn.assetType.equals("OPTION", ignoreCase = true) || parseOptionContract(txn.symbol) != null
+    }
+
+    private fun parseOptionContract(text: String): ParsedOptionContract? {
+        val match = OPTION_CONTRACT_REGEX.find(text) ?: return null
+        val underlying = match.groupValues[1].uppercase()
+        val expiryCompact = match.groupValues[2]
+        val typeChar = match.groupValues[3].uppercase()
+        val strikeRaw = match.groupValues[4]
+        val strike = if (strikeRaw.length > 3) {
+            strikeRaw.toDouble() / 1000.0
+        } else {
+            strikeRaw.toDouble()
+        }
+        val optionType = if (typeChar == "C") "CALL" else "PUT"
+        val year = 2000 + expiryCompact.substring(0, 2).toInt()
+        val month = expiryCompact.substring(2, 4).toInt()
+        val day = expiryCompact.substring(4, 6).toInt()
+        val expiryDate = String.format(java.util.Locale.US, "%04d-%02d-%02d", year, month, day)
+        val strikeLabel = if (strike == strike.toLong().toDouble()) strike.toLong().toString() else strike.toString()
+        return ParsedOptionContract(
+            symbol = "$underlying $expiryCompact$typeChar$strikeLabel",
+            name = "$underlying $expiryDate ${if (optionType == "CALL") "Call" else "Put"} @ $strikeLabel",
+            underlyingSymbol = underlying,
+            expiryDate = expiryDate,
+            strikePrice = strike,
+            optionType = optionType,
         )
     }
 
@@ -597,6 +657,11 @@ class DefaultLedgerRepository(
                             put("createdAt", transaction.createdAt)
                             put("ledgerId", transaction.ledgerId)
                             put("investorName", transaction.investorName)
+                            put("assetType", transaction.assetType)
+                            put("underlyingSymbol", transaction.underlyingSymbol)
+                            put("expiryDate", transaction.expiryDate)
+                            put("strikePrice", transaction.strikePrice)
+                            put("optionType", transaction.optionType)
                         },
                     )
                 }
@@ -671,6 +736,11 @@ class DefaultLedgerRepository(
                         createdAt = item.optLong("createdAt"),
                         ledgerId = item.optLong("ledgerId", 1L),
                         investorName = item.optString("investorName").takeIf { it.isNotBlank() },
+                        assetType = item.optString("assetType", "STOCK").ifBlank { "STOCK" },
+                        underlyingSymbol = item.optString("underlyingSymbol").takeIf { it.isNotBlank() },
+                        expiryDate = item.optString("expiryDate").takeIf { it.isNotBlank() },
+                        strikePrice = if (item.has("strikePrice") && !item.isNull("strikePrice")) item.optDouble("strikePrice") else null,
+                        optionType = item.optString("optionType").takeIf { it.isNotBlank() },
                     ),
                 )
             }
@@ -2059,6 +2129,7 @@ class DefaultLedgerRepository(
 
     private companion object {
         const val TAG = "LedgerRepository"
+        val OPTION_CONTRACT_REGEX = Regex("""(?i)\b([A-Z]{1,6})\s*(\d{6})([CP])\s*(\d{1,8})\b""")
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         const val DEFAULT_MAIL_FETCH_BATCH_SIZE = 200
         const val MAIL_RESYNC_LOOKBACK_MS = 24L * 60 * 60 * 1000

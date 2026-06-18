@@ -225,7 +225,6 @@ class AutoNameRepairAndroidTest {
 
     @Test
     fun testSeedIfEmptyRepairsOptionSymbolInStock() = runBlocking {
-        // Seed a corrupted transaction: assetType = STOCK but symbol = TSLA 260601C500
         val corruptedTx = com.recoder.stockledger.data.local.TransactionEntity(
             tradeType = "BUY",
             platform = "LONGBRIDGE",
@@ -245,13 +244,53 @@ class AutoNameRepairAndroidTest {
         )
         val id = db.ledgerDao().insertTransaction(corruptedTx)
 
-        // Call seedIfEmpty via baseRepo
         baseRepo.seedIfEmpty()
 
-        // Verify it was repaired to TSLA
         val repaired = db.ledgerDao().getAllTransactions().find { it.id == id }
         assertNotNull(repaired)
-        assertEquals("TSLA", repaired!!.symbol)
+        assertEquals("TSLA 260601C500", repaired!!.symbol)
+        assertEquals("TSLA 2026-06-01 Call @ 500", repaired.name)
+        assertEquals("OPTION", repaired.assetType)
+        assertEquals("TSLA", repaired.underlyingSymbol)
+        assertEquals("2026-06-01", repaired.expiryDate)
+        assertEquals(500.0, repaired.strikePrice ?: 0.0, 0.001)
+        assertEquals("CALL", repaired.optionType)
+    }
+
+    @Test
+    fun testSeedIfEmptyRestoresPollutedSpyOptionFromNote() = runBlocking {
+        val corruptedTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "BUY",
+            platform = "LONGBRIDGE",
+            sourceChannel = "PDF_STATEMENT",
+            externalReference = "PDF-STMT-OS-SPY-OPTION",
+            market = "US",
+            symbol = "SPY",
+            name = "SPDR标普500 ETF",
+            tradeDate = "2026-04-08",
+            tradeTime = "23:43",
+            price = 0.56,
+            quantity = 1.0,
+            commission = 1.79,
+            tax = 0.24,
+            note = "电子结单自动导入 · SPY260409P666000 SPY 260409 666 Put",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "STOCK"
+        )
+        val id = db.ledgerDao().insertTransaction(corruptedTx)
+
+        baseRepo.seedIfEmpty()
+
+        val repaired = db.ledgerDao().getAllTransactions().find { it.id == id }
+        assertNotNull(repaired)
+        assertEquals("SPY 260409P666", repaired!!.symbol)
+        assertEquals("SPY 2026-04-09 Put @ 666", repaired.name)
+        assertEquals("OPTION", repaired.assetType)
+        assertEquals("SPY", repaired.underlyingSymbol)
+        assertEquals("2026-04-09", repaired.expiryDate)
+        assertEquals(666.0, repaired.strikePrice ?: 0.0, 0.001)
+        assertEquals("PUT", repaired.optionType)
     }
 
     @Test
@@ -351,6 +390,50 @@ class AutoNameRepairAndroidTest {
         assertNotNull(repaired)
         assertEquals("SPY", repaired!!.symbol)
         assertEquals("SPDR标普500 ETF", repaired.name)
+    }
+
+    @Test
+    fun testBackupRoundTripKeepsOptionFields() = runBlocking {
+        val optionTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "BUY",
+            platform = "LONGBRIDGE",
+            market = "US",
+            symbol = "SPY 260409P666",
+            name = "SPY 2026-04-09 Put @ 666",
+            tradeDate = "2026-04-08",
+            tradeTime = "23:43",
+            price = 0.56,
+            quantity = 1.0,
+            commission = 1.79,
+            tax = 0.24,
+            note = "",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "OPTION",
+            underlyingSymbol = "SPY",
+            expiryDate = "2026-04-09",
+            strikePrice = 666.0,
+            optionType = "PUT"
+        )
+        db.ledgerDao().insertTransaction(optionTx)
+        val output = java.io.ByteArrayOutputStream()
+
+        baseRepo.exportBackup(
+            outputStream = output,
+            displayCurrencyName = "CNY",
+            enabledPlatforms = listOf(BrokerPlatform.LONGBRIDGE),
+            selectedPlatform = BrokerPlatform.LONGBRIDGE,
+            selectedLedgerIds = listOf(1L),
+            selectedPlatforms = listOf(BrokerPlatform.LONGBRIDGE.name)
+        )
+
+        val imported = baseRepo.parseBackup(java.io.ByteArrayInputStream(output.toByteArray()))
+        val restored = imported.transactions.single { it.symbol == "SPY 260409P666" }
+        assertEquals("OPTION", restored.assetType)
+        assertEquals("SPY", restored.underlyingSymbol)
+        assertEquals("2026-04-09", restored.expiryDate)
+        assertEquals(666.0, restored.strikePrice ?: 0.0, 0.001)
+        assertEquals("PUT", restored.optionType)
     }
 
     @Test

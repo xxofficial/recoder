@@ -2935,7 +2935,7 @@ class LedgerViewModel(
                                 val closeQuantity = minOf(current.quantity, transaction.quantity.toDouble())
                                 val removedCost = current.averageCost * closeQuantity * mult
                                 val closeProceeds = transaction.price * closeQuantity * mult
-                                val closeProfit = closeProceeds - removedCost
+                                val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
                                 val remainingSellQty = transaction.quantity - closeQuantity
                                 val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                                 cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
@@ -3241,7 +3241,7 @@ class LedgerViewModel(
                         val closeQuantity = minOf(current.quantity, transaction.quantity)
                         val removedCost = current.averageCost * closeQuantity * mult
                         val closeProceeds = transaction.price * closeQuantity * mult
-                        val closeProfit = closeProceeds - removedCost
+                        val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
                         val closeProfitCny = convertToCny(closeProfit, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + closeProfitCny
                         val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
@@ -3845,7 +3845,7 @@ class LedgerViewModel(
                             val closeQuantity = minOf(current.quantity, transaction.quantity)
                             val removedCost = current.averageCost * closeQuantity * mult
                             val closeProceeds = transaction.price * closeQuantity * mult
-                            val closeProfit = closeProceeds - removedCost
+                            val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
                             val remainingSellQty = transaction.quantity - closeQuantity
                             val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
                             cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
