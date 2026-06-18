@@ -297,12 +297,14 @@ class DefaultLedgerRepository(
                 
                 // 3. US Index to ETF repair
                 if (txn.market == Market.US.name) {
-                    val cleanUpper = cleanName.uppercase().replace(" ", "")
-                    if (txn.symbol == ".INX" || txn.symbol == "SPY" || cleanUpper.contains("标普500") || cleanUpper.contains("SP500") || cleanUpper.contains("SPY")) {
-                        if (cleanUpper.contains("ETF") || cleanUpper.contains("SPDR")) {
-                            if (txn.symbol != "SPY" || txn.name != "SPDR标普500 ETF") {
-                                updated = updated.copy(symbol = "SPY", name = "SPDR标普500 ETF")
-                            }
+                    recoverLongBridgeSpxsPollution(updated)?.let { repaired ->
+                        updated = repaired
+                    }
+
+                    val cleanUpper = cleanNameString(updated.name).uppercase().replace(" ", "")
+                    if (shouldNormalizeUsSpyToEtf(updated.symbol, cleanUpper)) {
+                        if (updated.symbol != "SPY" || updated.name != "SPDR标普500 ETF") {
+                            updated = updated.copy(symbol = "SPY", name = "SPDR标普500 ETF")
                         }
                     }
                     if (txn.symbol == ".NDX" || txn.symbol == ".IXIC" || txn.symbol == "QQQ" || cleanUpper.contains("纳指100") || cleanUpper.contains("纳斯达克100") || cleanUpper.contains("QQQ")) {
@@ -337,6 +339,37 @@ class DefaultLedgerRepository(
         } catch (e: Exception) {
             Log.e(TAG, "Error during seedIfEmpty migration", e)
         }
+    }
+
+    private fun recoverLongBridgeSpxsPollution(txn: TransactionEntity): TransactionEntity? {
+        if (txn.market != Market.US.name) return null
+        val looksLikePollutedSpy = txn.symbol.equals("SPY", ignoreCase = true) || txn.name == "SPDR标普500 ETF"
+        if (!looksLikePollutedSpy) return null
+
+        val noteCompact = cleanNameString(txn.note).uppercase().replace(" ", "")
+        val nameCompact = cleanNameString(txn.name).uppercase().replace(" ", "")
+        val hasSpxsEvidence = noteCompact.contains("SPXS") ||
+            noteCompact.contains("3倍做空标普500ETF") ||
+            nameCompact.contains("3倍做空标普500ETF")
+        if (!hasSpxsEvidence) return null
+
+        return txn.copy(
+            symbol = "SPXS",
+            name = "3 倍做空标普 500 ETF"
+        )
+    }
+
+    private fun shouldNormalizeUsSpyToEtf(symbol: String, compactName: String): Boolean {
+        val normalizedSymbol = symbol.trim().uppercase()
+        if (normalizedSymbol == ".INX" || normalizedSymbol == "SPY") return true
+        if (normalizedSymbol.isNotBlank()) return false
+
+        if (compactName == "SPY" || compactName == "SPY.US") return true
+
+        val isExplicitSpyName = compactName.contains("SPDR标普500") ||
+            compactName.contains("SPDRSP500") ||
+            compactName.contains("SPDRS&P500")
+        return isExplicitSpyName && compactName.contains("ETF")
     }
 
     override suspend fun purgeLegacySeedData() {
@@ -2342,10 +2375,13 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
 
         val cleanUpper = raw.uppercase().replace(" ", "")
         if (market == Market.US) {
-            if (cleanUpper.contains("标普500") || cleanUpper.contains("SP500") || cleanUpper.contains("SPY")) {
-                if (cleanUpper.contains("ETF") || cleanUpper.contains("SPDR")) {
-                    return@withContext listOf(SecurityLookupResult(symbol = "SPY", name = "SPDR标普500 ETF", market = Market.US))
-                }
+            val isExplicitSpyLookup = cleanUpper == "SPY" ||
+                cleanUpper == "SPY.US" ||
+                cleanUpper.contains("SPDR标普500") ||
+                cleanUpper.contains("SPDRSP500") ||
+                cleanUpper.contains("SPDRS&P500")
+            if (isExplicitSpyLookup) {
+                return@withContext listOf(SecurityLookupResult(symbol = "SPY", name = "SPDR标普500 ETF", market = Market.US))
             }
             if (cleanUpper.contains("纳指100") || cleanUpper.contains("纳斯达克100") || cleanUpper.contains("QQQ")) {
                 if (cleanUpper.contains("ETF") || cleanUpper.contains("INVESCO") || cleanUpper.contains("纳指") || cleanUpper.contains("纳斯达克")) {

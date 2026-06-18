@@ -253,5 +253,118 @@ class AutoNameRepairAndroidTest {
         assertNotNull(repaired)
         assertEquals("TSLA", repaired!!.symbol)
     }
+
+    @Test
+    fun testSeedIfEmptyKeepsLongBridgeSpxsAsSpxs() = runBlocking {
+        val spxsTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "BUY",
+            platform = "LONGBRIDGE",
+            sourceChannel = "PDF_STATEMENT",
+            externalReference = "长桥-STMT-OS-SPXS-1",
+            market = "US",
+            symbol = "SPXS",
+            name = "3 倍做空标普 500 ETF",
+            tradeDate = "2026-03-03",
+            tradeTime = "22:30",
+            price = 10.0,
+            quantity = 1.0,
+            commission = 0.0,
+            tax = 0.0,
+            note = "电子结单自动导入 · SPXS | 3 倍做空标普 500 ETF",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "STOCK"
+        )
+        val id = db.ledgerDao().insertTransaction(spxsTx)
+
+        baseRepo.seedIfEmpty()
+
+        val repaired = db.ledgerDao().getAllTransactions().find { it.id == id }
+        assertNotNull(repaired)
+        assertEquals("SPXS", repaired!!.symbol)
+        assertEquals("3 倍做空标普 500 ETF", repaired.name)
+    }
+
+    @Test
+    fun testSeedIfEmptyRestoresPollutedLongBridgeSpxsRecords() = runBlocking {
+        val polluted = listOf(
+            "BUY" to "SPXS | 3 倍做空标普 500 ETF",
+            "DIVIDEND" to "SPXS.US Cash Dividend: 0.38267 USD per Share",
+            "TAX" to "SPXS.US Cash Dividend: 0.38267 USD per Share Withholding Tax/Dividend Fee"
+        ).mapIndexed { index, (type, notePreview) ->
+            com.recoder.stockledger.data.local.TransactionEntity(
+                tradeType = type,
+                platform = "LONGBRIDGE",
+                sourceChannel = "PDF_STATEMENT",
+                externalReference = "长桥-STMT-SPY-POLLUTED-$index",
+                market = "US",
+                symbol = "SPY",
+                name = "SPDR标普500 ETF",
+                tradeDate = "2026-04-01",
+                tradeTime = "09:00",
+                price = 1.0,
+                quantity = 1.0,
+                commission = 0.0,
+                tax = 0.0,
+                note = "电子结单自动导入 · $notePreview",
+                createdAt = System.currentTimeMillis() + index,
+                ledgerId = 1L,
+                assetType = "STOCK"
+            )
+        }
+        polluted.forEach { db.ledgerDao().insertTransaction(it) }
+
+        baseRepo.seedIfEmpty()
+
+        val all = db.ledgerDao().getAllTransactions()
+        assertEquals(3, all.size)
+        all.forEach { tx ->
+            assertEquals("SPXS", tx.symbol)
+            assertEquals("3 倍做空标普 500 ETF", tx.name)
+        }
+    }
+
+    @Test
+    fun testSeedIfEmptyStillNormalizesExplicitSpy() = runBlocking {
+        val spyTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "BUY",
+            platform = "LONGBRIDGE",
+            market = "US",
+            symbol = ".INX",
+            name = "SPDR 标普500 ETF",
+            tradeDate = "2026-03-03",
+            tradeTime = "22:30",
+            price = 10.0,
+            quantity = 1.0,
+            commission = 0.0,
+            tax = 0.0,
+            note = "",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "STOCK"
+        )
+        val id = db.ledgerDao().insertTransaction(spyTx)
+
+        baseRepo.seedIfEmpty()
+
+        val repaired = db.ledgerDao().getAllTransactions().find { it.id == id }
+        assertNotNull(repaired)
+        assertEquals("SPY", repaired!!.symbol)
+        assertEquals("SPDR标普500 ETF", repaired.name)
+    }
+
+    @Test
+    fun testSearchDoesNotMapLeveragedSpxsNameToSpy() = runBlocking {
+        val suggestions = baseRepo.searchSecurities("3 倍做空标普 500 ETF", Market.US)
+
+        assertTrue(suggestions.none { it.symbol == "SPY" })
+    }
+
+    @Test
+    fun testSearchStillMapsExplicitSpyName() = runBlocking {
+        val suggestions = baseRepo.searchSecurities("SPDR 标普500 ETF", Market.US)
+
+        assertTrue(suggestions.any { it.symbol == "SPY" && it.name == "SPDR标普500 ETF" })
+    }
 }
 
