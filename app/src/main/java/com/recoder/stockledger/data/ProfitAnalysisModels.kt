@@ -45,6 +45,10 @@ data class SecurityProfitAnalysisUiModel(
     val name: String,
     val market: Market,
     val dailyPoints: List<SecurityProfitPointUiModel> = emptyList(),
+    val totalProfitCny: Double = dailyPoints.lastOrNull()?.cumulativeProfitCny ?: 0.0,
+    val stockProfitCny: Double = totalProfitCny,
+    val derivativeProfitCny: Double = 0.0,
+    val returnRatePercent: Double = 0.0,
 )
 
 data class SecurityProfitPointUiModel(
@@ -73,7 +77,10 @@ fun ProfitAnalysisUiModel.scaled(ratio: Double): ProfitAnalysisUiModel {
                         dailyProfitCny = spt.dailyProfitCny * ratio,
                         cumulativeProfitCny = spt.cumulativeProfitCny * ratio
                     )
-                }
+                },
+                totalProfitCny = sa.totalProfitCny * ratio,
+                stockProfitCny = sa.stockProfitCny * ratio,
+                derivativeProfitCny = sa.derivativeProfitCny * ratio,
             )
         },
         netInflowCny = this.netInflowCny * ratio,

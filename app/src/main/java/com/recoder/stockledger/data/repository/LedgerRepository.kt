@@ -2307,6 +2307,10 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
                     )
                 }
             }
+            Log.d(
+                "YahooOption",
+                "Parsed Yahoo option quotes: requested=${yahooToOriginal.size}, parsed=${list.size}, symbols=${list.joinToString { it.symbol }}",
+            )
         } catch (e: Exception) {
             Log.e("YahooOption", "Failed to parse Yahoo quotes response: ${e.message}", e)
         }
@@ -2413,17 +2417,21 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
         val now = System.currentTimeMillis()
         val cacheExpiry = 12 * 60 * 60 * 1000L // 12 hours
 
-        requests.filter { it.assetType != "OPTION" }.flatMap { request ->
+        requests.flatMap { request ->
             val cacheKey = "${request.market.name}:${request.symbol}:$lookbackDays"
             val cachedVal = historicalClosesCache[cacheKey]
             if (cachedVal != null && now - cachedVal.first < cacheExpiry) {
                 cachedVal.second
             } else {
                 runCatching {
-                    val points = fetchHistoricalClosesForRequest(
-                        request = request,
-                        lookbackDays = lookbackDays,
-                    )
+                    val points = if (request.assetType == "OPTION" || isOptionSymbol(request.symbol)) {
+                        fetchHistoricalClosesForOptionRequest(request, lookbackDays)
+                    } else {
+                        fetchHistoricalClosesForRequest(
+                            request = request,
+                            lookbackDays = lookbackDays,
+                        )
+                    }
                     historicalClosesCache[cacheKey] = Pair(now, points)
                     points
                 }.onFailure {
@@ -2514,6 +2522,107 @@ class TencentSinaQuoteDataSource : QuoteDataSource {
                         market = request.market,
                         date = date,
                         closePrice = closePrice,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun fetchHistoricalClosesForOptionRequest(
+        request: QuoteRequest,
+        lookbackDays: Int,
+    ): List<HistoricalClosePoint> {
+        if (request.market != Market.US) {
+            Log.d(TAG, "Skip option history for non-US option: symbol=${request.symbol}, market=${request.market}")
+            return emptyList()
+        }
+        val yahooSymbol = toYahooOptionSymbol(request.symbol)
+        if (yahooSymbol == null) {
+            Log.w(TAG, "Yahoo option history skipped: cannot map symbol=${request.symbol}")
+            return emptyList()
+        }
+        Log.d(TAG, "Yahoo option history request: symbol=${request.symbol}, yahooSymbol=$yahooSymbol, lookbackDays=$lookbackDays")
+        val zone = ZoneId.systemDefault()
+        val period2 = LocalDate.now().plusDays(1).atStartOfDay(zone).toEpochSecond()
+        val period1 = LocalDate.now().minusDays(lookbackDays.toLong()).atStartOfDay(zone).toEpochSecond()
+        val cookie = cachedCookie ?: fetchYahooCookie()?.also { cachedCookie = it }
+        if (cookie == null) {
+            Log.w(TAG, "Yahoo option history skipped: cookie unavailable for ${request.symbol}")
+            return emptyList()
+        }
+        val crumb = cachedCrumb ?: fetchYahooCrumb(cookie)?.also { cachedCrumb = it } ?: ""
+        val crumbQuery = crumb.takeIf { it.isNotBlank() }?.let { "&crumb=$it" }.orEmpty()
+        val url = URL(
+            "https://query2.finance.yahoo.com/v8/finance/chart/$yahooSymbol" +
+                "?period1=$period1&period2=$period2&interval=1d&events=history$crumbQuery"
+        )
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+            connection.setRequestProperty("User-Agent", WEB_USER_AGENT)
+            connection.setRequestProperty("Cookie", cookie)
+            connection.setRequestProperty("Accept", "application/json")
+
+            val responseCode = connection.responseCode
+            Log.d(TAG, "Yahoo option history response: symbol=${request.symbol}, yahooSymbol=$yahooSymbol, code=$responseCode")
+            if (responseCode !in 200..299) {
+                val errorBody = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                Log.w(TAG, "Yahoo option history failed for ${request.symbol} ($responseCode): $errorBody")
+                return emptyList()
+            }
+
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            parseYahooOptionHistoricalCloses(body, request, zone).also { points ->
+                val firstDate = points.minOfOrNull { it.date }
+                val lastDate = points.maxOfOrNull { it.date }
+                Log.d(
+                    TAG,
+                    "Yahoo option history parsed: symbol=${request.symbol}, yahooSymbol=$yahooSymbol, points=${points.size}, first=$firstDate, last=$lastDate",
+                )
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "Yahoo option history failed for ${request.symbol}: ${error.message}")
+            emptyList()
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun parseYahooOptionHistoricalCloses(
+        responseJson: String,
+        request: QuoteRequest,
+        zone: ZoneId,
+    ): List<HistoricalClosePoint> {
+        val result = JSONObject(responseJson)
+            .optJSONObject("chart")
+            ?.optJSONArray("result")
+            ?.optJSONObject(0)
+            ?: return emptyList()
+        val timestamps = result.optJSONArray("timestamp") ?: return emptyList()
+        val closes = result
+            .optJSONObject("indicators")
+            ?.optJSONArray("quote")
+            ?.optJSONObject(0)
+            ?.optJSONArray("close")
+            ?: return emptyList()
+
+        return buildList {
+            val count = minOf(timestamps.length(), closes.length())
+            for (index in 0 until count) {
+                if (closes.isNull(index)) continue
+                val close = closes.optDouble(index).takeIf { !it.isNaN() } ?: continue
+                val date = Instant.ofEpochSecond(timestamps.optLong(index))
+                    .atZone(zone)
+                    .toLocalDate()
+                add(
+                    HistoricalClosePoint(
+                        symbol = request.symbol,
+                        market = request.market,
+                        date = date,
+                        closePrice = close,
                     ),
                 )
             }
