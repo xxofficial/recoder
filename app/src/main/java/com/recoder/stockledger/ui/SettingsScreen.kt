@@ -1,6 +1,5 @@
 package com.recoder.stockledger.ui
 
-import android.app.DatePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,7 +24,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
@@ -327,10 +325,7 @@ private fun ZhuoruiPromoDateField(
     value: String,
     onValueChange: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    val selectedDate = remember(value) {
-        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
-    }
+    var showDatePicker by remember { mutableStateOf(false) }
 
     Column(
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -340,17 +335,7 @@ private fun ZhuoruiPromoDateField(
             value = value,
             placeholder = "请选择日期",
             trailingIcon = Icons.Filled.DateRange,
-            onClick = {
-                DatePickerDialog(
-                    context,
-                    { _, year, month, dayOfMonth ->
-                        onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
-                    },
-                    selectedDate.year,
-                    selectedDate.monthValue - 1,
-                    selectedDate.dayOfMonth,
-                ).show()
-            },
+            onClick = { showDatePicker = true },
         )
         if (value.isNotBlank()) {
             Text(
@@ -360,6 +345,16 @@ private fun ZhuoruiPromoDateField(
                 modifier = Modifier.clickable { onValueChange("") },
             )
         }
+    }
+    if (showDatePicker) {
+        WheelDatePickerSheet(
+            title = label,
+            value = value,
+            onValueChange = onValueChange,
+            onDismiss = { showDatePicker = false },
+            allowClear = true,
+            maxDate = LocalDate.now(),
+        )
     }
 }
 

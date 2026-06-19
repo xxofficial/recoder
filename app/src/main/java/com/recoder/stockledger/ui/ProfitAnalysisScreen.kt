@@ -1,6 +1,5 @@
 package com.recoder.stockledger.ui
 
-import android.app.DatePickerDialog
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,7 +46,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -948,7 +946,7 @@ internal fun AnalysisStatCard(
 @Composable
 internal fun <T> SegmentRow(
     options: List<T>,
-    selected: T,
+    selected: T?,
     label: (T) -> String,
     onSelected: (T) -> Unit,
 ) {

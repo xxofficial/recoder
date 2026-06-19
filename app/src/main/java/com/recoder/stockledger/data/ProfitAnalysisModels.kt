@@ -46,8 +46,8 @@ data class SecurityProfitAnalysisUiModel(
     val market: Market,
     val dailyPoints: List<SecurityProfitPointUiModel> = emptyList(),
     val totalProfitCny: Double = dailyPoints.lastOrNull()?.cumulativeProfitCny ?: 0.0,
-    val stockProfitCny: Double = totalProfitCny,
-    val derivativeProfitCny: Double = 0.0,
+    val stockProfitCny: Double = dailyPoints.lastOrNull()?.cumulativeStockProfitCny ?: totalProfitCny,
+    val derivativeProfitCny: Double = dailyPoints.lastOrNull()?.cumulativeDerivativeProfitCny ?: 0.0,
     val returnRatePercent: Double = 0.0,
 )
 
@@ -56,6 +56,10 @@ data class SecurityProfitPointUiModel(
     val dailyProfitCny: Double,
     val cumulativeProfitCny: Double,
     val closePrice: Double? = null,
+    val dailyStockProfitCny: Double = dailyProfitCny,
+    val dailyDerivativeProfitCny: Double = 0.0,
+    val cumulativeStockProfitCny: Double = cumulativeProfitCny,
+    val cumulativeDerivativeProfitCny: Double = 0.0,
 )
 
 fun ProfitAnalysisUiModel.scaled(ratio: Double): ProfitAnalysisUiModel {
@@ -75,7 +79,11 @@ fun ProfitAnalysisUiModel.scaled(ratio: Double): ProfitAnalysisUiModel {
                 dailyPoints = sa.dailyPoints.map { spt ->
                     spt.copy(
                         dailyProfitCny = spt.dailyProfitCny * ratio,
-                        cumulativeProfitCny = spt.cumulativeProfitCny * ratio
+                        cumulativeProfitCny = spt.cumulativeProfitCny * ratio,
+                        dailyStockProfitCny = spt.dailyStockProfitCny * ratio,
+                        dailyDerivativeProfitCny = spt.dailyDerivativeProfitCny * ratio,
+                        cumulativeStockProfitCny = spt.cumulativeStockProfitCny * ratio,
+                        cumulativeDerivativeProfitCny = spt.cumulativeDerivativeProfitCny * ratio,
                     )
                 },
                 totalProfitCny = sa.totalProfitCny * ratio,

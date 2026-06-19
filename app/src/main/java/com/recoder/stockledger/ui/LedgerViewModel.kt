@@ -2691,6 +2691,7 @@ class LedgerViewModel(
         val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
         val previousSecurityProfit = mutableMapOf<String, Double>()
         val latestSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
+        val previousSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
         var previousCumulativeProfit = 0.0
         var previousTotalAssets = 0.0
         var cumulativeNav = 1.0
@@ -3075,6 +3076,7 @@ class LedgerViewModel(
                 latestSecurityBreakdowns[key] = securityBreakdown
                 val cumulativeSecurityProfit = realizedCny + unrealizedCny
                 val previousSecurityCumulative = previousSecurityProfit[key] ?: 0.0
+                val previousBreakdown = previousSecurityBreakdowns[key] ?: SecurityProfitBreakdown()
                 securitySeries.getValue(key) += SecurityProfitPointUiModel(
                     date = cursor,
                     dailyProfitCny = if (hasPreviousPoint) {
@@ -3084,8 +3086,21 @@ class LedgerViewModel(
                     },
                     cumulativeProfitCny = cumulativeSecurityProfit,
                     closePrice = latestCloseByPosition[key],
+                    dailyStockProfitCny = if (hasPreviousPoint) {
+                        securityBreakdown.stockProfitCny - previousBreakdown.stockProfitCny
+                    } else {
+                        securityBreakdown.stockProfitCny
+                    },
+                    dailyDerivativeProfitCny = if (hasPreviousPoint) {
+                        securityBreakdown.derivativeProfitCny - previousBreakdown.derivativeProfitCny
+                    } else {
+                        securityBreakdown.derivativeProfitCny
+                    },
+                    cumulativeStockProfitCny = securityBreakdown.stockProfitCny,
+                    cumulativeDerivativeProfitCny = securityBreakdown.derivativeProfitCny,
                 )
                 previousSecurityProfit[key] = cumulativeSecurityProfit
+                previousSecurityBreakdowns[key] = securityBreakdown
             }
             previousCumulativeProfit = cumulativeProfit
             previousTotalAssets = totalAssetsCny
@@ -3496,6 +3511,8 @@ class LedgerViewModel(
             securityMeta.forEach { (key, security) ->
                 val seriesMap = securityProfitByDate[key].orEmpty()
                 val priorCumulative = securitySeries[key]?.lastOrNull()?.cumulativeProfitCny ?: 0.0
+                val priorCumulativeStock = securitySeries[key]?.lastOrNull()?.cumulativeStockProfitCny ?: 0.0
+                val priorCumulativeDerivative = securitySeries[key]?.lastOrNull()?.cumulativeDerivativeProfitCny ?: 0.0
                 val securityDailyBreakdown = seriesMap[cursor] ?: SecurityProfitBreakdown()
                 val currentBreakdown = cumulativeSecurityBreakdowns
                     .getOrDefault(key, SecurityProfitBreakdown())
@@ -3511,6 +3528,10 @@ class LedgerViewModel(
                     dailyProfitCny = securityDailyBreakdown.totalProfitCny,
                     cumulativeProfitCny = priorCumulative + securityDailyBreakdown.totalProfitCny,
                     closePrice = null,
+                    dailyStockProfitCny = securityDailyBreakdown.stockProfitCny,
+                    dailyDerivativeProfitCny = securityDailyBreakdown.derivativeProfitCny,
+                    cumulativeStockProfitCny = priorCumulativeStock + securityDailyBreakdown.stockProfitCny,
+                    cumulativeDerivativeProfitCny = priorCumulativeDerivative + securityDailyBreakdown.derivativeProfitCny,
                 )
             }
             previousTotalAssets = totalAssetsCny

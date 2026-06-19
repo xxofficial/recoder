@@ -1,6 +1,5 @@
 package com.recoder.stockledger.ui
 
-import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
@@ -30,7 +29,6 @@ import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -56,7 +54,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -1419,23 +1416,14 @@ fun TransactionsRoute(
                     )
                 }
 
-                Row(
+                WheelDateRangePicker(
+                    startDate = draftStartDate,
+                    endDate = draftEndDate,
+                    onStartDateChange = { draftStartDate = it },
+                    onEndDateChange = { draftEndDate = it },
+                    maxDate = LocalDate.now(),
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    FilterDateField(
-                        label = "开始日期",
-                        value = draftStartDate,
-                        modifier = Modifier.weight(1f),
-                        onValueChange = { draftStartDate = it },
-                    )
-                    FilterDateField(
-                        label = "结束日期",
-                        value = draftEndDate,
-                        modifier = Modifier.weight(1f),
-                        onValueChange = { draftEndDate = it },
-                    )
-                }
+                )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2139,36 +2127,6 @@ internal fun <T> FilterChipWrapRow(
 }
 
 @Composable
-private fun FilterDateField(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    onValueChange: (String) -> Unit,
-) {
-    val context = LocalContext.current
-    val selectedDate = remember(value) {
-        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
-    }
-    InputFieldBlock(
-        label = label,
-        value = value,
-        modifier = modifier,
-        trailingIcon = Icons.Filled.DateRange,
-        onClick = {
-            DatePickerDialog(
-                context,
-                { _, year, month, dayOfMonth ->
-                    onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
-                },
-                selectedDate.year,
-                selectedDate.monthValue - 1,
-                selectedDate.dayOfMonth,
-            ).show()
-        },
-    )
-}
-
-@Composable
 private fun PlatformDropdownField(
     selectedPlatform: BrokerPlatform,
     availablePlatforms: List<BrokerPlatform>,
@@ -2222,10 +2180,7 @@ private fun ManualSyncDateField(
     modifier: Modifier = Modifier,
     onValueChange: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    val selectedDate = remember(value) {
-        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
-    }
+    var showDatePicker by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier,
@@ -2235,19 +2190,9 @@ private fun ManualSyncDateField(
             label = label,
             value = value,
             placeholder = "请选择",
-            trailingIcon = Icons.Filled.DateRange,
+            trailingIcon = Icons.Filled.KeyboardArrowDown,
             supportingText = "留空则按增量拉取",
-            onClick = {
-                DatePickerDialog(
-                    context,
-                    { _, year, month, dayOfMonth ->
-                        onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
-                    },
-                    selectedDate.year,
-                    selectedDate.monthValue - 1,
-                    selectedDate.dayOfMonth,
-                ).show()
-            },
+            onClick = { showDatePicker = true },
         )
         Text(
             text = if (value.isBlank()) "未限制开始日期" else "清空日期",
@@ -2256,9 +2201,19 @@ private fun ManualSyncDateField(
             modifier = Modifier.clickable { onValueChange("") },
         )
     }
+    if (showDatePicker) {
+        WheelDatePickerSheet(
+            title = label,
+            value = value,
+            onValueChange = onValueChange,
+            onDismiss = { showDatePicker = false },
+            allowClear = true,
+            maxDate = LocalDate.now(),
+        )
+    }
 }
 
-private fun normalizeDateRange(
+internal fun normalizeDateRange(
     startDate: String,
     endDate: String,
 ): Pair<String?, String?> {
@@ -2603,6 +2558,7 @@ fun PlatformTransferDialog(
 
                 val context = androidx.compose.ui.platform.LocalContext.current
                 val calendar = remember { java.util.Calendar.getInstance() }
+                var showTransferDatePicker by remember { mutableStateOf(false) }
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2617,24 +2573,19 @@ fun PlatformTransferDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(SurfaceSecondary, RoundedCornerShape(8.dp))
-                                .clickable {
-                                    val dateParts = tradeDate.split("-").mapNotNull { it.toIntOrNull() }
-                                    val y = dateParts.getOrNull(0) ?: calendar.get(java.util.Calendar.YEAR)
-                                    val m = dateParts.getOrNull(1)?.minus(1) ?: calendar.get(java.util.Calendar.MONTH)
-                                    val d = dateParts.getOrNull(2) ?: calendar.get(java.util.Calendar.DAY_OF_MONTH)
-                                    DatePickerDialog(
-                                        context,
-                                        { _, year, month, dayOfMonth ->
-                                            tradeDate = java.time.LocalDate.of(year, month + 1, dayOfMonth).toString()
-                                        },
-                                        y,
-                                        m,
-                                        d
-                                    ).show()
-                                }
+                                .clickable { showTransferDatePicker = true }
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                         ) {
                             Text(tradeDate, color = ForegroundPrimary, fontSize = 14.sp)
+                        }
+                        if (showTransferDatePicker) {
+                            WheelDatePickerSheet(
+                                title = "转移日期",
+                                value = tradeDate,
+                                onValueChange = { tradeDate = it },
+                                onDismiss = { showTransferDatePicker = false },
+                                maxDate = LocalDate.now(),
+                            )
                         }
                     }
                     

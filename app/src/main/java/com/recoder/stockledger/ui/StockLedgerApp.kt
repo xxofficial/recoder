@@ -68,8 +68,35 @@ import com.recoder.stockledger.ui.theme.ForegroundSecondary
 import com.recoder.stockledger.ui.theme.SurfaceSecondary
 import com.recoder.stockledger.data.local.LedgerEntity
 import kotlinx.coroutines.launch
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+
+internal fun encodeStockDetailNavArg(value: String): String =
+    URLEncoder.encode(value, Charsets.UTF_8.name())
+
+internal fun decodeStockDetailNavArg(value: String): String =
+    URLDecoder.decode(value, Charsets.UTF_8.name())
+
+internal fun buildStockDetailRoute(
+    baseRoute: String,
+    symbol: String,
+    market: String,
+    range: AdvancedProfitRange? = null,
+    customStart: String = "",
+    customEnd: String = "",
+): String {
+    val base = "$baseRoute/${encodeStockDetailNavArg(symbol)}/${encodeStockDetailNavArg(market)}"
+    if (range == null) return base
+    return buildString {
+        append(base)
+        append("?range=${range.name}")
+        if (customStart.isNotBlank()) append("&customStart=${encodeStockDetailNavArg(customStart)}")
+        if (customEnd.isNotBlank()) append("&customEnd=${encodeStockDetailNavArg(customEnd)}")
+    }
+}
 
 private object Routes {
     const val Holdings = "holdings"
@@ -79,13 +106,26 @@ private object Routes {
     const val TradeEntry = "trade-entry"
     const val Settings = "settings"
     const val FullRanking = "full-ranking"
+    const val ProfitCalendarDetail = "profit-calendar-detail"
     const val StockDetail = "stock-detail"
     const val TradeTypeArg = "tradeType"
     const val SymbolArg = "symbol"
     const val MarketArg = "market"
+    const val CalendarModeArg = "calendarMode"
+    const val CalendarDateArg = "calendarDate"
+    const val DetailRangeArg = "range"
+    const val DetailCustomStartArg = "customStart"
+    const val DetailCustomEndArg = "customEnd"
 
     fun tradeEntry(type: TradeType): String = "$TradeEntry/${type.name}"
-    fun stockDetail(symbol: String, market: String): String = "$StockDetail/$symbol/$market"
+    fun stockDetail(
+        symbol: String,
+        market: String,
+        range: AdvancedProfitRange? = null,
+        customStart: String = "",
+        customEnd: String = "",
+    ): String = buildStockDetailRoute(StockDetail, symbol, market, range, customStart, customEnd)
+    fun profitCalendarDetail(mode: String, date: String): String = "$ProfitCalendarDetail/$mode/$date"
 }
 
 @Composable
@@ -104,6 +144,7 @@ fun StockLedgerApp(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val drawerGesturesEnabled = currentRoute != Routes.FullRanking &&
         currentRoute?.startsWith("${Routes.StockDetail}/") != true &&
+        currentRoute?.startsWith("${Routes.ProfitCalendarDetail}/") != true &&
         drawerState.isOpen
     val coroutineScope = rememberCoroutineScope()
     val activeLedger = uiState.ledgers.firstOrNull { it.id == uiState.selectedLedgerId }
@@ -251,10 +292,21 @@ fun StockLedgerApp(
                             }
                         },
                         onSecurityClick = { symbol, market ->
-                            navController.navigate(Routes.stockDetail(symbol, market))
+                            navController.navigate(
+                                Routes.stockDetail(
+                                    symbol = symbol,
+                                    market = market,
+                                    range = analysisRange,
+                                    customStart = analysisCustomStart,
+                                    customEnd = analysisCustomEnd,
+                                )
+                            )
                         },
                         onViewFullRanking = {
                             navController.navigate(Routes.FullRanking)
+                        },
+                        onCalendarDetailClick = { mode, date ->
+                            navController.navigate(Routes.profitCalendarDetail(mode, date.toString()))
                         },
                     )
                 }
@@ -531,26 +583,78 @@ fun StockLedgerApp(
                         onCustomEndChange = { analysisCustomEnd = it },
                         onBack = { navController.popBackStack() },
                         onSecurityClick = { symbol, market ->
-                            navController.navigate(Routes.stockDetail(symbol, market))
+                            navController.navigate(
+                                Routes.stockDetail(
+                                    symbol = symbol,
+                                    market = market,
+                                    range = analysisRange,
+                                    customStart = analysisCustomStart,
+                                    customEnd = analysisCustomEnd,
+                                )
+                            )
                         },
                     )
                 }
 
                 composable(
-                    route = "${Routes.StockDetail}/{${Routes.SymbolArg}}/{${Routes.MarketArg}}",
+                    route = "${Routes.ProfitCalendarDetail}/{${Routes.CalendarModeArg}}/{${Routes.CalendarDateArg}}",
+                    arguments = listOf(
+                        navArgument(Routes.CalendarModeArg) { type = NavType.StringType },
+                        navArgument(Routes.CalendarDateArg) { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val mode = backStackEntry.arguments?.getString(Routes.CalendarModeArg).orEmpty()
+                    val dateText = backStackEntry.arguments?.getString(Routes.CalendarDateArg).orEmpty()
+                    val initialDate = runCatching { LocalDate.parse(dateText) }.getOrNull() ?: uiState.profitAnalysis.latestDate
+                    ProfitCalendarDetailRoute(
+                        analysis = uiState.profitAnalysis,
+                        displayCurrency = uiState.displayCurrency,
+                        exchangeRates = uiState.exchangeRates,
+                        initialMode = mode,
+                        initialDate = initialDate,
+                        onDisplayCurrencySelected = ledgerViewModel::selectDisplayCurrency,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+
+                composable(
+                    route = "${Routes.StockDetail}/{${Routes.SymbolArg}}/{${Routes.MarketArg}}?${Routes.DetailRangeArg}={${Routes.DetailRangeArg}}&${Routes.DetailCustomStartArg}={${Routes.DetailCustomStartArg}}&${Routes.DetailCustomEndArg}={${Routes.DetailCustomEndArg}}",
                     arguments = listOf(
                         navArgument(Routes.SymbolArg) { type = NavType.StringType },
                         navArgument(Routes.MarketArg) { type = NavType.StringType },
+                        navArgument(Routes.DetailRangeArg) {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        },
+                        navArgument(Routes.DetailCustomStartArg) {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        },
+                        navArgument(Routes.DetailCustomEndArg) {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        },
                     ),
                 ) { backStackEntry ->
-                    val symbol = backStackEntry.arguments?.getString(Routes.SymbolArg).orEmpty()
-                    val market = backStackEntry.arguments?.getString(Routes.MarketArg).orEmpty()
+                    val symbol = decodeStockDetailNavArg(backStackEntry.arguments?.getString(Routes.SymbolArg).orEmpty())
+                    val market = decodeStockDetailNavArg(backStackEntry.arguments?.getString(Routes.MarketArg).orEmpty())
+                    val initialRange = backStackEntry.arguments
+                        ?.getString(Routes.DetailRangeArg)
+                        ?.let { runCatching { AdvancedProfitRange.valueOf(it) }.getOrNull() }
+                    val initialCustomStart = decodeStockDetailNavArg(backStackEntry.arguments?.getString(Routes.DetailCustomStartArg).orEmpty())
+                    val initialCustomEnd = decodeStockDetailNavArg(backStackEntry.arguments?.getString(Routes.DetailCustomEndArg).orEmpty())
                     StockDetailRoute(
                         symbol = symbol,
                         marketLabel = market,
                         analysis = uiState.profitAnalysis,
                         displayCurrency = uiState.displayCurrency,
                         quotes = uiState.quotes,
+                        initialRange = initialRange,
+                        initialCustomStart = initialCustomStart,
+                        initialCustomEnd = initialCustomEnd,
                         onBack = { navController.popBackStack() },
                     )
                 }
