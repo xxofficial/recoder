@@ -1,6 +1,5 @@
 package com.recoder.stockledger.ui
 
-import android.app.DatePickerDialog
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,7 +27,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -50,7 +48,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -149,6 +146,8 @@ private data class AdvancedSecurityRangeStats(
     val name: String,
     val marketLabel: String,
     val totalProfitCny: Double,
+    val stockProfitCny: Double,
+    val derivativeProfitCny: Double,
     val averageDailyProfitCny: Double,
     val bestDayProfitCny: Double,
     val winRate: Double,
@@ -187,6 +186,8 @@ internal data class ProfitCalendarDetailSecurityRow(
     val name: String,
     val marketLabel: String,
     val amountCny: Double,
+    val stockProfitCny: Double,
+    val derivativeProfitCny: Double,
     val returnPercent: Double,
 )
 
@@ -214,6 +215,7 @@ fun AdvancedProfitAnalysisRoute(
     var calendarMode by rememberSaveable { mutableStateOf(AdvancedCalendarMode.DAY) }
     var valueUnit by rememberSaveable { mutableStateOf(AdvancedValueUnit.AMOUNT) }
     var pageOffset by rememberSaveable { mutableIntStateOf(0) }
+    var customRangeEditorVisible by rememberSaveable { mutableStateOf(false) }
 
     val allPoints = remember(analysis) {
         analysis.dailyPoints
@@ -327,29 +329,36 @@ fun AdvancedProfitAnalysisRoute(
             ) {
                 SegmentRow(
                     options = AdvancedProfitRange.entries,
-                    selected = selectedRange,
+                    selected = if (selectedRange == AdvancedProfitRange.CUSTOM && !customRangeEditorVisible) {
+                        null
+                    } else {
+                        selectedRange
+                    },
                     label = { it.label },
-                    onSelected = onSelectedRangeChange,
+                    onSelected = { range ->
+                        if (range == AdvancedProfitRange.CUSTOM) {
+                            customRangeEditorVisible = true
+                        } else {
+                            customRangeEditorVisible = false
+                        }
+                        onSelectedRangeChange(range)
+                    },
                 )
 
-                if (selectedRange == AdvancedProfitRange.CUSTOM) {
-                    Row(
+                if (selectedRange == AdvancedProfitRange.CUSTOM && customRangeEditorVisible) {
+                    AdvancedCustomDateRangeEditor(
+                        customStart = customStart,
+                        customEnd = customEnd,
+                        minDate = firstDate,
+                        maxDate = analysis.latestDate,
+                        onApply = { start, end ->
+                            onCustomStartChange(start)
+                            onCustomEndChange(end)
+                            customRangeEditorVisible = false
+                        },
+                        fallbackDate = analysis.latestDate,
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        AdvancedDateField(
-                            label = "开始日期",
-                            value = customStart,
-                            modifier = Modifier.weight(1f),
-                            onValueChange = onCustomStartChange,
-                        )
-                        AdvancedDateField(
-                            label = "结束日期",
-                            value = customEnd,
-                            modifier = Modifier.weight(1f),
-                            onValueChange = onCustomEndChange,
-                        )
-                    }
+                    )
                 }
             }
 
@@ -1440,36 +1449,6 @@ private fun AdvancedBucketCard(
 }
 
 @Composable
-private fun AdvancedDateField(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    onValueChange: (String) -> Unit,
-) {
-    val context = LocalContext.current
-    val selectedDate = remember(value) {
-        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
-    }
-    InputFieldBlock(
-        label = label,
-        value = value,
-        trailingIcon = Icons.Filled.DateRange,
-        modifier = modifier,
-        onClick = {
-            DatePickerDialog(
-                context,
-                { _, year, month, dayOfMonth ->
-                    onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
-                },
-                selectedDate.year,
-                selectedDate.monthValue - 1,
-                selectedDate.dayOfMonth,
-            ).show()
-        },
-    )
-}
-
-@Composable
 fun ProfitCalendarDetailRoute(
     analysis: ProfitAnalysisUiModel,
     displayCurrency: DisplayCurrency,
@@ -1478,7 +1457,6 @@ fun ProfitCalendarDetailRoute(
     initialDate: LocalDate,
     onDisplayCurrencySelected: (DisplayCurrency) -> Unit,
     onBack: () -> Unit,
-    onSecurityClick: (String, String) -> Unit,
 ) {
     val allPoints = remember(analysis) {
         analysis.dailyPoints.sortedBy { it.date }.ifEmpty {
@@ -1642,7 +1620,6 @@ fun ProfitCalendarDetailRoute(
                     exchangeRates = exchangeRates,
                     sortAscending = sortAscending,
                     onSortClick = { sortAscending = !sortAscending },
-                    onSecurityClick = onSecurityClick,
                 )
             }
         }
@@ -2095,8 +2072,8 @@ private fun ProfitCalendarDetailSecurityTable(
     exchangeRates: ExchangeRates,
     sortAscending: Boolean,
     onSortClick: () -> Unit,
-    onSecurityClick: (String, String) -> Unit,
 ) {
+    val amountScrollState = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2113,18 +2090,27 @@ private fun ProfitCalendarDetailSecurityTable(
         )
 
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("名称 / 代码", color = ForegroundMuted, fontSize = 13.sp, modifier = Modifier.weight(1.6f))
-            Text("币种", color = ForegroundMuted, fontSize = 13.sp, modifier = Modifier.weight(0.7f))
-            Text(
-                text = "盈亏金额 ${if (sortAscending) "↑" else "↓"}",
-                color = ForegroundMuted,
-                fontSize = 13.sp,
-                textAlign = TextAlign.End,
+            Text("名称 / 代码", color = ForegroundMuted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Row(
                 modifier = Modifier
-                    .weight(1.1f)
-                    .clickable(onClick = onSortClick),
-            )
-            Text("收益率", color = ForegroundMuted, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.weight(0.8f))
+                    .weight(1.65f)
+                    .horizontalScroll(amountScrollState),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "总盈亏 ${if (sortAscending) "↑" else "↓"}",
+                    color = ForegroundMuted,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier
+                        .width(88.dp)
+                        .clickable(onClick = onSortClick),
+                )
+                Text("正股盈亏", color = ForegroundMuted, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.width(88.dp))
+                Text("衍生物盈亏", color = ForegroundMuted, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.width(96.dp))
+                Text("收益率", color = ForegroundMuted, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.width(72.dp))
+            }
         }
 
         if (rows.isEmpty()) {
@@ -2140,11 +2126,10 @@ private fun ProfitCalendarDetailSecurityTable(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { onSecurityClick(row.symbol, row.marketLabel) }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1.6f)) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = row.name.ifBlank { row.symbol },
                             color = ForegroundPrimary,
@@ -2161,26 +2146,48 @@ private fun ProfitCalendarDetailSecurityTable(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Text(row.marketLabel, color = ForegroundMuted, fontSize = 13.sp, modifier = Modifier.weight(0.7f))
-                    Text(
-                        text = advancedFormatSignedAmount(row.amountCny, displayCurrency, exchangeRates),
-                        color = advancedTrendColor(row.amountCny),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.weight(1.1f),
-                    )
-                    Text(
-                        text = advancedFormatSignedPercent(row.returnPercent),
-                        color = advancedTrendColor(row.returnPercent),
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.weight(0.8f),
-                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1.65f)
+                            .horizontalScroll(amountScrollState),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ProfitCalendarDetailAmountText(row.amountCny, displayCurrency, exchangeRates, bold = true, modifier = Modifier.width(88.dp))
+                        ProfitCalendarDetailAmountText(row.stockProfitCny, displayCurrency, exchangeRates, modifier = Modifier.width(88.dp))
+                        ProfitCalendarDetailAmountText(row.derivativeProfitCny, displayCurrency, exchangeRates, modifier = Modifier.width(96.dp))
+                        Text(
+                            text = advancedFormatSignedPercent(row.returnPercent),
+                            color = advancedTrendColor(row.returnPercent),
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.width(72.dp),
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ProfitCalendarDetailAmountText(
+    valueCny: Double,
+    displayCurrency: DisplayCurrency,
+    exchangeRates: ExchangeRates,
+    modifier: Modifier = Modifier,
+    bold: Boolean = false,
+) {
+    Text(
+        text = advancedFormatSignedAmount(valueCny, displayCurrency, exchangeRates),
+        color = advancedTrendColor(valueCny),
+        fontSize = 14.sp,
+        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+        textAlign = TextAlign.End,
+        maxLines = 1,
+        softWrap = false,
+        modifier = modifier,
+    )
 }
 
 internal fun parseProfitCalendarDetailMode(value: String): ProfitCalendarDetailMode {
@@ -2273,6 +2280,8 @@ internal fun buildProfitCalendarDetailSecurityRows(
                 name = stats.name,
                 marketLabel = stats.marketLabel,
                 amountCny = stats.totalProfitCny,
+                stockProfitCny = stats.stockProfitCny,
+                derivativeProfitCny = stats.derivativeProfitCny,
                 returnPercent = advancedAmountToPercent(stats.totalProfitCny, netInflowCny),
             )
         }
@@ -2378,14 +2387,26 @@ private fun buildAdvancedSecurityRangeStats(
     val priorCumulative = analysis.dailyPoints
         .lastOrNull { it.date.isBefore(rangeStart) }
         ?.cumulativeProfitCny ?: 0.0
+    val priorStockCumulative = analysis.dailyPoints
+        .lastOrNull { it.date.isBefore(rangeStart) }
+        ?.cumulativeStockProfitCny ?: 0.0
+    val priorDerivativeCumulative = analysis.dailyPoints
+        .lastOrNull { it.date.isBefore(rangeStart) }
+        ?.cumulativeDerivativeProfitCny ?: 0.0
     val rebased = points.map { point ->
         SecurityProfitPointUiModel(
             date = point.date,
             dailyProfitCny = point.dailyProfitCny,
             cumulativeProfitCny = point.cumulativeProfitCny - priorCumulative,
+            dailyStockProfitCny = point.dailyStockProfitCny,
+            dailyDerivativeProfitCny = point.dailyDerivativeProfitCny,
+            cumulativeStockProfitCny = point.cumulativeStockProfitCny - priorStockCumulative,
+            cumulativeDerivativeProfitCny = point.cumulativeDerivativeProfitCny - priorDerivativeCumulative,
         )
     }
     val totalProfitCny = rebased.last().cumulativeProfitCny
+    val stockProfitCny = rebased.last().cumulativeStockProfitCny
+    val derivativeProfitCny = rebased.last().cumulativeDerivativeProfitCny
     val positiveDays = rebased.count { it.dailyProfitCny > 0 }
     val activeDays = rebased.count { it.dailyProfitCny != 0.0 }
     return AdvancedSecurityRangeStats(
@@ -2394,6 +2415,8 @@ private fun buildAdvancedSecurityRangeStats(
         name = analysis.name,
         marketLabel = analysis.market.label,
         totalProfitCny = totalProfitCny,
+        stockProfitCny = stockProfitCny,
+        derivativeProfitCny = derivativeProfitCny,
         averageDailyProfitCny = totalProfitCny / rebased.size.coerceAtLeast(1),
         bestDayProfitCny = rebased.maxOfOrNull { it.dailyProfitCny } ?: 0.0,
         winRate = positiveDays.toDouble() / max(activeDays, 1).toDouble(),
@@ -2599,6 +2622,87 @@ private fun advancedFormatCompactValue(
     }
 }
 
+@Composable
+private fun AdvancedCustomDateRangeEditor(
+    customStart: String,
+    customEnd: String,
+    minDate: LocalDate,
+    maxDate: LocalDate,
+    onApply: (String, String) -> Unit,
+    fallbackDate: LocalDate,
+    modifier: Modifier = Modifier,
+) {
+    var draftStart by rememberSaveable { mutableStateOf(customStart) }
+    var draftEnd by rememberSaveable { mutableStateOf(customEnd) }
+
+    LaunchedEffect(customStart) {
+        draftStart = customStart
+    }
+    LaunchedEffect(customEnd) {
+        draftEnd = customEnd
+    }
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        WheelDateRangePicker(
+            startDate = draftStart,
+            endDate = draftEnd,
+            onStartDateChange = { draftStart = it },
+            onEndDateChange = { draftEnd = it },
+            fallbackDate = fallbackDate,
+            minDate = minDate,
+            maxDate = maxDate,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(SurfaceInverse)
+                    .clickable {
+                        val (start, end) = normalizeAdvancedCustomDateRange(
+                            startDate = draftStart,
+                            endDate = draftEnd,
+                            minDate = minDate,
+                            maxDate = maxDate,
+                        )
+                        draftStart = start
+                        draftEnd = end
+                        onApply(start, end)
+                    }
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = "确定",
+                    color = BackgroundPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+internal fun normalizeAdvancedCustomDateRange(
+    startDate: String,
+    endDate: String,
+    minDate: LocalDate,
+    maxDate: LocalDate,
+): Pair<String, String> {
+    val startBound = if (minDate <= maxDate) minDate else maxDate
+    val endBound = if (minDate <= maxDate) maxDate else minDate
+    val start = (parseWheelDateOrNull(startDate) ?: startBound).coerceIn(startBound, endBound)
+    val end = (parseWheelDateOrNull(endDate) ?: endBound).coerceIn(startBound, endBound)
+    val orderedStart = if (start <= end) start else end
+    val orderedEnd = if (start <= end) end else start
+    return orderedStart.toString() to orderedEnd.toString()
+}
+
 // ── Full Ranking Page ──────────────────────────────────────────────
 
 @Composable
@@ -2617,6 +2721,7 @@ fun FullRankingRoute(
 ) {
     var showProfit by rememberSaveable { mutableStateOf(true) }
     var sortAscending by rememberSaveable { mutableStateOf(false) }
+    var customRangeEditorVisible by rememberSaveable { mutableStateOf(false) }
 
     val allPoints = remember(analysis) {
         analysis.dailyPoints.sortedBy { it.date }.ifEmpty {
@@ -2674,28 +2779,35 @@ fun FullRankingRoute(
             ) {
                 SegmentRow(
                     options = AdvancedProfitRange.entries,
-                    selected = selectedRange,
+                    selected = if (selectedRange == AdvancedProfitRange.CUSTOM && !customRangeEditorVisible) {
+                        null
+                    } else {
+                        selectedRange
+                    },
                     label = { it.label },
-                    onSelected = onSelectedRangeChange,
+                    onSelected = { range ->
+                        if (range == AdvancedProfitRange.CUSTOM) {
+                            customRangeEditorVisible = true
+                        } else {
+                            customRangeEditorVisible = false
+                        }
+                        onSelectedRangeChange(range)
+                    },
                 )
-                if (selectedRange == AdvancedProfitRange.CUSTOM) {
-                    Row(
+                if (selectedRange == AdvancedProfitRange.CUSTOM && customRangeEditorVisible) {
+                    AdvancedCustomDateRangeEditor(
+                        customStart = customStart,
+                        customEnd = customEnd,
+                        minDate = firstDate,
+                        maxDate = analysis.latestDate,
+                        onApply = { start, end ->
+                            onCustomStartChange(start)
+                            onCustomEndChange(end)
+                            customRangeEditorVisible = false
+                        },
+                        fallbackDate = analysis.latestDate,
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        AdvancedDateField(
-                            label = "开始日期",
-                            value = customStart,
-                            modifier = Modifier.weight(1f),
-                            onValueChange = onCustomStartChange,
-                        )
-                        AdvancedDateField(
-                            label = "结束日期",
-                            value = customEnd,
-                            modifier = Modifier.weight(1f),
-                            onValueChange = onCustomEndChange,
-                        )
-                    }
+                    )
                 }
 
                 // Tab chips + sort toggle

@@ -1,6 +1,5 @@
 package com.recoder.stockledger.ui
 
-import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -1291,27 +1290,23 @@ fun TradeEntryDateField(
     modifier: Modifier = Modifier,
     label: String = "交易日期",
 ) {
-    val context = LocalContext.current
-    val selectedDate = remember(value) {
-        runCatching { LocalDate.parse(value) }.getOrNull() ?: LocalDate.now()
-    }
+    var showDatePicker by remember { mutableStateOf(false) }
     InputFieldBlock(
         label = label,
         value = value,
         modifier = modifier,
         trailingIcon = Icons.Filled.DateRange,
-        onClick = {
-            DatePickerDialog(
-                context,
-                { _, year, month, dayOfMonth ->
-                    onValueChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
-                },
-                selectedDate.year,
-                selectedDate.monthValue - 1,
-                selectedDate.dayOfMonth,
-            ).show()
-        },
+        onClick = { showDatePicker = true },
     )
+    if (showDatePicker) {
+        WheelDatePickerSheet(
+            title = label,
+            value = value,
+            onValueChange = onValueChange,
+            onDismiss = { showDatePicker = false },
+            maxDate = LocalDate.now(),
+        )
+    }
 }
   
 @Composable

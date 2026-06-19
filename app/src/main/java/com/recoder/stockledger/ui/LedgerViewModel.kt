@@ -99,6 +99,22 @@ private data class PositionComputation(
     val underlyingSymbol: String? = null,
 )
 
+private data class SecurityProfitBreakdown(
+    val stockProfitCny: Double = 0.0,
+    val derivativeProfitCny: Double = 0.0,
+) {
+    val totalProfitCny: Double
+        get() = stockProfitCny + derivativeProfitCny
+
+    fun plus(amountCny: Double, isDerivative: Boolean): SecurityProfitBreakdown {
+        return if (isDerivative) {
+            copy(derivativeProfitCny = derivativeProfitCny + amountCny)
+        } else {
+            copy(stockProfitCny = stockProfitCny + amountCny)
+        }
+    }
+}
+
 private data class DailyTradeStats(
     val securityTradeCount: Int = 0,
     val buyCount: Int = 0,
@@ -2674,6 +2690,7 @@ class LedgerViewModel(
         val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
         val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
         val previousSecurityProfit = mutableMapOf<String, Double>()
+        val previousSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
         var previousCumulativeProfit = 0.0
         var previousTotalAssets = 0.0
         var cumulativeNav = 1.0
@@ -3031,21 +3048,31 @@ class LedgerViewModel(
             securityMeta.forEach { (key, security) ->
                 val associatedPositions = positions.values.filter { position ->
                     position.market == security.market && (
-                        position.symbol == security.symbol || (position.assetType == "OPTION" && position.underlyingSymbol == security.symbol)
+                        position.symbol == security.symbol || (isOptionAsset(position.assetType, position.symbol) && position.underlyingSymbol == security.symbol)
                     )
                 }
                 var realizedCny = 0.0
                 var unrealizedCny = 0.0
+                var securityBreakdown = SecurityProfitBreakdown()
                 associatedPositions.forEach { position ->
                     val posKey = positionKey(position.symbol, position.market)
-                    realizedCny += convertToCny(position.realizedProfit, position.market, exchangeRates)
+                    val positionRealizedCny = convertToCny(position.realizedProfit, position.market, exchangeRates)
+                    realizedCny += positionRealizedCny
+                    val mult = optionMultiplier(position.assetType, position.symbol)
+                    var positionUnrealizedCny = 0.0
                     if (position.quantity != 0.0) {
                         val closePrice = latestCloseByPosition[posKey] ?: position.averageCost
-                        unrealizedCny += convertToCny((closePrice - position.averageCost) * position.quantity, position.market, exchangeRates)
+                        positionUnrealizedCny = convertToCny((closePrice - position.averageCost) * position.quantity * mult, position.market, exchangeRates)
+                        unrealizedCny += positionUnrealizedCny
                     }
+                    securityBreakdown = securityBreakdown.plus(
+                        amountCny = positionRealizedCny + positionUnrealizedCny,
+                        isDerivative = isOptionAsset(position.assetType, position.symbol),
+                    )
                 }
                 val cumulativeSecurityProfit = realizedCny + unrealizedCny
                 val previousSecurityCumulative = previousSecurityProfit[key] ?: 0.0
+                val previousBreakdown = previousSecurityBreakdowns[key] ?: SecurityProfitBreakdown()
                 securitySeries.getValue(key) += SecurityProfitPointUiModel(
                     date = cursor,
                     dailyProfitCny = if (hasPreviousPoint) {
@@ -3055,8 +3082,21 @@ class LedgerViewModel(
                     },
                     cumulativeProfitCny = cumulativeSecurityProfit,
                     closePrice = latestCloseByPosition[key],
+                    dailyStockProfitCny = if (hasPreviousPoint) {
+                        securityBreakdown.stockProfitCny - previousBreakdown.stockProfitCny
+                    } else {
+                        securityBreakdown.stockProfitCny
+                    },
+                    dailyDerivativeProfitCny = if (hasPreviousPoint) {
+                        securityBreakdown.derivativeProfitCny - previousBreakdown.derivativeProfitCny
+                    } else {
+                        securityBreakdown.derivativeProfitCny
+                    },
+                    cumulativeStockProfitCny = securityBreakdown.stockProfitCny,
+                    cumulativeDerivativeProfitCny = securityBreakdown.derivativeProfitCny,
                 )
                 previousSecurityProfit[key] = cumulativeSecurityProfit
+                previousSecurityBreakdowns[key] = securityBreakdown
             }
             previousCumulativeProfit = cumulativeProfit
             previousTotalAssets = totalAssetsCny
@@ -3078,6 +3118,9 @@ class LedgerViewModel(
                     name = security.name,
                     market = security.market,
                     dailyPoints = securitySeries[key].orEmpty(),
+                    totalProfitCny = securitySeries[key].orEmpty().lastOrNull()?.cumulativeProfitCny ?: 0.0,
+                    stockProfitCny = securitySeries[key].orEmpty().lastOrNull()?.cumulativeStockProfitCny ?: 0.0,
+                    derivativeProfitCny = securitySeries[key].orEmpty().lastOrNull()?.cumulativeDerivativeProfitCny ?: 0.0,
                 )
             },
             netInflowCny = totalDepositCny - totalWithdrawCny,
@@ -3102,7 +3145,7 @@ class LedgerViewModel(
         val positions = linkedMapOf<String, PositionComputation>()
         val dailyProfitByDate = linkedMapOf<LocalDate, Double>()
         val netFlowByDate = linkedMapOf<LocalDate, Double>()
-        val securityProfitByDate = mutableMapOf<String, MutableMap<LocalDate, Double>>()
+        val securityProfitByDate = mutableMapOf<String, MutableMap<LocalDate, SecurityProfitBreakdown>>()
         val activityDates = linkedSetOf<LocalDate>()
         val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
@@ -3110,7 +3153,8 @@ class LedgerViewModel(
         ordered.forEach { transaction ->
             val market = Market.fromString(transaction.market) ?: return@forEach
             val key = positionKey(transaction.symbol, market)
-            val resolvedSymbol = if (transaction.assetType == "OPTION") {
+            val isDerivativeTransaction = isOptionAsset(transaction.assetType, transaction.symbol)
+            val resolvedSymbol = if (isDerivativeTransaction) {
                 transaction.underlyingSymbol?.takeIf { it.isNotBlank() } ?: transaction.symbol
             } else {
                 transaction.symbol
@@ -3147,8 +3191,7 @@ class LedgerViewModel(
                     val coverProfitCny = convertToCny(coverProfit, market, exchangeRates)
                     
                     dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
-                    val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
-                    securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + coverProfitCny
+                    addSecurityProfit(securityProfitByDate, effectiveKey, date, coverProfitCny, isDerivativeTransaction)
                     
                     positions[key] = current.copy(
                         quantity = nextQuantity,
@@ -3182,8 +3225,7 @@ class LedgerViewModel(
                         val coverFees = transaction.commission + transaction.tax
                         val coverProfitCny = convertToCny(coverProfit - coverFees, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
-                        val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
-                        securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + coverProfitCny
+                        addSecurityProfit(securityProfitByDate, effectiveKey, date, coverProfitCny, isDerivativeTransaction)
                         val remainingBuyQty = transaction.quantity - coverQuantity
                         if (remainingBuyQty > 0) {
                             positions[key] = PositionComputation(
@@ -3244,8 +3286,7 @@ class LedgerViewModel(
                         val closeProfit = closeProceeds - removedCost
                         val closeProfitCny = convertToCny(closeProfit, market, exchangeRates)
                         dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + closeProfitCny
-                        val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
-                        securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + closeProfitCny
+                        addSecurityProfit(securityProfitByDate, effectiveKey, date, closeProfitCny, isDerivativeTransaction)
                         val remainingSellQty = transaction.quantity - closeQuantity
                         if (remainingSellQty > 0) {
                             positions[key] = PositionComputation(
@@ -3365,8 +3406,7 @@ class LedgerViewModel(
                     val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
                     dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + amountCny
                     if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
-                        val securityDailyProfit = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
-                        securityDailyProfit[date] = securityDailyProfit.getOrDefault(date, 0.0) + amountCny
+                        addSecurityProfit(securityProfitByDate, effectiveKey, date, amountCny, isDerivativeTransaction)
                         
                         val current = positions[key] ?: PositionComputation(
                             symbol = transaction.symbol,
@@ -3411,14 +3451,19 @@ class LedgerViewModel(
                 position.market,
                 exchangeRates,
             )
-            val resolvedSymbol = if (position.assetType == "OPTION") {
+            val resolvedSymbol = if (isOptionAsset(position.assetType, position.symbol)) {
                 position.underlyingSymbol?.takeIf { it.isNotBlank() } ?: position.symbol
             } else {
                 position.symbol
             }
             val effectiveKey = positionKey(resolvedSymbol, position.market)
-            val seriesForSecurity = securityProfitByDate.getOrPut(effectiveKey) { linkedMapOf() }
-            seriesForSecurity[realtimeDate] = seriesForSecurity.getOrDefault(realtimeDate, 0.0) + unrealizedCny
+            addSecurityProfit(
+                target = securityProfitByDate,
+                key = effectiveKey,
+                date = realtimeDate,
+                amountCny = unrealizedCny,
+                isDerivative = isOptionAsset(position.assetType, position.symbol),
+            )
         }
 
         val eventDates = (
@@ -3470,12 +3515,19 @@ class LedgerViewModel(
             securityMeta.forEach { (key, security) ->
                 val seriesMap = securityProfitByDate[key].orEmpty()
                 val priorCumulative = securitySeries[key]?.lastOrNull()?.cumulativeProfitCny ?: 0.0
-                val securityDailyProfit = seriesMap[cursor] ?: 0.0
+                val priorCumulativeStock = securitySeries[key]?.lastOrNull()?.cumulativeStockProfitCny ?: 0.0
+                val priorCumulativeDerivative = securitySeries[key]?.lastOrNull()?.cumulativeDerivativeProfitCny ?: 0.0
+                val securityDailyBreakdown = seriesMap[cursor] ?: SecurityProfitBreakdown()
+                val securityDailyProfit = securityDailyBreakdown.totalProfitCny
                 securitySeries.getValue(key) += SecurityProfitPointUiModel(
                     date = cursor,
                     dailyProfitCny = securityDailyProfit,
                     cumulativeProfitCny = priorCumulative + securityDailyProfit,
                     closePrice = null,
+                    dailyStockProfitCny = securityDailyBreakdown.stockProfitCny,
+                    dailyDerivativeProfitCny = securityDailyBreakdown.derivativeProfitCny,
+                    cumulativeStockProfitCny = priorCumulativeStock + securityDailyBreakdown.stockProfitCny,
+                    cumulativeDerivativeProfitCny = priorCumulativeDerivative + securityDailyBreakdown.derivativeProfitCny,
                 )
             }
             previousTotalAssets = totalAssetsCny
@@ -3497,6 +3549,9 @@ class LedgerViewModel(
                     name = security.name,
                     market = security.market,
                     dailyPoints = securitySeries[key].orEmpty(),
+                    totalProfitCny = securitySeries[key].orEmpty().lastOrNull()?.cumulativeProfitCny ?: 0.0,
+                    stockProfitCny = securitySeries[key].orEmpty().lastOrNull()?.cumulativeStockProfitCny ?: 0.0,
+                    derivativeProfitCny = securitySeries[key].orEmpty().lastOrNull()?.cumulativeDerivativeProfitCny ?: 0.0,
                 )
             },
             netInflowCny = portfolio.netInflowCny,
@@ -4024,6 +4079,23 @@ class LedgerViewModel(
 
     private fun convertToCny(value: Double, market: Market, exchangeRates: ExchangeRates): Double =
         value * exchangeRates.rateToCny(market)
+
+    private fun isOptionAsset(assetType: String?, symbol: String): Boolean =
+        assetType?.uppercase() == "OPTION" || isOptionSymbol(symbol)
+
+    private fun optionMultiplier(assetType: String?, symbol: String): Double =
+        if (isOptionAsset(assetType, symbol)) 100.0 else 1.0
+
+    private fun addSecurityProfit(
+        target: MutableMap<String, MutableMap<LocalDate, SecurityProfitBreakdown>>,
+        key: String,
+        date: LocalDate,
+        amountCny: Double,
+        isDerivative: Boolean,
+    ) {
+        val byDate = target.getOrPut(key) { linkedMapOf() }
+        byDate[date] = byDate.getOrDefault(date, SecurityProfitBreakdown()).plus(amountCny, isDerivative)
+    }
 
     private fun formatDisplayCurrencyAmount(amount: Double, currency: DisplayCurrency): String {
         val prefix = if (amount < 0) "-" else ""

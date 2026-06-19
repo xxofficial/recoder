@@ -1,6 +1,5 @@
 package com.recoder.stockledger.ui
 
-import android.app.DatePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,7 +26,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -51,7 +49,7 @@ import java.text.DecimalFormat
 import java.time.LocalDate
 import kotlin.math.absoluteValue
 
-private enum class DetailRange(val label: String) {
+internal enum class DetailRange(val label: String) {
     ALL("全部"),
     THIS_MONTH("本月"),
     ONE_MONTH("近1月"),
@@ -65,6 +63,17 @@ private enum class DetailTab(val label: String) {
     OPTION("衍生品")
 }
 
+internal fun mapAdvancedProfitRangeToDetailRange(range: AdvancedProfitRange): DetailRange {
+    return when (range) {
+        AdvancedProfitRange.ALL -> DetailRange.ALL
+        AdvancedProfitRange.THIS_MONTH -> DetailRange.THIS_MONTH
+        AdvancedProfitRange.ONE_MONTH -> DetailRange.ONE_MONTH
+        AdvancedProfitRange.SIX_MONTHS -> DetailRange.SIX_MONTHS
+        AdvancedProfitRange.THIS_YEAR -> DetailRange.THIS_YEAR
+        AdvancedProfitRange.CUSTOM -> DetailRange.CUSTOM
+    }
+}
+
 private val detailNumberFormatter = DecimalFormat("#,##0.00")
 
 @Composable
@@ -74,11 +83,16 @@ fun StockDetailRoute(
     analysis: ProfitAnalysisUiModel,
     displayCurrency: DisplayCurrency,
     quotes: List<QuoteSnapshotEntity>,
+    initialRange: AdvancedProfitRange? = null,
+    initialCustomStart: String = "",
+    initialCustomEnd: String = "",
     onBack: () -> Unit,
 ) {
-    var selectedRange by rememberSaveable { mutableStateOf(DetailRange.ALL) }
-    var customStartDate by rememberSaveable { mutableStateOf("") }
-    var customEndDate by rememberSaveable { mutableStateOf("") }
+    var selectedRange by rememberSaveable(initialRange) {
+        mutableStateOf(initialRange?.let(::mapAdvancedProfitRangeToDetailRange) ?: DetailRange.ALL)
+    }
+    var customStartDate by rememberSaveable(initialCustomStart) { mutableStateOf(initialCustomStart) }
+    var customEndDate by rememberSaveable(initialCustomEnd) { mutableStateOf(initialCustomEnd) }
     var activeTab by rememberSaveable { mutableStateOf(DetailTab.STOCK) }
 
     val security = remember(analysis.securityAnalyses, symbol, marketLabel) {
@@ -91,7 +105,7 @@ fun StockDetailRoute(
         security?.dailyPoints?.sortedBy { it.date }.orEmpty()
     }
     val latestDate = analysis.latestDate
-    val context = LocalContext.current
+    val earliestDate = allSecurityPoints.firstOrNull()?.date ?: latestDate
     val quoteMap = remember(quotes) { quotes.associateBy { it.symbol } }
 
     val rangePair: Pair<LocalDate, LocalDate> = remember(selectedRange, latestDate, customStartDate, customEndDate) {
@@ -429,44 +443,16 @@ fun StockDetailRoute(
                 )
                 if (selectedRange == DetailRange.CUSTOM) {
                     Spacer(modifier = Modifier.padding(top = 8.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val startLabel = customStartDate.ifBlank { "起始日期" }
-                        val endLabel = customEndDate.ifBlank { "结束日期" }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(SurfaceSecondary)
-                                .clickable {
-                                    val init = runCatching { LocalDate.parse(customStartDate) }.getOrNull() ?: LocalDate.now()
-                                    DatePickerDialog(context, { _, y, m, d ->
-                                        customStartDate = LocalDate.of(y, m + 1, d).toString()
-                                    }, init.year, init.monthValue - 1, init.dayOfMonth).show()
-                                }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                        ) {
-                            Text(startLabel, color = if (customStartDate.isBlank()) ForegroundMuted else ForegroundPrimary, fontSize = 13.sp)
-                        }
-                        Text("-", color = ForegroundMuted, fontSize = 13.sp)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(SurfaceSecondary)
-                                .clickable {
-                                    val init = runCatching { LocalDate.parse(customEndDate) }.getOrNull() ?: LocalDate.now()
-                                    DatePickerDialog(context, { _, y, m, d ->
-                                        customEndDate = LocalDate.of(y, m + 1, d).toString()
-                                    }, init.year, init.monthValue - 1, init.dayOfMonth).show()
-                                }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                        ) {
-                            Text(endLabel, color = if (customEndDate.isBlank()) ForegroundMuted else ForegroundPrimary, fontSize = 13.sp)
-                        }
-                    }
+                    WheelDateRangePicker(
+                        startDate = customStartDate,
+                        endDate = customEndDate,
+                        onStartDateChange = { customStartDate = it },
+                        onEndDateChange = { customEndDate = it },
+                        fallbackDate = latestDate,
+                        minDate = earliestDate,
+                        maxDate = latestDate,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
 
