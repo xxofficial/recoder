@@ -205,7 +205,8 @@ class PortfolioCalculator {
                     }
 
                     TradeType.DIVIDEND -> {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
+                        val netDividend = transaction.price * transaction.quantity - transaction.tax
+                        val amountCny = convertToCny(netDividend, transaction.market, exchangeRates)
                         cashBalanceCny += amountCny
                         if (transaction.symbol != "CASH") {
                             val key = positionKey(transaction.symbol, transaction.market)
@@ -220,7 +221,7 @@ class PortfolioCalculator {
                                 assetType = transaction.assetType,
                             )
                             positions[key] = current.copy(
-                                realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                                realizedProfit = current.realizedProfit + netDividend
                             )
                         }
                     }
@@ -259,6 +260,13 @@ class PortfolioCalculator {
                             )
                         }
                     }
+
+                    TradeType.OTHER -> {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, transaction.market, exchangeRates)
+                        cashBalanceCny += amountCny
+                    }
+
+                    TradeType.FX_CONVERSION -> Unit
                 }
             }
 

@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [TransactionEntity::class, QuoteSnapshotEntity::class, LedgerEntity::class, HistoricalCloseEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class StockLedgerDatabase : RoomDatabase() {
@@ -191,6 +191,16 @@ abstract class StockLedgerDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE transactions ADD COLUMN fxFromCurrency TEXT")
+                database.execSQL("ALTER TABLE transactions ADD COLUMN fxFromAmount REAL")
+                database.execSQL("ALTER TABLE transactions ADD COLUMN fxToCurrency TEXT")
+                database.execSQL("ALTER TABLE transactions ADD COLUMN fxToAmount REAL")
+                database.execSQL("ALTER TABLE transactions ADD COLUMN fxRate REAL")
             }
         }
     }

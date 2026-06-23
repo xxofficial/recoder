@@ -250,48 +250,120 @@ class LongBridgeStatementParserTest {
         """.trimIndent()
 
         val trades = LongBridgeStatementPdfParser.parseText(sampleText)
-        assertEquals(3, trades.size)
+        assertEquals(2, trades.size)
 
         val gift = trades[0]
-        assertEquals(TradeType.DIVIDEND, gift.tradeType)
+        assertEquals(TradeType.OTHER, gift.tradeType)
         assertEquals(Market.US, gift.market)
         assertEquals("USD", gift.currencyCode)
         assertEquals("CASH", gift.symbol)
         assertEquals(100.0, gift.price, 0.001)
         assertEquals(1.0, gift.quantity, 0.001)
-        assertTrue(gift.tradeRef.startsWith("GIFT-20250605-活动礼包-100.0"))
+        assertTrue(gift.tradeRef.startsWith("OTH-20250605-活动礼包-100.0"))
         assertTrue(gift.rawLine.contains("现金奖励"))
 
-        val withdraw = trades[1]
-        assertEquals(TradeType.WITHDRAW, withdraw.tradeType)
-        assertEquals(Market.HK, withdraw.market)
-        assertEquals("HKD", withdraw.currencyCode)
-        assertEquals("CASH", withdraw.symbol)
-        assertEquals(5000.0, withdraw.price, 0.001)
-        assertTrue(withdraw.tradeRef.startsWith("WTH-20250606-货币兑换出账-5000.0"))
-
-        val deposit = trades[2]
-        assertEquals(TradeType.DEPOSIT, deposit.tradeType)
-        assertEquals(Market.US, deposit.market)
-        assertEquals("USD", deposit.currencyCode)
-        assertEquals("CASH", deposit.symbol)
-        assertEquals(636.0, deposit.price, 0.001)
-        assertTrue(deposit.tradeRef.startsWith("DEP-20250606-货币兑换入账-636.0"))
+        val fx = trades[1]
+        assertEquals(TradeType.FX_CONVERSION, fx.tradeType)
+        assertEquals(Market.HK, fx.market)
+        assertEquals("HKD", fx.currencyCode)
+        assertEquals("CASH", fx.symbol)
+        assertEquals("货币兑换 HKD -> USD", fx.name)
+        assertEquals(5000.0, fx.price, 0.001)
+        assertEquals(1.0, fx.quantity, 0.001)
+        assertEquals("HKD", fx.fxFromCurrency)
+        assertEquals(5000.0, fx.fxFromAmount ?: 0.0, 0.001)
+        assertEquals("USD", fx.fxToCurrency)
+        assertEquals(636.0, fx.fxToAmount ?: 0.0, 0.001)
+        assertEquals(0.1272, fx.fxRate ?: 0.0, 0.000001)
+        assertTrue(fx.tradeRef.startsWith("FX-20250606-HKD->USD-5000-636-0.1272"))
+        assertTrue(fx.rawLine.contains("货币兑换出账"))
+        assertTrue(fx.rawLine.contains("货币兑换入账"))
     }
 
     @Test
-    fun testDoesNotParseBareFundingLinesWithoutCashSectionHeader() {
+    fun testParseSingleLegFxConversionAsOneRecord() {
+        val sampleText = """
+            市场: 香港市场; 币种: 港元
+            2025.06.06 货币兑换出账 HKD 换汇至 USD @ 0.1272 -5,000.00
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+
+        val fx = trades.single()
+        assertEquals(TradeType.FX_CONVERSION, fx.tradeType)
+        assertEquals(Market.HK, fx.market)
+        assertEquals("HKD", fx.currencyCode)
+        assertEquals(5000.0, fx.price, 0.001)
+        assertEquals("HKD", fx.fxFromCurrency)
+        assertEquals(5000.0, fx.fxFromAmount ?: 0.0, 0.001)
+        assertEquals("USD", fx.fxToCurrency)
+        assertEquals(null, fx.fxToAmount)
+        assertEquals(0.1272, fx.fxRate ?: 0.0, 0.000001)
+    }
+
+    @Test
+    fun testParseSummaryFundingLinesWithoutCashSectionHeader() {
         val sampleText = """
             --- PAGE 1 ---
-            20,000.00
+            20,000.00 0.00 20,000.00 0.00
+            港元 0.00 20,000.00 20,000.00 20,000.00 0.00 0.00 1.000000 20,000.00
+            2025.05.22 存入资金 1,000.00
+            2025.05.28 存入资金 19,000.00
+            责任说明
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(2, trades.size)
+        assertEquals(listOf(1000.0, 19000.0), trades.map { it.price })
+        trades.forEach {
+            assertEquals(TradeType.DEPOSIT, it.tradeType)
+            assertEquals(Market.HK, it.market)
+            assertEquals("HKD", it.currencyCode)
+            assertEquals("CASH", it.symbol)
+        }
+    }
+
+    @Test
+    fun testParseDepositUnderStandaloneHkdHeader() {
+        val sampleText = """
+            其他资金出入明细
+            发生日期
+            类型
+            备注
+            金额
             港元
-            2025.05.22
-            存入资金
-            1,000.00
             2025.05.28
             存入资金
             19,000.00
-            2025.05.28 存入资金 19,000.00
+            汇总 (港元)
+            19,000.00
+            责任说明
+        """.trimIndent()
+
+        val trades = LongBridgeStatementPdfParser.parseText(sampleText)
+        assertEquals(1, trades.size)
+
+        val deposit = trades.single()
+        assertEquals(TradeType.DEPOSIT, deposit.tradeType)
+        assertEquals(Market.HK, deposit.market)
+        assertEquals("HKD", deposit.currencyCode)
+        assertEquals("CASH", deposit.symbol)
+        assertEquals(19000.0, deposit.price, 0.001)
+        assertEquals(1.0, deposit.quantity, 0.001)
+    }
+
+    @Test
+    fun testDoesNotGuessCurrencyForFundingInsideCashSection() {
+        val sampleText = """
+            其他资金出入明细
+            发生日期
+            类型
+            备注
+            金额
+            2025.05.28
+            存入资金
+            19,000.00
             责任说明
         """.trimIndent()
 
@@ -335,7 +407,8 @@ class LongBridgeStatementParserTest {
         assertEquals("NVDA", dividend.name)
         assertEquals(0.01, dividend.price, 0.001)
         assertEquals(1.0, dividend.quantity, 0.001)
-        assertTrue(dividend.tradeRef.startsWith("DIV-20250704-现金分红-0.01"))
+        assertEquals(0.0, dividend.tax ?: 0.0, 0.001)
+        assertTrue(dividend.tradeRef.startsWith("DIV-20250704-NVDA-0.01-0"))
         assertTrue(dividend.rawLine.contains("NVDA.US"))
 
         val tax = trades[1]
@@ -390,7 +463,7 @@ class LongBridgeStatementParserTest {
         """.trimIndent()
 
         val trades = LongBridgeStatementPdfParser.parseText(sampleText)
-        assertEquals(5, trades.size)
+        assertEquals(4, trades.size)
 
         val hkdInterest = trades[0]
         assertEquals(TradeType.INTEREST, hkdInterest.tradeType)
@@ -413,16 +486,11 @@ class LongBridgeStatementParserTest {
         assertEquals("USD", usdDividend.currencyCode)
         assertEquals("SPXS", usdDividend.symbol)
         assertEquals(7.65, usdDividend.price, 0.001)
+        assertEquals(0.77, usdDividend.tax ?: 0.0, 0.001)
+        assertTrue(usdDividend.rawLine.contains("现金分红"))
+        assertTrue(usdDividend.rawLine.contains("Withholding Tax/Dividend Fee"))
 
-        val usdTax = trades[3]
-        assertEquals(TradeType.TAX, usdTax.tradeType)
-        assertEquals(Market.US, usdTax.market)
-        assertEquals("USD", usdTax.currencyCode)
-        assertEquals("SPXS", usdTax.symbol)
-        assertEquals(0.77, usdTax.price, 0.001)
-        assertTrue(usdTax.rawLine.contains("Withholding Tax/Dividend Fee"))
-
-        val usdShortInterest = trades[4]
+        val usdShortInterest = trades[3]
         assertEquals(TradeType.INTEREST, usdShortInterest.tradeType)
         assertEquals(Market.US, usdShortInterest.market)
         assertEquals("USD", usdShortInterest.currencyCode)

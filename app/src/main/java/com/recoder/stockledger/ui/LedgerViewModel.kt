@@ -2073,7 +2073,11 @@ class LedgerViewModel(
 
         val price = parseDecimal(draft.priceLabel)
         if (price <= 0.0) {
-            return if (draft.selectedType == TradeType.SPLIT) "折算比例必须大于 0" else "成交价格必须大于 0"
+            return when {
+                draft.selectedType == TradeType.SPLIT -> "折算比例必须大于 0"
+                draft.selectedType.isSecurityTrade -> "成交价格必须大于 0"
+                else -> "金额必须大于 0"
+            }
         }
 
         val quantity = parseQuantity(draft.quantityLabel)
@@ -2523,6 +2527,10 @@ class LedgerViewModel(
                         val platform = runCatching { BrokerPlatform.valueOf(transaction.platform) }.getOrDefault(BrokerPlatform.UNSPECIFIED)
                         val cashFlow = transactionCashFlow(transaction, tradeType)
                         val isStockOrOptDiv = tradeType == TradeType.DIVIDEND && transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH"
+                        val fxTitle = fxConversionTitle(transaction)
+                        val fxMeta = fxConversionMeta(transaction)
+                        val dividendGross = transaction.price * transaction.quantity
+                        val dividendNet = dividendGross - transaction.tax
                         TransactionUiModel(
                             id = transaction.id,
                             tradeType = tradeType,
@@ -2532,6 +2540,10 @@ class LedgerViewModel(
                                 "融资利息"
                             } else if (tradeType == TradeType.TAX) {
                                 transaction.name.ifBlank { "公司行动费用" }
+                            } else if (tradeType == TradeType.FX_CONVERSION) {
+                                fxTitle
+                            } else if (tradeType == TradeType.OTHER) {
+                                transaction.name.ifBlank { "其他收入" }
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
@@ -2558,17 +2570,21 @@ class LedgerViewModel(
                             } else if (isStockOrOptDiv) {
                                 val isOpt = transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)
                                 val unit = if (isOpt) "张" else "股"
+                                val taxLabel = if (transaction.tax > 0.0) " · 扣税 ${formatMarketAmount(transaction.tax, market)} · 净入账 ${formatMarketAmount(dividendNet, market)}" else ""
                                 if (transaction.quantity == 1.0) {
-                                    "分红金额 ${formatMarketAmount(transaction.price, market)}"
+                                    "分红金额 ${formatMarketAmount(dividendGross, market)}$taxLabel"
                                 } else {
-                                    "每股分红 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit"
+                                    "每股分红 ${formatMarketAmount(transaction.price, market)} · ${transaction.quantity} $unit$taxLabel"
                                 }
                             } else if (tradeType == TradeType.DIVIDEND) {
-                                "分红/奖励金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                                val taxLabel = if (transaction.tax > 0.0) " · 扣税 ${formatMarketAmount(transaction.tax, market)} · 净入账 ${formatMarketAmount(dividendNet, market)}" else ""
+                                "分红金额 ${formatMarketAmount(dividendGross, market)}$taxLabel"
                             } else if (tradeType == TradeType.INTEREST) {
                                 "利息金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.TAX) {
                                 "税费金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                            } else if (tradeType == TradeType.OTHER) {
+                                "其他收入 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.DEPOSIT) {
                                 "入金金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.WITHDRAW) {
@@ -2577,11 +2593,15 @@ class LedgerViewModel(
                                 "转入金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.TRANSFER_OUT) {
                                 "转出金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                            } else if (tradeType == TradeType.FX_CONVERSION) {
+                                fxMeta
                             } else {
                                 transaction.note.ifBlank { "现金账户流水" }
                             },
                             amountLabel = if (tradeType == TradeType.SPLIT) {
                                 "--"
+                            } else if (tradeType == TradeType.FX_CONVERSION) {
+                                "换汇"
                             } else {
                                 formatSignedMarketAmount(cashFlow, market)
                             },
@@ -2600,6 +2620,10 @@ class LedgerViewModel(
                                 "税费支出"
                             } else if (tradeType == TradeType.INTEREST) {
                                 "利息支出"
+                            } else if (tradeType == TradeType.FX_CONVERSION) {
+                                "仅记录，不计入资产"
+                            } else if (tradeType == TradeType.OTHER) {
+                                "其他现金入账"
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             },
@@ -2831,7 +2855,8 @@ class LedgerViewModel(
                     }
 
                     TradeType.DIVIDEND -> {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                        val netDividend = transaction.price * transaction.quantity - transaction.tax
+                        val amountCny = convertToCny(netDividend, market, exchangeRates)
                         cashBalanceCny += amountCny
                         if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
                             val key = positionKey(transaction.symbol, market)
@@ -2847,7 +2872,7 @@ class LedgerViewModel(
                                 underlyingSymbol = transaction.underlyingSymbol,
                             )
                             positions[key] = current.copy(
-                                realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                                realizedProfit = current.realizedProfit + netDividend
                             )
                         }
                     }
@@ -2873,6 +2898,13 @@ class LedgerViewModel(
                             )
                         }
                     }
+
+                    TradeType.OTHER -> {
+                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                        cashBalanceCny += amountCny
+                    }
+
+                    TradeType.FX_CONVERSION -> Unit
 
                     TradeType.SPLIT -> {
                         val key = positionKey(transaction.symbol, market)
@@ -3403,7 +3435,8 @@ class LedgerViewModel(
                 }
 
                 TradeType.DIVIDEND -> {
-                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    val netDividend = transaction.price * transaction.quantity - transaction.tax
+                    val amountCny = convertToCny(netDividend, market, exchangeRates)
                     dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + amountCny
                     if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
                         addSecurityProfit(securityProfitByDate, effectiveKey, date, amountCny, isDerivativeTransaction)
@@ -3420,10 +3453,17 @@ class LedgerViewModel(
                             underlyingSymbol = transaction.underlyingSymbol,
                         )
                         positions[key] = current.copy(
-                            realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                            realizedProfit = current.realizedProfit + netDividend
                         )
                     }
                 }
+
+                TradeType.OTHER -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + amountCny
+                }
+
+                TradeType.FX_CONVERSION -> Unit
 
                 TradeType.SPLIT -> {
                     val current = positions[key]
@@ -3812,7 +3852,8 @@ class LedgerViewModel(
                     }
                 }
                 TradeType.DIVIDEND -> {
-                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    val netDividend = transaction.price * transaction.quantity - transaction.tax
+                    val amountCny = convertToCny(netDividend, market, exchangeRates)
                     cashBalanceCny += amountCny
                     if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
                         val key = positionKey(transaction.symbol, market)
@@ -3828,10 +3869,17 @@ class LedgerViewModel(
                             underlyingSymbol = transaction.underlyingSymbol,
                         )
                         positions[key] = current.copy(
-                            realizedProfit = current.realizedProfit + (transaction.price * transaction.quantity)
+                            realizedProfit = current.realizedProfit + netDividend
                         )
                     }
                 }
+
+                TradeType.OTHER -> {
+                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
+                    cashBalanceCny += amountCny
+                }
+
+                TradeType.FX_CONVERSION -> Unit
 
                 TradeType.BUY, TradeType.SELL -> {
                     totalCommissionCny += convertToCny(transaction.commission, market, exchangeRates)
@@ -4170,6 +4218,55 @@ class LedgerViewModel(
         return "$prefix${market.currencySymbol}${numberFormatter.format(value.absoluteValue)}"
     }
 
+    private fun fxConversionTitle(transaction: TransactionEntity): String {
+        val from = transaction.fxFromCurrency
+        val to = transaction.fxToCurrency
+        return when {
+            !from.isNullOrBlank() && !to.isNullOrBlank() -> "货币兑换 $from → $to"
+            !from.isNullOrBlank() -> "货币兑换 $from"
+            !to.isNullOrBlank() -> "货币兑换 → $to"
+            transaction.name.isNotBlank() -> transaction.name
+            else -> "货币兑换"
+        }
+    }
+
+    private fun fxConversionMeta(transaction: TransactionEntity): String {
+        val fromAmount = transaction.fxFromAmount
+        val fromCurrency = transaction.fxFromCurrency
+        val toAmount = transaction.fxToAmount
+        val toCurrency = transaction.fxToCurrency
+        val amountText = when {
+            fromAmount != null && !fromCurrency.isNullOrBlank() && toAmount != null && !toCurrency.isNullOrBlank() ->
+                "${formatCurrencyCodeAmount(fromAmount, fromCurrency)} → ${formatCurrencyCodeAmount(toAmount, toCurrency)}"
+            fromAmount != null && !fromCurrency.isNullOrBlank() ->
+                "换出 ${formatCurrencyCodeAmount(fromAmount, fromCurrency)}"
+            toAmount != null && !toCurrency.isNullOrBlank() ->
+                "换入 ${formatCurrencyCodeAmount(toAmount, toCurrency)}"
+            else -> "换汇金额 ${formatMarketAmount(transaction.price * transaction.quantity, Market.fromString(transaction.market) ?: Market.CASH)}"
+        }
+        val rateText = transaction.fxRate?.let { "汇率 ${formatFxRate(it)}" }
+        return listOfNotNull(amountText, rateText).joinToString(" · ")
+    }
+
+    private fun formatCurrencyCodeAmount(amount: Double, currencyCode: String): String {
+        return formatMarketAmount(amount, marketForCurrencyCode(currencyCode))
+    }
+
+    private fun marketForCurrencyCode(currencyCode: String): Market {
+        return when (currencyCode.uppercase()) {
+            "USD" -> Market.US
+            "HKD" -> Market.HK
+            "CNY" -> Market.CASH
+            else -> Market.CASH
+        }
+    }
+
+    private fun formatFxRate(rate: Double): String {
+        return String.format(java.util.Locale.US, "%.6f", rate)
+            .trimEnd('0')
+            .trimEnd('.')
+    }
+
     private fun formatSignedMarketAmount(value: Double, market: Market): String {
         val sign = if (value >= 0) "+" else "-"
         return "$sign${market.currencySymbol}${numberFormatter.format(value.absoluteValue)}"
@@ -4468,8 +4565,9 @@ class LedgerViewModel(
             }
             TradeType.INTEREST -> -(transaction.price * transaction.quantity * mult)
             TradeType.TAX -> -(transaction.price * transaction.quantity * mult)
-            TradeType.DIVIDEND -> transaction.price * transaction.quantity * mult
-            TradeType.SPLIT -> 0.0
+            TradeType.DIVIDEND -> transaction.price * transaction.quantity * mult - transaction.tax
+            TradeType.OTHER -> transaction.price * transaction.quantity * mult
+            TradeType.SPLIT, TradeType.FX_CONVERSION -> 0.0
         }
     }
 
@@ -5077,10 +5175,16 @@ private data class RefreshMeta(
                     // Split events do not affect cash balance
                 }
                 TradeType.DIVIDEND -> {
-                    balance += tx.price * tx.quantity
+                    balance += tx.price * tx.quantity - tx.tax
                 }
                 TradeType.TAX -> {
                     balance -= kotlin.math.abs(tx.price * tx.quantity)
+                }
+                TradeType.OTHER -> {
+                    balance += tx.price * tx.quantity
+                }
+                TradeType.FX_CONVERSION -> {
+                    // Currency conversion records are informational only.
                 }
             }
         }
@@ -5267,13 +5371,17 @@ private data class RefreshMeta(
                     cashBalanceCny -= amountCny
                 }
                 TradeType.DIVIDEND -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    val amountCny = convertToCny(tx.price * tx.quantity - tx.tax, market, exchangeRates)
                     cashBalanceCny += amountCny
                     if (tx.symbol != CASH_ACCOUNT_SYMBOL && tx.symbol != "CASH") {
                         if (stockPrices[key] == null || stockPrices[key] == 0.0) {
                             stockPrices[key] = convertToCny(tx.price, market, exchangeRates)
                         }
                     }
+                }
+                TradeType.OTHER -> {
+                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
+                    cashBalanceCny += amountCny
                 }
                 TradeType.SPLIT -> {
                     val qty = stockQuantities[key] ?: 0.0

@@ -437,6 +437,51 @@ class AutoNameRepairAndroidTest {
     }
 
     @Test
+    fun testBackupRoundTripKeepsFxConversionFields() = runBlocking {
+        val fxTx = com.recoder.stockledger.data.local.TransactionEntity(
+            tradeType = "FX_CONVERSION",
+            platform = "LONGBRIDGE",
+            market = "HK",
+            symbol = "CASH",
+            name = "货币兑换 HKD -> USD",
+            tradeDate = "2025-06-06",
+            tradeTime = "09:00",
+            price = 5000.0,
+            quantity = 1.0,
+            commission = 0.0,
+            tax = 0.0,
+            note = "",
+            createdAt = System.currentTimeMillis(),
+            ledgerId = 1L,
+            assetType = "STOCK",
+            fxFromCurrency = "HKD",
+            fxFromAmount = 5000.0,
+            fxToCurrency = "USD",
+            fxToAmount = 636.0,
+            fxRate = 0.1272
+        )
+        db.ledgerDao().insertTransaction(fxTx)
+        val output = java.io.ByteArrayOutputStream()
+
+        baseRepo.exportBackup(
+            outputStream = output,
+            displayCurrencyName = "CNY",
+            enabledPlatforms = listOf(BrokerPlatform.LONGBRIDGE),
+            selectedPlatform = BrokerPlatform.LONGBRIDGE,
+            selectedLedgerIds = listOf(1L),
+            selectedPlatforms = listOf(BrokerPlatform.LONGBRIDGE.name)
+        )
+
+        val imported = baseRepo.parseBackup(java.io.ByteArrayInputStream(output.toByteArray()))
+        val restored = imported.transactions.single { it.tradeType == "FX_CONVERSION" }
+        assertEquals("HKD", restored.fxFromCurrency)
+        assertEquals(5000.0, restored.fxFromAmount ?: 0.0, 0.001)
+        assertEquals("USD", restored.fxToCurrency)
+        assertEquals(636.0, restored.fxToAmount ?: 0.0, 0.001)
+        assertEquals(0.1272, restored.fxRate ?: 0.0, 0.000001)
+    }
+
+    @Test
     fun testSearchDoesNotMapLeveragedSpxsNameToSpy() = runBlocking {
         val suggestions = baseRepo.searchSecurities("3 倍做空标普 500 ETF", Market.US)
 

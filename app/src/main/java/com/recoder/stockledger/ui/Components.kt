@@ -1441,7 +1441,7 @@ fun TradeTypeSelector(
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        TradeType.entries.forEach { type ->
+        TradeType.entries.filterNot { it == TradeType.FX_CONVERSION }.forEach { type ->
             val isSelected = type == selected
             val interactionSource = remember { MutableInteractionSource() }
             Box(
@@ -1466,10 +1466,10 @@ fun TradeTypeSelector(
     }
 }
 fun tradeTypeColors(type: TradeType): Pair<Color, Color> = when (type) {
-    TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN, TradeType.DIVIDEND -> MarketUpSoft to MarketUp
+    TradeType.BUY, TradeType.DEPOSIT, TradeType.TRANSFER_IN, TradeType.DIVIDEND, TradeType.OTHER -> MarketUpSoft to MarketUp
     TradeType.SELL, TradeType.WITHDRAW, TradeType.TRANSFER_OUT, TradeType.INTEREST, TradeType.TAX -> MarketDownSoft to MarketDown
     TradeType.SPLIT -> SurfaceSecondary to MarketNeutral
-    TradeType.EXPIRE -> SurfaceMuted to MarketNeutral
+    TradeType.EXPIRE, TradeType.FX_CONVERSION -> SurfaceMuted to MarketNeutral
 }
 
 @Composable

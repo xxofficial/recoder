@@ -329,6 +329,31 @@ class PortfolioCalculatorTest {
     }
 
     @Test
+    fun `calculate ignores informational currency conversion records`() {
+        val baseline = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.DEPOSIT, market = Market.HK, symbol = "CASH", price = 19_000.0, quantity = 1.0)
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 0.9),
+        )
+        val withFx = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.DEPOSIT, market = Market.HK, symbol = "CASH", price = 19_000.0, quantity = 1.0),
+                trade(type = TradeType.FX_CONVERSION, market = Market.HK, symbol = "CASH", price = 5_000.0, quantity = 1.0),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 0.9),
+        )
+
+        assertEquals(baseline.cashBalanceCny, withFx.cashBalanceCny, 0.0001)
+        assertEquals(baseline.netInflowCny, withFx.netInflowCny, 0.0001)
+        assertEquals(baseline.totalAssetsCny, withFx.totalAssetsCny, 0.0001)
+        assertEquals(baseline.totalDepositCny, withFx.totalDepositCny, 0.0001)
+        assertEquals(baseline.totalWithdrawCny, withFx.totalWithdrawCny, 0.0001)
+    }
+
+    @Test
     fun testCalculateAllLedger1() {
         val txnsJson = java.io.File("src/test/resources/ledger_1_txns.json").readText()
         val quotesJson = java.io.File("src/test/resources/ledger_1_quotes.json").readText()
@@ -589,26 +614,26 @@ class PortfolioCalculatorTest {
     }
 
     @Test
-    fun `calculate handles dividend and tax`() {
+    fun `calculate handles dividend tax and other income`() {
         val usdRate = 7.0
         val snapshot = calculator.calculate(
             transactions = listOf(
                 trade(type = TradeType.BUY, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 10.0),
-                trade(type = TradeType.DIVIDEND, market = Market.US, symbol = "AAPL", price = 1.5, quantity = 10.0),
-                trade(type = TradeType.TAX, market = Market.US, symbol = "AAPL", price = 0.15, quantity = 10.0),
+                trade(type = TradeType.DIVIDEND, market = Market.US, symbol = "AAPL", price = 1.5, quantity = 10.0, tax = 1.5),
+                trade(type = TradeType.OTHER, market = Market.US, symbol = "CASH", price = 100.0, quantity = 1.0),
             ),
             quotes = emptyList(),
             exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
         )
 
-        // Cash balance should be -1000 + 15 - 1.5 = -986.5 USD. In CNY: -986.5 * 7 = -6905.5
-        assertEquals(-986.5 * usdRate, snapshot.cashBalanceCny, 0.0001)
+        // Cash balance should be -1000 + (15 - 1.5) + 100 = -886.5 USD.
+        assertEquals(-886.5 * usdRate, snapshot.cashBalanceCny, 0.0001)
 
         val position = snapshot.positions.getValue("US:AAPL")
         assertEquals(10.0, position.quantity, 0.0001)
         assertEquals(100.0, position.averageCost, 0.0001)
-        // realizedProfit = 15 - 1.5 = 13.5
         assertEquals(13.5, position.realizedProfit, 0.0001)
+        assertFalse(snapshot.positions.containsKey("US:CASH"))
     }
 }
 

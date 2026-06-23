@@ -34,5 +34,10 @@ data class TransactionEntity(
     val expiryDate: String? = null,
     val strikePrice: Double? = null,
     val optionType: String? = null,
+    val fxFromCurrency: String? = null,
+    val fxFromAmount: Double? = null,
+    val fxToCurrency: String? = null,
+    val fxToAmount: Double? = null,
+    val fxRate: Double? = null,
 )
 

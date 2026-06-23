@@ -663,15 +663,21 @@ object LongBridgeStatementPdfParser {
         val context: CashContext
     )
 
+    private data class FxConversionDetails(
+        val fromCurrency: String,
+        val toCurrency: String,
+        val rate: Double?
+    )
+
     private fun parseOtherCashMovements(
         lines: List<String>,
         startIndex: Int,
         limitIndex: Int,
         stopAtSectionEnd: Boolean
     ): List<ParsedStatementTrade> {
-        val movements = mutableListOf<ParsedStatementTrade>()
+        val movements = mutableListOf<LongBridgeCashMovement>()
         var idx = startIndex
-        var context = CashContext(Market.US, "USD")
+        var context: CashContext? = null
 
         while (idx < limitIndex) {
             val line = lines[idx]
@@ -695,11 +701,10 @@ object LongBridgeStatementPdfParser {
             val singleLineMovement = parseSingleLineCashMovement(
                 line = line,
                 sourceIndex = idx,
-                context = context,
-                allowBareFundingTypes = stopAtSectionEnd
+                context = context
             )
             if (singleLineMovement != null) {
-                cashMovementToTrade(singleLineMovement)?.let { movements.add(it) }
+                movements.add(singleLineMovement)
                 idx++
                 continue
             }
@@ -748,7 +753,11 @@ object LongBridgeStatementPdfParser {
                         remarkText = remarkText,
                         fallback = context
                     )
-                    cashMovementToTrade(
+                    if (inferredContext == null) {
+                        idx = scan
+                        continue
+                    }
+                    movements.add(
                         LongBridgeCashMovement(
                             dateStr = line,
                             typeStr = typeStr,
@@ -760,7 +769,7 @@ object LongBridgeStatementPdfParser {
                             sourceIndex = idx,
                             context = inferredContext
                         )
-                    )?.let { movements.add(it) }
+                    )
                     idx = scan
                     continue
                 }
@@ -769,14 +778,13 @@ object LongBridgeStatementPdfParser {
             idx++
         }
 
-        return movements
+        return cashMovementsToTrades(movements)
     }
 
     private fun parseSingleLineCashMovement(
         line: String,
         sourceIndex: Int,
-        context: CashContext,
-        allowBareFundingTypes: Boolean
+        context: CashContext?
     ): LongBridgeCashMovement? {
         val fullMatch = Regex("""^(\d{4}\.\d{2}\.\d{2})\s+(\S+)\s+(.*?)\s+(-?[\d,]+(?:\.\d+)?)$""")
             .matchEntire(line)
@@ -802,7 +810,7 @@ object LongBridgeStatementPdfParser {
         }
 
         if (!isCashMovementType(typeStr, remarkText)) return null
-        if (!allowBareFundingTypes && isBareFundingType(typeStr)) return null
+        val inferredContext = inferCashMovementContext(typeStr, remarkText, context) ?: return null
 
         return LongBridgeCashMovement(
             dateStr = dateStr,
@@ -811,15 +819,247 @@ object LongBridgeStatementPdfParser {
             amount = amount,
             rawLine = line,
             sourceIndex = sourceIndex,
-            context = inferCashMovementContext(typeStr, remarkText, context)
+            context = inferredContext
         )
     }
 
+    private fun cashMovementsToTrades(movements: List<LongBridgeCashMovement>): List<ParsedStatementTrade> {
+        val trades = mutableListOf<ParsedStatementTrade>()
+        val used = BooleanArray(movements.size)
+        movements.forEachIndexed { index, movement ->
+            if (used[index]) return@forEachIndexed
+            if (!isFxConversionType(movement.typeStr)) {
+                if (isDividendType(movement.typeStr, movement.remarkText)) {
+                    val pairIndex = movements.indices.firstOrNull { candidateIndex ->
+                        candidateIndex != index &&
+                            !used[candidateIndex] &&
+                            movements[candidateIndex].let { candidate ->
+                                isTaxType(candidate.typeStr, candidate.remarkText) &&
+                                    isMatchingDividendTaxPair(movement, candidate)
+                            }
+                    }
+                    val pair = pairIndex?.let { movements[it] }
+                    dividendMovementToTrade(movement, pair)?.let { trades.add(it) }
+                    used[index] = true
+                    if (pairIndex != null) used[pairIndex] = true
+                    return@forEachIndexed
+                }
+                if (isTaxType(movement.typeStr, movement.remarkText)) {
+                    val pairIndex = movements.indices.firstOrNull { candidateIndex ->
+                        candidateIndex != index &&
+                            !used[candidateIndex] &&
+                            movements[candidateIndex].let { candidate ->
+                                isDividendType(candidate.typeStr, candidate.remarkText) &&
+                                    isMatchingDividendTaxPair(candidate, movement)
+                            }
+                    }
+                    if (pairIndex != null) {
+                        val pair = movements[pairIndex]
+                        dividendMovementToTrade(pair, movement)?.let { trades.add(it) }
+                        used[index] = true
+                        used[pairIndex] = true
+                        return@forEachIndexed
+                    }
+                }
+                cashMovementToTrade(movement)?.let { trades.add(it) }
+                used[index] = true
+                return@forEachIndexed
+            }
+
+            val pairIndex = movements.indices.firstOrNull { candidateIndex ->
+                candidateIndex != index &&
+                    !used[candidateIndex] &&
+                    movements[candidateIndex].let { candidate ->
+                        isFxConversionType(candidate.typeStr) &&
+                            isMatchingFxPair(movement, candidate)
+                    }
+            }
+            val pair = pairIndex?.let { movements[it] }
+            fxMovementToTrade(movement, pair)?.let { trades.add(it) }
+            used[index] = true
+            if (pairIndex != null) used[pairIndex] = true
+        }
+        return trades
+    }
+
+    private fun isMatchingDividendTaxPair(dividend: LongBridgeCashMovement, tax: LongBridgeCashMovement): Boolean {
+        if (dividend.dateStr != tax.dateStr) return false
+        if (dividend.context != tax.context) return false
+        val dividendSymbol = extractCashMovementSecuritySymbol(dividend.remarkText)
+        val taxSymbol = extractCashMovementSecuritySymbol(tax.remarkText)
+        if (dividendSymbol != null && taxSymbol != null && dividendSymbol != taxSymbol) return false
+        if (dividendSymbol == null && taxSymbol == null) {
+            val dividendRemark = normalizeCashRemarkForPairing(dividend.remarkText)
+            val taxRemark = normalizeCashRemarkForPairing(tax.remarkText)
+            if (dividendRemark.isNotBlank() && taxRemark.isNotBlank() && !taxRemark.contains(dividendRemark) && !dividendRemark.contains(taxRemark)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun normalizeCashRemarkForPairing(value: String): String {
+        return value
+            .replace("Withholding Tax", "", ignoreCase = true)
+            .replace("Dividend Fee", "", ignoreCase = true)
+            .replace("扣收", "")
+            .replace("税", "")
+            .replace(Regex("""\s+"""), "")
+            .trim()
+    }
+
+    private fun dividendMovementToTrade(
+        dividend: LongBridgeCashMovement,
+        taxMovement: LongBridgeCashMovement?
+    ): ParsedStatementTrade? {
+        val amount = kotlin.math.abs(dividend.amount)
+        val taxAmount = taxMovement?.amount?.let { kotlin.math.abs(it) } ?: 0.0
+        val tradeDate = LocalDate.parse(dividend.dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+        val securitySymbol = extractCashMovementSecuritySymbol(dividend.remarkText)
+            ?: taxMovement?.remarkText?.let(::extractCashMovementSecuritySymbol)
+        val symbol = securitySymbol ?: "CASH"
+        val sourceIndex = minOf(dividend.sourceIndex, taxMovement?.sourceIndex ?: dividend.sourceIndex)
+        val refSymbol = symbol.replace(Regex("""\s+"""), "")
+        val tradeRef = "DIV-${dividend.dateStr.replace(".", "")}-$refSymbol-${formatFxRefNumber(amount)}-${formatFxRefNumber(taxAmount)}-$sourceIndex"
+        val ordered = listOfNotNull(dividend, taxMovement).sortedBy { it.sourceIndex }
+
+        return ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = TradeType.DIVIDEND,
+            market = dividend.context.market,
+            symbol = symbol,
+            name = if (symbol != "CASH") symbol else dividend.typeStr,
+            currencyCode = dividend.context.currencyCode,
+            price = amount,
+            quantity = 1.0,
+            amount = amount,
+            tradeDate = tradeDate,
+            tradeTime = "09:00",
+            tradeRef = tradeRef,
+            rawLine = ordered.joinToString(" | ") { it.rawLine },
+            commission = 0.0,
+            tax = taxAmount,
+            platformFee = 0.0,
+            assetType = "STOCK"
+        )
+    }
+
+    private fun isMatchingFxPair(first: LongBridgeCashMovement, second: LongBridgeCashMovement): Boolean {
+        if (first.dateStr != second.dateStr) return false
+        if (isFxOutMovement(first) == isFxOutMovement(second)) return false
+        if (isFxInMovement(first) == isFxInMovement(second)) return false
+
+        val firstDetails = extractFxConversionDetails(first.remarkText)
+        val secondDetails = extractFxConversionDetails(second.remarkText)
+        if (firstDetails != null && secondDetails != null) {
+            if (firstDetails.fromCurrency != secondDetails.fromCurrency) return false
+            if (firstDetails.toCurrency != secondDetails.toCurrency) return false
+            val firstRate = firstDetails.rate
+            val secondRate = secondDetails.rate
+            if (firstRate != null && secondRate != null && kotlin.math.abs(firstRate - secondRate) > 0.0000001) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private fun fxMovementToTrade(
+        movement: LongBridgeCashMovement,
+        pair: LongBridgeCashMovement?
+    ): ParsedStatementTrade? {
+        val ordered = listOfNotNull(movement, pair).sortedBy { it.sourceIndex }
+        val outMovement = ordered.firstOrNull { isFxOutMovement(it) }
+        val inMovement = ordered.firstOrNull { isFxInMovement(it) }
+        val details = ordered.mapNotNull { extractFxConversionDetails(it.remarkText) }.firstOrNull()
+        val fromCurrency = details?.fromCurrency ?: outMovement?.context?.currencyCode ?: movement.context.currencyCode
+        val toCurrency = details?.toCurrency ?: inMovement?.context?.currencyCode
+        val fromAmount = outMovement?.amount?.let { kotlin.math.abs(it) }
+        val toAmount = inMovement?.amount?.let { kotlin.math.abs(it) }
+        val displayAmount = fromAmount ?: toAmount ?: kotlin.math.abs(movement.amount)
+        val primaryCurrency = if (fromAmount != null) {
+            fromCurrency
+        } else {
+            inMovement?.context?.currencyCode ?: movement.context.currencyCode
+        }
+        val primaryContext = cashContextFromCurrency(primaryCurrency)
+        val tradeDate = LocalDate.parse(movement.dateStr, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+        val currencyPair = if (toCurrency != null) "$fromCurrency->$toCurrency" else fromCurrency
+        val sourceIndex = ordered.minOf { it.sourceIndex }
+        val tradeRefParts = mutableListOf(
+            "FX",
+            movement.dateStr.replace(".", ""),
+            currencyPair,
+            fromAmount?.let(::formatFxRefNumber) ?: "NA",
+            toAmount?.let(::formatFxRefNumber) ?: "NA"
+        )
+        details?.rate?.let { tradeRefParts.add(formatFxRefNumber(it)) }
+        tradeRefParts.add(sourceIndex.toString())
+        val tradeRef = tradeRefParts.joinToString("-")
+
+        return ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = TradeType.FX_CONVERSION,
+            market = primaryContext.market,
+            symbol = "CASH",
+            name = if (toCurrency != null) "货币兑换 $fromCurrency -> $toCurrency" else "货币兑换 $fromCurrency",
+            currencyCode = primaryContext.currencyCode,
+            price = displayAmount,
+            quantity = 1.0,
+            amount = displayAmount,
+            tradeDate = tradeDate,
+            tradeTime = "09:00",
+            tradeRef = tradeRef,
+            rawLine = ordered.joinToString(" | ") { it.rawLine },
+            commission = 0.0,
+            tax = 0.0,
+            platformFee = 0.0,
+            assetType = "STOCK",
+            fxFromCurrency = fromCurrency,
+            fxFromAmount = fromAmount,
+            fxToCurrency = toCurrency,
+            fxToAmount = toAmount,
+            fxRate = details?.rate
+        )
+    }
+
+    private fun isFxOutMovement(movement: LongBridgeCashMovement): Boolean {
+        return movement.typeStr.contains("出账") ||
+            movement.typeStr.contains("出賬") ||
+            movement.amount < 0
+    }
+
+    private fun isFxInMovement(movement: LongBridgeCashMovement): Boolean {
+        return movement.typeStr.contains("入账") ||
+            movement.typeStr.contains("入賬") ||
+            movement.amount > 0
+    }
+
+    private fun extractFxConversionDetails(remarkText: String): FxConversionDetails? {
+        val match = Regex(
+            """\b(USD|HKD|CNY)\b.*?(?:换汇至|換匯至|至|to)\s*(USD|HKD|CNY)\b(?:\s*@\s*([0-9]+(?:\.[0-9]+)?))?""",
+            RegexOption.IGNORE_CASE
+        ).find(remarkText) ?: return null
+        return FxConversionDetails(
+            fromCurrency = match.groupValues[1].uppercase(),
+            toCurrency = match.groupValues[2].uppercase(),
+            rate = match.groupValues.getOrNull(3)?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
+        )
+    }
+
+    private fun formatFxRefNumber(value: Double): String {
+        return value.toString().trimEnd('0').trimEnd('.')
+    }
+
     private fun cashMovementToTrade(movement: LongBridgeCashMovement): ParsedStatementTrade? {
+        if (isFxConversionType(movement.typeStr)) {
+            return fxMovementToTrade(movement, null)
+        }
         val tradeType = when {
             isDividendType(movement.typeStr, movement.remarkText) -> TradeType.DIVIDEND
             isInterestType(movement.typeStr) -> TradeType.INTEREST
             isTaxType(movement.typeStr, movement.remarkText) -> TradeType.TAX
+            isOtherCashType(movement.typeStr, movement.remarkText) -> TradeType.OTHER
             isDepositType(movement.typeStr) -> TradeType.DEPOSIT
             isWithdrawType(movement.typeStr) -> TradeType.WITHDRAW
             else -> return null
@@ -831,18 +1071,22 @@ object LongBridgeStatementPdfParser {
             TradeType.DIVIDEND -> securitySymbol ?: "CASH"
             TradeType.TAX -> securitySymbol ?: "CASH"
             TradeType.INTEREST -> "INTEREST"
+            TradeType.OTHER -> "CASH"
             else -> "CASH"
         }
         val name = when (tradeType) {
             TradeType.DIVIDEND -> if (symbol != "CASH") symbol else movement.typeStr
             TradeType.TAX -> if (symbol != "CASH") symbol else movement.remarkText.ifBlank { movement.typeStr }
             TradeType.INTEREST -> movement.typeStr
+            TradeType.OTHER -> movement.remarkText.ifBlank { movement.typeStr }
             else -> movement.typeStr
         }
         val refPrefix = when (tradeType) {
-            TradeType.DIVIDEND -> if (movement.typeStr.contains("活动礼包") || movement.remarkText.contains("现金奖励")) "GIFT" else "DIV"
+            TradeType.DIVIDEND -> "DIV"
             TradeType.TAX -> "TAX"
             TradeType.INTEREST -> "INT"
+            TradeType.FX_CONVERSION -> "FX"
+            TradeType.OTHER -> "OTH"
             TradeType.DEPOSIT -> "DEP"
             TradeType.WITHDRAW -> "WTH"
             else -> "CASH"
@@ -875,14 +1119,19 @@ object LongBridgeStatementPdfParser {
         return isDividendType(typeStr, remarkText) ||
             isInterestType(typeStr) ||
             isTaxType(typeStr, remarkText) ||
+            isOtherCashType(typeStr, remarkText) ||
+            isFxConversionType(typeStr) ||
             isDepositType(typeStr) ||
             isWithdrawType(typeStr)
     }
 
     private fun isDividendType(typeStr: String, remarkText: String): Boolean {
         return typeStr.contains("现金分红") ||
-            typeStr.contains("代收股息") ||
-            typeStr.contains("活动礼包") ||
+            typeStr.contains("代收股息")
+    }
+
+    private fun isOtherCashType(typeStr: String, remarkText: String): Boolean {
+        return typeStr.contains("活动礼包") ||
             typeStr.contains("现金奖励") ||
             remarkText.contains("现金奖励")
     }
@@ -903,45 +1152,53 @@ object LongBridgeStatementPdfParser {
 
     private fun isDepositType(typeStr: String): Boolean {
         return typeStr.contains("存入资金") ||
-            typeStr.contains("入金") ||
-            typeStr.contains("货币兑换入账")
+            (typeStr.contains("入金") && !isFxConversionType(typeStr))
     }
 
     private fun isWithdrawType(typeStr: String): Boolean {
         return typeStr.contains("提取资金") ||
-            typeStr.contains("出金") ||
-            typeStr.contains("货币兑换出账")
+            (typeStr.contains("出金") && !isFxConversionType(typeStr))
     }
 
-    private fun isBareFundingType(typeStr: String): Boolean {
-        return (typeStr.contains("存入资金") || typeStr.contains("入金") || typeStr.contains("提取资金") || typeStr.contains("出金")) &&
-            !typeStr.contains("货币兑换")
+    private fun isFxConversionType(typeStr: String): Boolean {
+        return typeStr.contains("货币兑换") || typeStr.contains("貨幣兌換")
     }
 
     private fun inferCashMovementContext(
         typeStr: String,
         remarkText: String,
-        fallback: CashContext
-    ): CashContext {
-        val fxMatch = Regex("""\b(USD|HKD|CNY)\b.*?(?:换汇至|換匯至|至|to)\s*(USD|HKD|CNY)\b""", RegexOption.IGNORE_CASE)
-            .find(remarkText)
-        if (fxMatch != null) {
-            val fromCurrency = fxMatch.groupValues[1].uppercase()
-            val toCurrency = fxMatch.groupValues[2].uppercase()
-            val currency = if (isWithdrawType(typeStr)) fromCurrency else if (isDepositType(typeStr)) toCurrency else fallback.currencyCode
+        fallback: CashContext?
+    ): CashContext? {
+        val fxDetails = extractFxConversionDetails(remarkText)
+        if (fxDetails != null) {
+            val currency = if (typeStr.contains("出账") || typeStr.contains("出賬")) {
+                fxDetails.fromCurrency
+            } else {
+                fxDetails.toCurrency
+            }
             return cashContextFromCurrency(currency)
         }
         return fallback
     }
 
     private fun cashContextFromHeaderLine(line: String): CashContext? {
-        if (!line.contains("币种") && !line.contains("市场:")) return null
+        val compact = line.trim().uppercase()
+        val isStandaloneCurrency = compact in setOf("港元", "HKD", "美元", "USD", "人民币", "CNY")
+        val leadingCurrency = Regex("""^(港元|HKD|美元|USD|人民币|CNY)(?:\s|$)""", RegexOption.IGNORE_CASE)
+            .find(line.trim())
+            ?.groupValues
+            ?.get(1)
+            ?.uppercase()
+        if (!line.contains("币种") && !line.contains("市場") && !line.contains("市场:") && !isStandaloneCurrency && leadingCurrency == null) return null
         return when {
-            line.contains("港市场") || line.contains("香港市场") || line.contains("港元") || line.contains("HKD", ignoreCase = true) ->
+            leadingCurrency == "港元" || leadingCurrency == "HKD" ||
+                line.contains("港市场") || line.contains("香港市场") || line.contains("港元") || line.contains("HKD", ignoreCase = true) ->
                 CashContext(Market.HK, "HKD")
-            line.contains("美国市场") || line.contains("美元") || line.contains("USD", ignoreCase = true) ->
+            leadingCurrency == "美元" || leadingCurrency == "USD" ||
+                line.contains("美国市场") || line.contains("美元") || line.contains("USD", ignoreCase = true) ->
                 CashContext(Market.US, "USD")
-            line.contains("人民币") || line.contains("CNY", ignoreCase = true) ->
+            leadingCurrency == "人民币" || leadingCurrency == "CNY" ||
+                line.contains("人民币") || line.contains("CNY", ignoreCase = true) ->
                 CashContext(Market.CASH, "CNY")
             else -> null
         }

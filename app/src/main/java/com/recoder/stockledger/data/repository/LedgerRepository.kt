@@ -102,6 +102,11 @@ data class TradeDraftInput(
     val expiryDate: String? = null,
     val strikePrice: Double? = null,
     val optionType: String? = null,
+    val fxFromCurrency: String? = null,
+    val fxFromAmount: Double? = null,
+    val fxToCurrency: String? = null,
+    val fxToAmount: Double? = null,
+    val fxRate: Double? = null,
 )
 
 data class ImportedBackup(
@@ -472,6 +477,11 @@ class DefaultLedgerRepository(
                 expiryDate = input.expiryDate,
                 strikePrice = input.strikePrice,
                 optionType = input.optionType,
+                fxFromCurrency = input.fxFromCurrency,
+                fxFromAmount = input.fxFromAmount,
+                fxToCurrency = input.fxToCurrency,
+                fxToAmount = input.fxToAmount,
+                fxRate = input.fxRate,
             ),
         )
     }
@@ -512,6 +522,11 @@ class DefaultLedgerRepository(
             expiryDate = input.expiryDate,
             strikePrice = input.strikePrice,
             optionType = input.optionType,
+            fxFromCurrency = input.fxFromCurrency,
+            fxFromAmount = input.fxFromAmount,
+            fxToCurrency = input.fxToCurrency,
+            fxToAmount = input.fxToAmount,
+            fxRate = input.fxRate,
         )
         dao.updateTransaction(entity)
 
@@ -662,6 +677,11 @@ class DefaultLedgerRepository(
                             put("expiryDate", transaction.expiryDate)
                             put("strikePrice", transaction.strikePrice)
                             put("optionType", transaction.optionType)
+                            put("fxFromCurrency", transaction.fxFromCurrency)
+                            put("fxFromAmount", transaction.fxFromAmount)
+                            put("fxToCurrency", transaction.fxToCurrency)
+                            put("fxToAmount", transaction.fxToAmount)
+                            put("fxRate", transaction.fxRate)
                         },
                     )
                 }
@@ -741,6 +761,11 @@ class DefaultLedgerRepository(
                         expiryDate = item.optString("expiryDate").takeIf { it.isNotBlank() },
                         strikePrice = if (item.has("strikePrice") && !item.isNull("strikePrice")) item.optDouble("strikePrice") else null,
                         optionType = item.optString("optionType").takeIf { it.isNotBlank() },
+                        fxFromCurrency = item.optString("fxFromCurrency").takeIf { it.isNotBlank() && it != "null" },
+                        fxFromAmount = if (item.has("fxFromAmount") && !item.isNull("fxFromAmount")) item.optDouble("fxFromAmount") else null,
+                        fxToCurrency = item.optString("fxToCurrency").takeIf { it.isNotBlank() && it != "null" },
+                        fxToAmount = if (item.has("fxToAmount") && !item.isNull("fxToAmount")) item.optDouble("fxToAmount") else null,
+                        fxRate = if (item.has("fxRate") && !item.isNull("fxRate")) item.optDouble("fxRate") else null,
                     ),
                 )
             }
@@ -1148,6 +1173,11 @@ class DefaultLedgerRepository(
                     expiryDate = finalParsed.expiryDate,
                     strikePrice = finalParsed.strikePrice,
                     optionType = finalParsed.optionType,
+                    fxFromCurrency = finalParsed.fxFromCurrency,
+                    fxFromAmount = finalParsed.fxFromAmount,
+                    fxToCurrency = finalParsed.fxToCurrency,
+                    fxToAmount = finalParsed.fxToAmount,
+                    fxRate = finalParsed.fxRate,
                 ),
             )
             results.add(
@@ -1345,6 +1375,11 @@ class DefaultLedgerRepository(
                     expiryDate = finalParsed.expiryDate,
                     strikePrice = finalParsed.strikePrice,
                     optionType = finalParsed.optionType,
+                    fxFromCurrency = finalParsed.fxFromCurrency,
+                    fxFromAmount = finalParsed.fxFromAmount,
+                    fxToCurrency = finalParsed.fxToCurrency,
+                    fxToAmount = finalParsed.fxToAmount,
+                    fxRate = finalParsed.fxRate,
                 ),
             )
             results.add(

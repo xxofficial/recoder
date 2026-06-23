@@ -1917,6 +1917,7 @@ fun TradeEntryRoute(
                         label = when (state.selectedType) {
                             TradeType.DEPOSIT -> "入金金额 ($cashCurrencyCode)"
                             TradeType.INTEREST -> "利息金额 ($cashCurrencyCode)"
+                            TradeType.OTHER -> "其他金额 ($cashCurrencyCode)"
                             else -> "出金金额 ($cashCurrencyCode)"
                         },
                         value = priceState.textFieldValue,
@@ -1994,6 +1995,8 @@ fun TradeEntryRoute(
                             TradeType.EXPIRE -> "确认过期失效"
                             TradeType.DIVIDEND -> "确认分红"
                             TradeType.TAX -> "确认税费支出"
+                            TradeType.FX_CONVERSION -> "确认货币兑换"
+                            TradeType.OTHER -> "确认其他收入"
                         }
                     },
                     onClick = onSubmit,
