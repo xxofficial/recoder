@@ -2,6 +2,11 @@ package com.recoder.stockledger.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -98,6 +103,18 @@ internal fun buildStockDetailRoute(
     }
 }
 
+private fun canRequestPackageInstalls(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+        context.packageManager.canRequestPackageInstalls()
+
+private fun openApkInstaller(context: Context, apkUri: Uri) {
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(apkUri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(intent)
+}
+
 private object Routes {
     const val Holdings = "holdings"
     const val Analysis = "analysis"
@@ -137,6 +154,7 @@ fun StockLedgerApp(
             .ledgerViewModelFactory,
     ),
 ) {
+    val context = LocalContext.current
     val navController = rememberNavController()
     val uiState by ledgerViewModel.uiState.collectAsStateWithLifecycle()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
@@ -154,6 +172,15 @@ fun StockLedgerApp(
     var showTransferDialog by remember { mutableStateOf(false) }
     var selectedLedgerIdsForExport by remember { mutableStateOf(emptySet<Long>()) }
     var selectedPlatformsForExport by remember { mutableStateOf(emptySet<String>()) }
+    var pendingUpdateInstallUri by remember { mutableStateOf<Uri?>(null) }
+
+    val unknownSourcesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val uri = pendingUpdateInstallUri
+        if (uri != null && canRequestPackageInstalls(context)) {
+            pendingUpdateInstallUri = null
+            openApkInstaller(context, uri)
+        }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
@@ -177,6 +204,21 @@ fun StockLedgerApp(
         if (uris.isNotEmpty()) {
             pendingPdfImportPlatform?.let { platform ->
                 ledgerViewModel.importStatementPdfs(uris, platform)
+            }
+        }
+    }
+    LaunchedEffect(ledgerViewModel) {
+        ledgerViewModel.updateInstallRequests.collect { uri ->
+            if (canRequestPackageInstalls(context)) {
+                openApkInstaller(context, uri)
+            } else {
+                pendingUpdateInstallUri = uri
+                unknownSourcesLauncher.launch(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}"),
+                    ),
+                )
             }
         }
     }
@@ -565,6 +607,13 @@ fun StockLedgerApp(
                         onPdfImportModeChange = ledgerViewModel::updatePdfImportMode,
                         onTextImportModelChange = ledgerViewModel::updateTextImportModel,
                         onLlmApiBaseUrlChange = ledgerViewModel::updateLlmApiBaseUrl,
+                        appUpdate = uiState.appUpdate,
+                        onCheckAppUpdate = { ledgerViewModel.checkForAppUpdates(silent = false) },
+                        onDownloadAppUpdate = ledgerViewModel::downloadLatestUpdate,
+                        onInstallAppUpdate = ledgerViewModel::requestInstallDownloadedUpdate,
+                        onOpenReleasePage = { url ->
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        },
                         onPlatformClick = { coroutineScope.launch { drawerState.open() } },
                         onBackClick = { navController.popBackStack() },
                     )

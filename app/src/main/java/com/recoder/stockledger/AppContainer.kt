@@ -16,6 +16,7 @@ import com.recoder.stockledger.data.repository.StockLedgerRepository
 import com.recoder.stockledger.data.repository.TencentSinaQuoteDataSource
 import com.recoder.stockledger.data.settings.SharedPreferencesStockLedgerSettingsStore
 import com.recoder.stockledger.data.settings.StockLedgerSettingsStore
+import com.recoder.stockledger.data.update.AppUpdateRepository
 import com.recoder.stockledger.platform.BrokerPlatformRegistry
 import com.recoder.stockledger.ui.LedgerViewModel
 
@@ -87,11 +88,16 @@ class AppContainer(
         BrokerPlatformRegistry()
     }
 
+    val appUpdateRepository: AppUpdateRepository by lazy {
+        AppUpdateRepository(applicationContext)
+    }
+
     val ledgerViewModelFactory: LedgerViewModel.Factory by lazy {
         LedgerViewModel.Factory(
             application = application,
             repository = repository,
             settingsStore = settingsStore,
+            appUpdateRepository = appUpdateRepository,
         )
     }
 }

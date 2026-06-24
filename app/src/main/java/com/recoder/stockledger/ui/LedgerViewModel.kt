@@ -2,6 +2,7 @@ package com.recoder.stockledger.ui
 
 import android.app.Application
 import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -55,6 +56,8 @@ import com.recoder.stockledger.data.repository.SecurityLookupResult
 import com.recoder.stockledger.data.repository.StockLedgerRepository
 import com.recoder.stockledger.data.repository.TradeDraftInput
 import com.recoder.stockledger.data.settings.StockLedgerSettingsStore
+import com.recoder.stockledger.data.update.AppUpdateRepository
+import com.recoder.stockledger.data.update.AppUpdateUiState
 import com.recoder.stockledger.domain.market.MarketTradingSessions
 import com.recoder.stockledger.domain.portfolio.PortfolioCalculator
 import com.recoder.stockledger.domain.portfolio.PortfolioQuote
@@ -65,6 +68,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -74,6 +79,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.math.BigDecimal
 import java.text.DecimalFormat
 import java.time.Instant
@@ -210,6 +216,7 @@ data class LedgerUiState(
     val splitsSyncStatusMessage: String? = null,
     val expiredOptions: List<HoldingUiModel> = emptyList(),
     val isClearingExpiredOptions: Boolean = false,
+    val appUpdate: AppUpdateUiState = AppUpdateUiState(),
 )
 
 data class PartnerContribution(
@@ -224,17 +231,20 @@ class LedgerViewModel(
     application: Application,
     private val repository: StockLedgerRepository,
     private val settingsStore: StockLedgerSettingsStore,
+    private val appUpdateRepository: AppUpdateRepository,
 ) : AndroidViewModel(application) {
     constructor(application: Application) : this(
         application = application,
         repository = (application as StockLedgerApplication).container.repository,
         settingsStore = application.container.settingsStore,
+        appUpdateRepository = application.container.appUpdateRepository,
     )
 
     class Factory(
         private val application: Application,
         private val repository: StockLedgerRepository,
         private val settingsStore: StockLedgerSettingsStore,
+        private val appUpdateRepository: AppUpdateRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -243,6 +253,7 @@ class LedgerViewModel(
                     application = application,
                     repository = repository,
                     settingsStore = settingsStore,
+                    appUpdateRepository = appUpdateRepository,
                 ) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
@@ -293,6 +304,14 @@ class LedgerViewModel(
     val selectedPartnerPerspective = MutableStateFlow<String?>(null)
     private val isSyncingSplits = MutableStateFlow(false)
     private val splitsSyncStatusMessage = MutableStateFlow<String?>(null)
+    private val appUpdateState = MutableStateFlow(
+        AppUpdateUiState(
+            currentVersionName = appUpdateRepository.currentVersionName(),
+            statusMessage = "可检查 GitHub 最新版本",
+        ),
+    )
+    private val _updateInstallRequests = MutableSharedFlow<Uri>(extraBufferCapacity = 1)
+    val updateInstallRequests: SharedFlow<Uri> = _updateInstallRequests
     
     val ledgers = repository.ledgers.stateIn(
         scope = viewModelScope,
@@ -778,6 +797,8 @@ class LedgerViewModel(
         state.copy(splitsSyncStatusMessage = message)
     }.combine(isClearingExpiredOptions) { state, clearing ->
         state.copy(isClearingExpiredOptions = clearing)
+    }.combine(appUpdateState) { state, update ->
+        state.copy(appUpdate = update)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -804,6 +825,136 @@ class LedgerViewModel(
                 refreshQuotes(trigger = RefreshTrigger.APP_OPEN)
             }
         }
+        checkForAppUpdates(silent = true)
+    }
+
+    fun checkForAppUpdates(silent: Boolean = false) {
+        if (appUpdateState.value.isChecking) return
+        viewModelScope.launch {
+            appUpdateState.update { state ->
+                state.copy(
+                    isChecking = true,
+                    statusMessage = if (silent) state.statusMessage else "正在检查 GitHub 最新版本...",
+                )
+            }
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    appUpdateRepository.checkLatestRelease()
+                }
+            }
+            appUpdateState.update { state ->
+                result.fold(
+                    onSuccess = { check ->
+                        val latest = check.latestUpdate
+                        when {
+                            latest == null -> state.copy(
+                                currentVersionName = check.currentVersionName,
+                                latestUpdate = null,
+                                hasUpdate = false,
+                                isChecking = false,
+                                downloadedApkPath = null,
+                                statusMessage = "没有找到可安装的 GitHub Release APK",
+                            )
+                            check.hasUpdate -> state.copy(
+                                currentVersionName = check.currentVersionName,
+                                latestUpdate = latest,
+                                hasUpdate = true,
+                                isChecking = false,
+                                downloadedApkPath = null,
+                                statusMessage = "发现新版本 ${latest.versionName}",
+                            )
+                            else -> state.copy(
+                                currentVersionName = check.currentVersionName,
+                                latestUpdate = latest,
+                                hasUpdate = false,
+                                isChecking = false,
+                                downloadedApkPath = null,
+                                statusMessage = "当前已是最新版本",
+                            )
+                        }
+                    },
+                    onFailure = { error ->
+                        state.copy(
+                            isChecking = false,
+                            statusMessage = if (silent) {
+                                state.statusMessage
+                            } else {
+                                "检查更新失败：${error.message ?: "网络异常"}"
+                            },
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    fun downloadLatestUpdate() {
+        val latest = appUpdateState.value.latestUpdate ?: return
+        if (appUpdateState.value.isDownloading) return
+        viewModelScope.launch {
+            appUpdateState.update { state ->
+                state.copy(
+                    isDownloading = true,
+                    downloadProgressFraction = 0f,
+                    downloadedApkPath = null,
+                    statusMessage = "正在下载 ${latest.versionName}...",
+                )
+            }
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    appUpdateRepository.downloadApk(latest) { progress ->
+                        appUpdateState.update { state ->
+                            state.copy(downloadProgressFraction = progress)
+                        }
+                    }
+                }
+            }
+            result.fold(
+                onSuccess = { apk ->
+                    appUpdateState.update { state ->
+                        state.copy(
+                            isDownloading = false,
+                            downloadProgressFraction = 1f,
+                            downloadedApkPath = apk.absolutePath,
+                            statusMessage = "下载完成，准备安装",
+                        )
+                    }
+                    requestInstallDownloadedUpdate()
+                },
+                onFailure = { error ->
+                    appUpdateState.update { state ->
+                        state.copy(
+                            isDownloading = false,
+                            downloadProgressFraction = null,
+                            downloadedApkPath = null,
+                            statusMessage = "下载失败：${error.message ?: "网络异常"}",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun requestInstallDownloadedUpdate() {
+        val uri = downloadedUpdateUri() ?: run {
+            appUpdateState.update { state ->
+                state.copy(statusMessage = "安装文件不存在，请重新下载")
+            }
+            return
+        }
+        _updateInstallRequests.tryEmit(uri)
+    }
+
+    private fun downloadedUpdateUri(): Uri? {
+        val apkPath = appUpdateState.value.downloadedApkPath ?: return null
+        val apk = File(apkPath)
+        if (!apk.isFile) return null
+        val context = getApplication<Application>()
+        return FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            apk,
+        )
     }
 
     fun openTradeEntry(type: TradeType) {

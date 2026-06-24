@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,6 +34,7 @@ import com.recoder.stockledger.data.BrokerPlatform
 import com.recoder.stockledger.data.PlatformFeePlanUiModel
 import com.recoder.stockledger.data.ZhuoruiPromoConfig
 import com.recoder.stockledger.data.PdfImportMode
+import com.recoder.stockledger.data.update.AppUpdateUiState
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -55,11 +57,16 @@ fun SettingsRoute(
     pdfImportMode: PdfImportMode,
     textImportModel: String,
     llmApiBaseUrl: String,
+    appUpdate: AppUpdateUiState,
     onAlibabaBailianApiKeyChange: (String) -> Unit,
     onStatementPdfPasswordChange: (String) -> Unit,
     onPdfImportModeChange: (PdfImportMode) -> Unit,
     onTextImportModelChange: (String) -> Unit,
     onLlmApiBaseUrlChange: (String) -> Unit,
+    onCheckAppUpdate: () -> Unit,
+    onDownloadAppUpdate: () -> Unit,
+    onInstallAppUpdate: () -> Unit,
+    onOpenReleasePage: (String) -> Unit,
     onPlatformClick: () -> Unit,
     onBackClick: () -> Unit,
 ) {
@@ -83,6 +90,14 @@ fun SettingsRoute(
                     .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
+                AppUpdateSection(
+                    appUpdate = appUpdate,
+                    onCheckAppUpdate = onCheckAppUpdate,
+                    onDownloadAppUpdate = onDownloadAppUpdate,
+                    onInstallAppUpdate = onInstallAppUpdate,
+                    onOpenReleasePage = onOpenReleasePage,
+                )
+
                 // Fee plan section
                 selectedPlatformFeePlan?.let { feePlan ->
                     val selectedOption = feePlan.options.firstOrNull { it.isSelected } ?: feePlan.options.first()
@@ -320,6 +335,85 @@ fun SettingsRoute(
 }
 
 @Composable
+private fun AppUpdateSection(
+    appUpdate: AppUpdateUiState,
+    onCheckAppUpdate: () -> Unit,
+    onDownloadAppUpdate: () -> Unit,
+    onInstallAppUpdate: () -> Unit,
+    onOpenReleasePage: (String) -> Unit,
+) {
+    val latest = appUpdate.latestUpdate
+    val canStartAction = !appUpdate.isChecking && !appUpdate.isDownloading
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                color = SurfaceSecondary,
+                shape = RoundedCornerShape(16.dp),
+            )
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("应用更新", color = ForegroundPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            "当前版本：${appUpdate.currentVersionName.ifBlank { "--" }}",
+            color = ForegroundSecondary,
+            fontSize = 13.sp,
+        )
+        latest?.let { update ->
+            Text(
+                "GitHub 最新版本：${update.versionName} · ${update.assetName}",
+                color = if (appUpdate.hasUpdate) MarketUp else ForegroundMuted,
+                fontSize = 13.sp,
+                fontWeight = if (appUpdate.hasUpdate) FontWeight.Medium else FontWeight.Normal,
+            )
+        }
+        appUpdate.statusMessage?.let { message ->
+            Text(message, color = ForegroundMuted, fontSize = 12.sp)
+        }
+        appUpdate.downloadProgressFraction?.let { progress ->
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlineActionButton(
+                text = if (appUpdate.isChecking) "检查中" else "检查更新",
+                onClick = onCheckAppUpdate,
+                enabled = canStartAction,
+                modifier = Modifier.weight(1f),
+            )
+            if (appUpdate.hasUpdate || appUpdate.downloadedApkPath != null) {
+                FilledActionButton(
+                    text = when {
+                        appUpdate.isDownloading -> "下载中"
+                        appUpdate.downloadedApkPath != null -> "安装更新"
+                        else -> "下载并安装"
+                    },
+                    onClick = if (appUpdate.downloadedApkPath != null) onInstallAppUpdate else onDownloadAppUpdate,
+                    enabled = canStartAction,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        latest?.releaseUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            OutlineActionButton(
+                text = "查看发布页",
+                onClick = { onOpenReleasePage(url) },
+                enabled = canStartAction,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
 private fun ZhuoruiPromoDateField(
     label: String,
     value: String,
@@ -373,10 +467,15 @@ private fun SettingsRoutePreview() {
             statementPdfPassword = "",
             pdfImportMode = PdfImportMode.REGEX,
             textImportModel = "",
+            appUpdate = AppUpdateUiState(currentVersionName = "1.1.0", statusMessage = "可检查 GitHub 最新版本"),
             onAlibabaBailianApiKeyChange = {},
             onStatementPdfPasswordChange = {},
             onPdfImportModeChange = {},
             onTextImportModelChange = {},
+            onCheckAppUpdate = {},
+            onDownloadAppUpdate = {},
+            onInstallAppUpdate = {},
+            onOpenReleasePage = {},
             onPlatformClick = {},
             onBackClick = {},
             llmApiBaseUrl = "",
