@@ -174,6 +174,41 @@ class PortfolioCalculatorTest {
     }
 
     @Test
+    fun `calculate does not apply stock split to option position with same underlying`() {
+        val optionSymbol = "AAPL 260501C295"
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.BUY, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 10.0),
+                PortfolioTrade(
+                    tradeType = TradeType.BUY,
+                    market = Market.US,
+                    symbol = optionSymbol,
+                    name = "AAPL May 2026 295 Call",
+                    tradeDate = "2026-04-21",
+                    tradeTime = "22:30",
+                    price = 1.25,
+                    quantity = 1.0,
+                    commission = 0.0,
+                    tax = 0.0,
+                    createdAt = 2L,
+                    assetType = "OPTION",
+                    underlyingSymbol = "AAPL",
+                ),
+                trade(type = TradeType.SPLIT, market = Market.US, symbol = "AAPL", price = 2.0, quantity = 1.0, tradeDate = "2026-04-22"),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 1.0),
+        )
+
+        val stock = snapshot.positions.getValue("US:AAPL")
+        val option = snapshot.positions.getValue("US:$optionSymbol")
+        assertEquals(20.0, stock.quantity, 0.0001)
+        assertEquals(1.0, option.quantity, 0.0001)
+        assertEquals(1.25, option.averageCost, 0.0001)
+        assertEquals("AAPL", option.underlyingSymbol)
+    }
+
+    @Test
     fun `calculate handles US stock split timezone sorting`() {
         // Test that a US split on 2026-03-10 00:00:00 (which is the effective date of the split)
         // is sorted BEFORE a US trade on 2026-03-11 05:44 HKT (which gets shifted to 2026-03-10 effective date)

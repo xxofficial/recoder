@@ -56,6 +56,11 @@ import com.recoder.stockledger.data.repository.StockLedgerRepository
 import com.recoder.stockledger.data.repository.TradeDraftInput
 import com.recoder.stockledger.data.settings.StockLedgerSettingsStore
 import com.recoder.stockledger.domain.market.MarketTradingSessions
+import com.recoder.stockledger.domain.portfolio.PortfolioCalculator
+import com.recoder.stockledger.domain.portfolio.PortfolioQuote
+import com.recoder.stockledger.domain.portfolio.PortfolioSecurityRules
+import com.recoder.stockledger.domain.portfolio.toPortfolioQuote
+import com.recoder.stockledger.domain.portfolio.toPortfolioTrade
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -2649,8 +2654,11 @@ class LedgerViewModel(
         quotes: List<QuoteSnapshotEntity>,
     ): ProfitAnalysisUiModel {
         val securityMeta = transactions
-            .filter { (TradeType.valueOf(it.tradeType).isSecurityTrade || TradeType.valueOf(it.tradeType) == TradeType.DIVIDEND) && it.symbol.isNotBlank() && it.symbol != "CASH" }
-            .map { transaction ->
+            .mapNotNull { transaction ->
+                val tradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull() ?: return@mapNotNull null
+                if ((!tradeType.isSecurityTrade && tradeType != TradeType.DIVIDEND) || transaction.symbol.isBlank() || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
+                    return@mapNotNull null
+                }
                 val market = Market.fromString(transaction.market) ?: Market.CASH
                 val resolvedSymbol = attributionSymbol(
                     symbol = transaction.symbol,
@@ -2658,43 +2666,28 @@ class LedgerViewModel(
                     underlyingSymbol = transaction.underlyingSymbol,
                 )
                 val name = if (isOptionAsset(transaction.assetType, transaction.symbol)) {
-                    val stockTxn = transactions.firstOrNull { it.symbol == resolvedSymbol && it.assetType != "OPTION" }
+                    val stockTxn = transactions.firstOrNull { it.symbol == resolvedSymbol && !isOptionAsset(it.assetType, it.symbol) }
                     stockTxn?.name ?: resolvedSymbol
                 } else {
                     transaction.name
                 }
-                Triple(positionKey(resolvedSymbol, market), resolvedSymbol, name)
+                val key = PortfolioSecurityRules.positionKey(resolvedSymbol, market)
+                key to ResolvedSecurity(symbol = resolvedSymbol, name = name, market = market)
             }
             .distinctBy { it.first }
-            .associate { (key, resolvedSymbol, name) ->
-                val market = runCatching { Market.valueOf(key.substringBefore(":")) }.getOrNull() ?: Market.CASH
-                key to ResolvedSecurity(
-                    symbol = resolvedSymbol,
-                    name = name,
-                    market = market,
-                )
+            .toMap()
+
+        val datedTransactions = transactions
+            .sortedWith(compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }))
+            .mapNotNull { transaction ->
+                val market = Market.fromString(transaction.market) ?: Market.CASH
+                val tradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull() ?: return@mapNotNull null
+                val date = runCatching {
+                    PortfolioSecurityRules.effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market, tradeType)
+                }.getOrNull() ?: return@mapNotNull null
+                date to transaction
             }
-
-        if (historicalCloses.isEmpty()) {
-            return buildProfitAnalysisFromRealizedAndCurrent(
-                portfolio = portfolio,
-                transactions = transactions,
-                exchangeRates = exchangeRates,
-                quotes = quotes,
-                securityMeta = securityMeta,
-            )
-        }
-
-        val ordered = transactions.sortedWith(
-            compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }),
-        )
-        val datedTransactions = ordered.mapNotNull { transaction ->
-            val market = Market.fromString(transaction.market) ?: Market.CASH
-            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market, transaction.tradeType)
-            date to transaction
-        }
         val transactionMap = datedTransactions.groupBy({ it.first }, { it.second })
-        val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
         val historyByDate = historicalCloses
             .groupBy { it.date }
             .mapValues { (_, values) -> values.sortedBy { it.symbol } }
@@ -2708,362 +2701,60 @@ class LedgerViewModel(
             latestHistoryDate,
             realtimeDate,
         ).maxOrNull() ?: firstDate
-        val eventDates = (transactionMap.keys + historyByDate.keys + listOfNotNull(realtimeDate))
+        val eventDates = (transactionMap.keys + historyByDate.keys + realtimeDate)
             .filter { !it.isBefore(firstDate) && !it.isAfter(latestDate) }
             .sorted()
 
-        val positions = linkedMapOf<String, PositionComputation>()
-        val latestCloseByPosition = mutableMapOf<String, Double>()
-        var cashBalanceCny = 0.0
-        var totalDepositCny = 0.0
-        var totalWithdrawCny = 0.0
         val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
         val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
-        val previousSecurityProfit = mutableMapOf<String, Double>()
         val latestSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
         val previousSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
-        val appliedSplitEvents = mutableSetOf<String>()
+        val previousSecurityProfit = mutableMapOf<String, Double>()
+        val latestCloseByPosition = mutableMapOf<String, Double>()
+        val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
         var previousCumulativeProfit = 0.0
         var previousTotalAssets = 0.0
+        var previousNetInflow = 0.0
         var cumulativeNav = 1.0
         var hasPreviousPoint = false
+
         eventDates.forEach { cursor ->
-            var dailyNetFlowCny = 0.0
             transactionMap[cursor].orEmpty().forEach { transaction ->
                 val market = Market.fromString(transaction.market) ?: Market.CASH
-                when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
-                    TradeType.EXPIRE -> {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        val qtyDelta = transaction.quantity
-                        val nextQuantity = if (current.quantity > 0.0) {
-                            maxOf(0.0, current.quantity - qtyDelta)
-                        } else {
-                            minOf(0.0, current.quantity + qtyDelta)
-                        }
-                        val fraction = if (current.quantity == 0.0) 1.0 else {
-                            val closed = current.quantity - nextQuantity
-                            Math.abs(closed / current.quantity)
-                        }
-                        val closedCost = current.remainingCost * fraction
-                        val coverProfit = -closedCost
-                        
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = current.remainingCost - closedCost,
-                            averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
-                            realizedProfit = current.realizedProfit + coverProfit
-                        )
-                    }
-
-                    TradeType.DEPOSIT -> {
-                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                        val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                        if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                            cashBalanceCny += amountCny
-                            dailyNetFlowCny += amountCny
-                        } else {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key] ?: PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = 0.0,
-                                averageCost = 0.0,
-                                remainingCost = 0.0,
-                                realizedProfit = 0.0,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                            val nextQuantity = current.quantity + transaction.quantity
-                            val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity * mult)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                            )
-                            dailyNetFlowCny += amountCny
-                        }
-                        totalDepositCny += amountCny
-                    }
-
-                    TradeType.WITHDRAW -> {
-                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                        val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                        if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                            cashBalanceCny -= amountCny
-                            dailyNetFlowCny -= amountCny
-                        } else {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key]
-                            if (current != null) {
-                                val nextQuantity = current.quantity - transaction.quantity
-                                val nextRemaining = if (nextQuantity <= 0.0) 0.0 else current.remainingCost - (transaction.price * transaction.quantity * mult)
-                                positions[key] = current.copy(
-                                    quantity = nextQuantity,
-                                    remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity <= 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                )
-                            }
-                            dailyNetFlowCny -= amountCny
-                        }
-                        totalWithdrawCny += amountCny
-                    }
-
-                    TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT, TradeType.INTEREST -> {
-                        val sign = if (tradeType == TradeType.TRANSFER_IN) 1.0 else -1.0
-                        if (tradeType == TradeType.INTEREST) {
-                            val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
-                            cashBalanceCny -= amountCny
-                        } else {
-                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                            val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                            if (sign > 0.0) {
-                                totalDepositCny += amountCny
-                                dailyNetFlowCny += amountCny
-                            } else {
-                                totalWithdrawCny += amountCny
-                                dailyNetFlowCny -= amountCny
-                            }
-                            if (transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                                cashBalanceCny += (sign * amountCny)
-                            } else {
-                                val key = positionKey(transaction.symbol, market)
-                                val current = positions[key] ?: PositionComputation(
-                                    symbol = transaction.symbol,
-                                    name = transaction.name,
-                                    market = market,
-                                    quantity = 0.0,
-                                    averageCost = 0.0,
-                                    remainingCost = 0.0,
-                                    realizedProfit = 0.0,
-                                    assetType = transaction.assetType,
-                                    underlyingSymbol = transaction.underlyingSymbol,
-                                )
-                                val nextQuantity = current.quantity + (sign * transaction.quantity)
-                                val nextRemaining = if (nextQuantity <= 0.0) 0.0 else current.remainingCost + (sign * (transaction.price * transaction.quantity * mult))
-                                positions[key] = current.copy(
-                                    quantity = nextQuantity,
-                                    remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity <= 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                )
-                            }
-                        }
-                    }
-
-                    TradeType.DIVIDEND -> {
-                        val netDividend = transaction.price * transaction.quantity - transaction.tax
-                        val amountCny = convertToCny(netDividend, market, exchangeRates)
-                        cashBalanceCny += amountCny
-                        if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key] ?: PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = 0.0,
-                                averageCost = 0.0,
-                                remainingCost = 0.0,
-                                realizedProfit = 0.0,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                            positions[key] = current.copy(
-                                realizedProfit = current.realizedProfit + netDividend
-                            )
-                        }
-                    }
-
-                    TradeType.TAX -> {
-                        val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
-                        cashBalanceCny -= amountCny
-                        if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key] ?: PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = 0.0,
-                                averageCost = 0.0,
-                                remainingCost = 0.0,
-                                realizedProfit = 0.0,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                            positions[key] = current.copy(
-                                realizedProfit = current.realizedProfit - (transaction.price * transaction.quantity)
-                            )
-                        }
-                    }
-
-                    TradeType.OTHER -> {
-                        val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
-                        cashBalanceCny += amountCny
-                    }
-
-                    TradeType.FX_CONVERSION -> Unit
-
-                    TradeType.SPLIT -> {
-                        if (registerSplitEvent(transaction, appliedSplitEvents)) {
-                            val key = positionKey(transaction.symbol, market)
-                            val current = positions[key]
-                            if (current != null && current.quantity != 0.0) {
-                                val nextQuantity = current.quantity * transaction.price
-                                val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                                positions[key] = current.copy(
-                                    quantity = nextQuantity,
-                                    averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
-                                )
-                            }
-                        }
-                    }
-
-                    TradeType.BUY, TradeType.SELL -> {
-                        tradeStatsByDate[cursor] = tradeStatsByDate
-                            .getOrDefault(cursor, DailyTradeStats())
-                            .plus(transaction, tradeType, market, exchangeRates)
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key]
-                            ?: PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = 0.0,
-                                averageCost = 0.0,
-                                remainingCost = 0.0,
-                                realizedProfit = 0.0,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                        if (tradeType == TradeType.BUY) {
-                            if (current.quantity < 0.0) {
-                                // Covering short position
-                                val coverQuantity = minOf(-current.quantity, transaction.quantity.toDouble())
-                                val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
-                                val coverFees = transaction.commission + transaction.tax
-                                val remainingBuyQty = transaction.quantity - coverQuantity
-                                val totalCost = transaction.price * transaction.quantity * mult + coverFees
-                                cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
-                                if (remainingBuyQty > 0.0) {
-                                    positions[key] = PositionComputation(
-                                        symbol = transaction.symbol,
-                                        name = transaction.name,
-                                        market = market,
-                                        quantity = remainingBuyQty,
-                                        remainingCost = transaction.price * remainingBuyQty * mult,
-                                        averageCost = transaction.price,
-                                        realizedProfit = current.realizedProfit + coverProfit - coverFees,
-                                        assetType = transaction.assetType,
-                                        underlyingSymbol = transaction.underlyingSymbol,
-                                    )
-                                } else {
-                                    val nextQuantity = current.quantity + transaction.quantity
-                                    val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost * (nextQuantity / current.quantity)
-                                    positions[key] = current.copy(
-                                        quantity = nextQuantity,
-                                        remainingCost = nextRemaining,
-                                        averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                        realizedProfit = current.realizedProfit + coverProfit - coverFees,
-                                    )
-                                }
-                            } else {
-                                val buyCost = transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax
-                                val nextQuantity = current.quantity + transaction.quantity
-                                val nextRemaining = current.remainingCost + buyCost
-                                cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
-                                positions[key] = current.copy(
-                                    quantity = nextQuantity,
-                                    remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                )
-                            }
-                        } else {
-                            // SELL
-                            if (current.quantity > 0.0) {
-                                val closeQuantity = minOf(current.quantity, transaction.quantity.toDouble())
-                                val removedCost = current.averageCost * closeQuantity * mult
-                                val closeProceeds = transaction.price * closeQuantity * mult
-                                val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
-                                val remainingSellQty = transaction.quantity - closeQuantity
-                                val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
-                                cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
-                                if (remainingSellQty > 0.0) {
-                                    positions[key] = PositionComputation(
-                                        symbol = transaction.symbol,
-                                        name = transaction.name,
-                                        market = market,
-                                        quantity = -remainingSellQty,
-                                        remainingCost = -(transaction.price * remainingSellQty * mult),
-                                        averageCost = transaction.price,
-                                        realizedProfit = current.realizedProfit + closeProfit,
-                                        assetType = transaction.assetType,
-                                        underlyingSymbol = transaction.underlyingSymbol,
-                                    )
-                                } else {
-                                    val nextQuantity = current.quantity - closeQuantity
-                                    val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
-                                    positions[key] = current.copy(
-                                        quantity = nextQuantity,
-                                        remainingCost = nextRemaining,
-                                        averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                        realizedProfit = current.realizedProfit + closeProfit,
-                                    )
-                                }
-                            } else {
-                                val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
-                                cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
-                                val nextQuantity = current.quantity - transaction.quantity
-                                val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity * mult)
-                                positions[key] = current.copy(
-                                    quantity = nextQuantity,
-                                    remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                )
-                            }
-                        }
-                    }
-                }
+                val tradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull() ?: return@forEach
+                tradeStatsByDate[cursor] = tradeStatsByDate
+                    .getOrDefault(cursor, DailyTradeStats())
+                    .plus(transaction, tradeType, market, exchangeRates)
             }
-
             historyByDate[cursor].orEmpty().forEach { closePoint ->
-                latestCloseByPosition[positionKey(closePoint.symbol, closePoint.market)] = closePoint.closePrice
+                latestCloseByPosition[PortfolioSecurityRules.positionKey(closePoint.symbol, closePoint.market)] = closePoint.closePrice
             }
             if (cursor == realtimeDate) {
                 quotes.forEach { quote ->
                     val market = Market.fromString(quote.market) ?: return@forEach
                     val currentPrice = quote.currentPrice ?: return@forEach
-                    latestCloseByPosition[positionKey(quote.symbol, market)] = currentPrice
+                    latestCloseByPosition[PortfolioSecurityRules.positionKey(quote.symbol, market)] = currentPrice
                 }
             }
 
-            val holdingsValueCny = positions.values.sumOf { position ->
-                if (position.quantity == 0.0) return@sumOf 0.0
-                val key = positionKey(position.symbol, position.market)
-                val closePrice = latestCloseByPosition[key] ?: position.averageCost
-                val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
-                convertToCny(closePrice * position.quantity * mult, position.market, exchangeRates)
+            val quoteSlice = latestCloseByPosition.mapNotNull { (key, closePrice) ->
+                val market = runCatching { Market.valueOf(key.substringBefore(":")) }.getOrNull() ?: return@mapNotNull null
+                val symbol = key.substringAfter(":")
+                PortfolioQuote(symbol = symbol, market = market, currentPrice = closePrice, previousClose = null)
             }
-            val netInflowCny = totalDepositCny - totalWithdrawCny
-            val totalAssetsCny = holdingsValueCny + cashBalanceCny
-            val cumulativeProfit = totalAssetsCny - netInflowCny
-            val dailyProfit = if (hasPreviousPoint) {
-                cumulativeProfit - previousCumulativeProfit
-            } else {
-                cumulativeProfit
-            }
+            val cutoffTransactions = datedTransactions
+                .filter { (date, _) -> !date.isAfter(cursor) }
+                .map { it.second.toPortfolioTrade() }
+            val snapshot = PortfolioCalculator().calculate(
+                transactions = cutoffTransactions,
+                quotes = quoteSlice,
+                exchangeRates = exchangeRates,
+            )
+            val cumulativeProfit = snapshot.totalAssetsCny - snapshot.netInflowCny
+            val dailyProfit = if (hasPreviousPoint) cumulativeProfit - previousCumulativeProfit else cumulativeProfit
+            val dailyNetFlowCny = snapshot.netInflowCny - previousNetInflow
             val dailyReturnPercent = if (hasPreviousPoint && previousTotalAssets > 0.0) {
-                (((totalAssetsCny - dailyNetFlowCny - previousTotalAssets) / previousTotalAssets) * 100.0).coerceIn(-100.0, 10000.0)
+                (((snapshot.totalAssetsCny - dailyNetFlowCny - previousTotalAssets) / previousTotalAssets) * 100.0).coerceIn(-100.0, 10000.0)
             } else {
                 0.0
             }
@@ -3077,8 +2768,8 @@ class LedgerViewModel(
                 date = cursor,
                 dailyProfitCny = dailyProfit,
                 cumulativeProfitCny = cumulativeProfit,
-                totalAssetsCny = totalAssetsCny,
-                netInflowCny = netInflowCny,
+                totalAssetsCny = snapshot.totalAssetsCny,
+                netInflowCny = snapshot.netInflowCny,
                 dailyReturnPercent = dailyReturnPercent,
                 cumulativeReturnPercent = (cumulativeNav - 1.0) * 100.0,
                 dailySecurityTradeCount = tradeStats.securityTradeCount,
@@ -3087,64 +2778,48 @@ class LedgerViewModel(
                 dailyCommissionCny = tradeStats.commissionCny,
                 dailyTaxCny = tradeStats.taxCny,
             )
+
+            val breakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
+            snapshot.positions.values.forEach { position ->
+                val key = attributionKey(position.symbol, position.market, position.assetType, position.underlyingSymbol)
+                val positionKey = PortfolioSecurityRules.positionKey(position.symbol, position.market)
+                val closePrice = latestCloseByPosition[positionKey] ?: position.averageCost
+                val mult = optionMultiplier(position.assetType, position.symbol)
+                val realizedCny = convertToCny(position.realizedProfit, position.market, exchangeRates)
+                val unrealizedCny = if (position.quantity == 0.0) {
+                    0.0
+                } else {
+                    convertToCny((closePrice - position.averageCost) * position.quantity * mult, position.market, exchangeRates)
+                }
+                val amountCny = realizedCny + unrealizedCny
+                breakdowns[key] = breakdowns
+                    .getOrDefault(key, SecurityProfitBreakdown())
+                    .plus(amountCny, isOptionAsset(position.assetType, position.symbol))
+            }
+
             securityMeta.forEach { (key, security) ->
-                val associatedPositions = positions.values.filter { position ->
-                    position.market == security.market && (
-                        position.symbol == security.symbol ||
-                            attributionSymbol(position.symbol, position.assetType, position.underlyingSymbol) == security.symbol
-                    )
-                }
-                var realizedCny = 0.0
-                var unrealizedCny = 0.0
-                var securityBreakdown = SecurityProfitBreakdown()
-                associatedPositions.forEach { position ->
-                    val posKey = positionKey(position.symbol, position.market)
-                    val positionRealizedCny = convertToCny(position.realizedProfit, position.market, exchangeRates)
-                    realizedCny += positionRealizedCny
-                    val mult = optionMultiplier(position.assetType, position.symbol)
-                    var positionUnrealizedCny = 0.0
-                    if (position.quantity != 0.0) {
-                        val closePrice = latestCloseByPosition[posKey] ?: position.averageCost
-                        positionUnrealizedCny = convertToCny((closePrice - position.averageCost) * position.quantity * mult, position.market, exchangeRates)
-                        unrealizedCny += positionUnrealizedCny
-                    }
-                    val amountCny = positionRealizedCny + positionUnrealizedCny
-                    securityBreakdown = securityBreakdown.plus(
-                        amountCny = amountCny,
-                        isDerivative = isOptionAsset(position.assetType, position.symbol),
-                    )
-                }
-                latestSecurityBreakdowns[key] = securityBreakdown
-                val cumulativeSecurityProfit = realizedCny + unrealizedCny
+                val breakdown = breakdowns[key] ?: SecurityProfitBreakdown()
+                latestSecurityBreakdowns[key] = breakdown
+                val cumulativeSecurityProfit = breakdown.totalProfitCny
                 val previousSecurityCumulative = previousSecurityProfit[key] ?: 0.0
                 val previousBreakdown = previousSecurityBreakdowns[key] ?: SecurityProfitBreakdown()
                 securitySeries.getValue(key) += SecurityProfitPointUiModel(
                     date = cursor,
-                    dailyProfitCny = if (hasPreviousPoint) {
-                        cumulativeSecurityProfit - previousSecurityCumulative
-                    } else {
-                        cumulativeSecurityProfit
-                    },
+                    dailyProfitCny = if (hasPreviousPoint) cumulativeSecurityProfit - previousSecurityCumulative else cumulativeSecurityProfit,
                     cumulativeProfitCny = cumulativeSecurityProfit,
                     closePrice = latestCloseByPosition[key],
-                    dailyStockProfitCny = if (hasPreviousPoint) {
-                        securityBreakdown.stockProfitCny - previousBreakdown.stockProfitCny
-                    } else {
-                        securityBreakdown.stockProfitCny
-                    },
-                    dailyDerivativeProfitCny = if (hasPreviousPoint) {
-                        securityBreakdown.derivativeProfitCny - previousBreakdown.derivativeProfitCny
-                    } else {
-                        securityBreakdown.derivativeProfitCny
-                    },
-                    cumulativeStockProfitCny = securityBreakdown.stockProfitCny,
-                    cumulativeDerivativeProfitCny = securityBreakdown.derivativeProfitCny,
+                    dailyStockProfitCny = if (hasPreviousPoint) breakdown.stockProfitCny - previousBreakdown.stockProfitCny else breakdown.stockProfitCny,
+                    dailyDerivativeProfitCny = if (hasPreviousPoint) breakdown.derivativeProfitCny - previousBreakdown.derivativeProfitCny else breakdown.derivativeProfitCny,
+                    cumulativeStockProfitCny = breakdown.stockProfitCny,
+                    cumulativeDerivativeProfitCny = breakdown.derivativeProfitCny,
                 )
                 previousSecurityProfit[key] = cumulativeSecurityProfit
-                previousSecurityBreakdowns[key] = securityBreakdown
+                previousSecurityBreakdowns[key] = breakdown
             }
+
             previousCumulativeProfit = cumulativeProfit
-            previousTotalAssets = totalAssetsCny
+            previousTotalAssets = snapshot.totalAssetsCny
+            previousNetInflow = snapshot.netInflowCny
             hasPreviousPoint = true
         }
 
@@ -3167,448 +2842,7 @@ class LedgerViewModel(
                     totalProfitCny = breakdown.totalProfitCny,
                     stockProfitCny = breakdown.stockProfitCny,
                     derivativeProfitCny = breakdown.derivativeProfitCny,
-                )
-            },
-            netInflowCny = totalDepositCny - totalWithdrawCny,
-            latestDate = latestDate,
-            totalCommissionCny = portfolio.totalCommissionCny,
-            totalTaxCny = portfolio.totalTaxCny,
-            securityTradeCount = portfolio.securityTradeCount,
-            transactions = transactions,
-        )
-    }
-
-    private fun buildProfitAnalysisFromRealizedAndCurrent(
-        portfolio: PortfolioComputation,
-        transactions: List<TransactionEntity>,
-        exchangeRates: ExchangeRates,
-        quotes: List<QuoteSnapshotEntity>,
-        securityMeta: Map<String, ResolvedSecurity>,
-    ): ProfitAnalysisUiModel {
-        val ordered = transactions.sortedWith(
-            compareBy<TransactionEntity>({ it.tradeDate }, { it.tradeTime }, { it.createdAt }),
-        )
-        val positions = linkedMapOf<String, PositionComputation>()
-        val dailyProfitByDate = linkedMapOf<LocalDate, Double>()
-        val netFlowByDate = linkedMapOf<LocalDate, Double>()
-        val securityProfitByDate = mutableMapOf<String, MutableMap<LocalDate, SecurityProfitBreakdown>>()
-        val activityDates = linkedSetOf<LocalDate>()
-        val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
-        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
-        val appliedSplitEvents = mutableSetOf<String>()
-
-        ordered.forEach { transaction ->
-            val market = Market.fromString(transaction.market) ?: return@forEach
-            val key = positionKey(transaction.symbol, market)
-            val isDerivativeTransaction = isOptionAsset(transaction.assetType, transaction.symbol)
-            val effectiveKey = attributionKey(transaction.symbol, market, transaction.assetType, transaction.underlyingSymbol)
-            val date = effectiveTradeDate(transaction.tradeDate, transaction.tradeTime, market, transaction.tradeType)
-            activityDates += date
-            when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
-                TradeType.EXPIRE -> {
-                    val current = positions[key]
-                        ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                    val qtyDelta = transaction.quantity
-                    val nextQuantity = if (current.quantity > 0.0) {
-                        maxOf(0.0, current.quantity - qtyDelta)
-                    } else {
-                        minOf(0.0, current.quantity + qtyDelta)
-                    }
-                    val fraction = if (current.quantity == 0.0) 1.0 else {
-                        val closed = current.quantity - nextQuantity
-                        Math.abs(closed / current.quantity)
-                    }
-                    val closedCost = current.remainingCost * fraction
-                    val coverProfit = -closedCost
-                    val coverProfitCny = convertToCny(coverProfit, market, exchangeRates)
-                    
-                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
-                    addSecurityProfit(securityProfitByDate, effectiveKey, date, coverProfitCny, isDerivativeTransaction)
-                    
-                    positions[key] = current.copy(
-                        quantity = nextQuantity,
-                        remainingCost = current.remainingCost - closedCost,
-                        averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
-                        realizedProfit = current.realizedProfit + coverProfit
-                    )
-                }
-
-                TradeType.BUY -> {
-                    tradeStatsByDate[date] = tradeStatsByDate
-                        .getOrDefault(date, DailyTradeStats())
-                        .plus(transaction, tradeType, market, exchangeRates)
-                    val current = positions[key]
-                        ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    if (current.quantity < 0) {
-                        // Covering short position
-                        val coverQuantity = minOf(-current.quantity, transaction.quantity)
-                        val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
-                        val coverFees = transaction.commission + transaction.tax
-                        val coverProfitCny = convertToCny(coverProfit - coverFees, market, exchangeRates)
-                        dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + coverProfitCny
-                        addSecurityProfit(securityProfitByDate, effectiveKey, date, coverProfitCny, isDerivativeTransaction)
-                        val remainingBuyQty = transaction.quantity - coverQuantity
-                        if (remainingBuyQty > 0) {
-                            positions[key] = PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = remainingBuyQty,
-                                remainingCost = transaction.price * remainingBuyQty * mult,
-                                averageCost = transaction.price,
-                                realizedProfit = current.realizedProfit + coverProfit - coverFees,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                        } else {
-                            val nextQuantity = current.quantity + transaction.quantity
-                            val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost * (nextQuantity / current.quantity)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                realizedProfit = current.realizedProfit + coverProfit - coverFees,
-                            )
-                        }
-                    } else {
-                        val buyCost = transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax
-                        val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + buyCost
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                        )
-                    }
-                }
-
-                TradeType.SELL -> {
-                    tradeStatsByDate[date] = tradeStatsByDate
-                        .getOrDefault(date, DailyTradeStats())
-                        .plus(transaction, tradeType, market, exchangeRates)
-                    val current = positions[key]
-                        ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    if (current.quantity > 0) {
-                        // Has long position: sell to close, may open short
-                        val closeQuantity = minOf(current.quantity, transaction.quantity)
-                        val removedCost = current.averageCost * closeQuantity * mult
-                        val closeProceeds = transaction.price * closeQuantity * mult
-                        val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
-                        val closeProfitCny = convertToCny(closeProfit, market, exchangeRates)
-                        dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + closeProfitCny
-                        addSecurityProfit(securityProfitByDate, effectiveKey, date, closeProfitCny, isDerivativeTransaction)
-                        val remainingSellQty = transaction.quantity - closeQuantity
-                        if (remainingSellQty > 0) {
-                            positions[key] = PositionComputation(
-                                symbol = transaction.symbol,
-                                name = transaction.name,
-                                market = market,
-                                quantity = -remainingSellQty,
-                                remainingCost = -(transaction.price * remainingSellQty * mult),
-                                averageCost = transaction.price,
-                                realizedProfit = current.realizedProfit + closeProfit,
-                                assetType = transaction.assetType,
-                                underlyingSymbol = transaction.underlyingSymbol,
-                            )
-                        } else {
-                            val nextQuantity = current.quantity - closeQuantity
-                            val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                realizedProfit = current.realizedProfit + closeProfit,
-                            )
-                        }
-                    } else {
-                        // No long position: open/extend short, no realized profit yet
-                        val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
-                        val nextQuantity = current.quantity - transaction.quantity
-                        val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity * mult)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                        )
-                    }
-                }
-
-                TradeType.DEPOSIT -> {
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                    netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
-                    if (market != Market.CASH && transaction.symbol != CASH_ACCOUNT_SYMBOL) {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity * mult)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
-                        )
-                    }
-                }
-
-                TradeType.WITHDRAW -> {
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                    netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) - amountCny
-                    if (market != Market.CASH && transaction.symbol != CASH_ACCOUNT_SYMBOL) {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key]
-                        if (current != null) {
-                            val nextQuantity = current.quantity - transaction.quantity
-                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost - (transaction.price * transaction.quantity * mult)
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
-                            )
-                        }
-                    }
-                }
-
-                TradeType.TRANSFER_IN, TradeType.TRANSFER_OUT -> {
-                    val multiplier = if (tradeType == TradeType.TRANSFER_IN) 1 else -1
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * multiplier * mult, market, exchangeRates)
-                    netFlowByDate[date] = netFlowByDate.getOrDefault(date, 0.0) + amountCny
-                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL) {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        val nextQuantity = current.quantity + (transaction.quantity * multiplier)
-                        val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost + (transaction.price * transaction.quantity * multiplier * mult)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult),
-                        )
-                    }
-                }
-
-                TradeType.INTEREST, TradeType.TAX -> {
-                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
-                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) - amountCny
-                }
-
-                TradeType.DIVIDEND -> {
-                    val netDividend = transaction.price * transaction.quantity - transaction.tax
-                    val amountCny = convertToCny(netDividend, market, exchangeRates)
-                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + amountCny
-                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
-                        addSecurityProfit(securityProfitByDate, effectiveKey, date, amountCny, isDerivativeTransaction)
-                        
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        positions[key] = current.copy(
-                            realizedProfit = current.realizedProfit + netDividend
-                        )
-                    }
-                }
-
-                TradeType.OTHER -> {
-                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
-                    dailyProfitByDate[date] = dailyProfitByDate.getOrDefault(date, 0.0) + amountCny
-                }
-
-                TradeType.FX_CONVERSION -> Unit
-
-                TradeType.SPLIT -> {
-                    if (registerSplitEvent(transaction, appliedSplitEvents)) {
-                        val current = positions[key]
-                        if (current != null && !isAlmostZero(current.quantity)) {
-                            val nextQuantity = current.quantity * transaction.price
-                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        val realtimeDate = currentRealtimeTradeDate(portfolio, LocalDate.now())
-        activityDates += realtimeDate
-        positions.values.forEach { position ->
-            if (isAlmostZero(position.quantity)) return@forEach
-            val key = positionKey(position.symbol, position.market)
-            val currentPrice = quoteMap[key]?.currentPrice ?: position.averageCost
-            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
-            val unrealizedCny = convertToCny(
-                (currentPrice - position.averageCost) * position.quantity * mult,
-                position.market,
-                exchangeRates,
-            )
-            val effectiveKey = attributionKey(position.symbol, position.market, position.assetType, position.underlyingSymbol)
-            addSecurityProfit(
-                target = securityProfitByDate,
-                key = effectiveKey,
-                date = realtimeDate,
-                amountCny = unrealizedCny,
-                isDerivative = isOptionAsset(position.assetType, position.symbol),
-            )
-        }
-
-        val eventDates = (
-            activityDates +
-                dailyProfitByDate.keys +
-                netFlowByDate.keys +
-                securityProfitByDate.values.flatMap { it.keys } +
-                listOfNotNull(realtimeDate)
-            ).sorted()
-        val latestDate = eventDates.maxOrNull() ?: LocalDate.now()
-        val dailyPoints = mutableListOf<ProfitAnalysisPointUiModel>()
-        val securitySeries = securityMeta.mapValues { mutableListOf<SecurityProfitPointUiModel>() }.toMutableMap()
-        var cumulativeProfit = 0.0
-        var cumulativeNetInflow = 0.0
-        var previousTotalAssets = 0.0
-        var cumulativeNav = 1.0
-        var hasPreviousPoint = false
-        val cumulativeSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
-        eventDates.forEach { cursor ->
-            val dailyProfit = dailyProfitByDate.getOrDefault(cursor, 0.0)
-            val dailyNetFlow = netFlowByDate.getOrDefault(cursor, 0.0)
-            cumulativeProfit += dailyProfit
-            cumulativeNetInflow += dailyNetFlow
-            val totalAssetsCny = cumulativeNetInflow + cumulativeProfit
-            val dailyReturnPercent = if (hasPreviousPoint && previousTotalAssets > 0.0) {
-                (((totalAssetsCny - dailyNetFlow - previousTotalAssets) / previousTotalAssets) * 100.0).coerceIn(-100.0, 10000.0)
-            } else {
-                0.0
-            }
-            cumulativeNav = if (hasPreviousPoint) {
-                cumulativeNav * (1 + dailyReturnPercent / 100.0)
-            } else {
-                1.0
-            }
-            val tradeStats = tradeStatsByDate[cursor] ?: DailyTradeStats()
-            dailyPoints += ProfitAnalysisPointUiModel(
-                date = cursor,
-                dailyProfitCny = dailyProfit,
-                cumulativeProfitCny = cumulativeProfit,
-                totalAssetsCny = totalAssetsCny,
-                netInflowCny = cumulativeNetInflow,
-                dailyReturnPercent = dailyReturnPercent,
-                cumulativeReturnPercent = (cumulativeNav - 1.0) * 100.0,
-                dailySecurityTradeCount = tradeStats.securityTradeCount,
-                dailyBuyCount = tradeStats.buyCount,
-                dailySellCount = tradeStats.sellCount,
-                dailyCommissionCny = tradeStats.commissionCny,
-                dailyTaxCny = tradeStats.taxCny,
-            )
-            securityMeta.forEach { (key, security) ->
-                val seriesMap = securityProfitByDate[key].orEmpty()
-                val priorCumulative = securitySeries[key]?.lastOrNull()?.cumulativeProfitCny ?: 0.0
-                val priorCumulativeStock = securitySeries[key]?.lastOrNull()?.cumulativeStockProfitCny ?: 0.0
-                val priorCumulativeDerivative = securitySeries[key]?.lastOrNull()?.cumulativeDerivativeProfitCny ?: 0.0
-                val securityDailyBreakdown = seriesMap[cursor] ?: SecurityProfitBreakdown()
-                val currentBreakdown = cumulativeSecurityBreakdowns
-                    .getOrDefault(key, SecurityProfitBreakdown())
-                    .let { previous ->
-                        previous.copy(
-                            stockProfitCny = previous.stockProfitCny + securityDailyBreakdown.stockProfitCny,
-                            derivativeProfitCny = previous.derivativeProfitCny + securityDailyBreakdown.derivativeProfitCny,
-                        )
-                    }
-                cumulativeSecurityBreakdowns[key] = currentBreakdown
-                securitySeries.getValue(key) += SecurityProfitPointUiModel(
-                    date = cursor,
-                    dailyProfitCny = securityDailyBreakdown.totalProfitCny,
-                    cumulativeProfitCny = priorCumulative + securityDailyBreakdown.totalProfitCny,
-                    closePrice = null,
-                    dailyStockProfitCny = securityDailyBreakdown.stockProfitCny,
-                    dailyDerivativeProfitCny = securityDailyBreakdown.derivativeProfitCny,
-                    cumulativeStockProfitCny = priorCumulativeStock + securityDailyBreakdown.stockProfitCny,
-                    cumulativeDerivativeProfitCny = priorCumulativeDerivative + securityDailyBreakdown.derivativeProfitCny,
-                )
-            }
-            previousTotalAssets = totalAssetsCny
-            hasPreviousPoint = true
-        }
-
-        applyRealtimePoint(
-            dailyPoints = dailyPoints,
-            realtimeDate = realtimeDate,
-            portfolio = portfolio,
-            tradeStatsByDate = tradeStatsByDate,
-        )
-
-        return ProfitAnalysisUiModel(
-            dailyPoints = dailyPoints,
-            securityAnalyses = securityMeta.map { (key, security) ->
-                val breakdown = cumulativeSecurityBreakdowns[key] ?: SecurityProfitBreakdown()
-                SecurityProfitAnalysisUiModel(
-                    symbol = security.symbol,
-                    name = security.name,
-                    market = security.market,
-                    dailyPoints = securitySeries[key].orEmpty(),
-                    totalProfitCny = breakdown.totalProfitCny,
-                    stockProfitCny = breakdown.stockProfitCny,
-                    derivativeProfitCny = breakdown.derivativeProfitCny,
+                    returnRatePercent = if (portfolio.netInflowCny == 0.0) 0.0 else (breakdown.totalProfitCny / portfolio.netInflowCny) * 100.0,
                 )
             },
             netInflowCny = portfolio.netInflowCny,
@@ -3617,7 +2851,7 @@ class LedgerViewModel(
             totalTaxCny = portfolio.totalTaxCny,
             securityTradeCount = portfolio.securityTradeCount,
             transactions = transactions,
-            isHistoricalDataFallback = true,
+            isHistoricalDataFallback = historicalCloses.isEmpty(),
         )
     }
 
@@ -3685,355 +2919,35 @@ class LedgerViewModel(
         quotes: List<QuoteSnapshotEntity>,
         exchangeRates: ExchangeRates,
     ): PortfolioComputation {
-        val positions = linkedMapOf<String, PositionComputation>()
-        var cashBalanceCny = 0.0
-        var totalDepositCny = 0.0
-        var totalWithdrawCny = 0.0
-        var totalCommissionCny = 0.0
-        var totalTaxCny = 0.0
-        var securityTradeCount = 0
-        var buyTradeCount = 0
-        var sellTradeCount = 0
-        val appliedSplitEvents = mutableSetOf<String>()
-        val ordered = transactions.sortedWith(
-            compareBy<TransactionEntity>({
-                val m = Market.fromString(it.market) ?: Market.CASH
-                effectiveTradeDate(it.tradeDate, it.tradeTime, m, it.tradeType).toString()
-            }, { it.tradeTime }, { it.createdAt }),
+        val snapshot = PortfolioCalculator().calculate(
+            transactions = transactions.map { it.toPortfolioTrade() },
+            quotes = quotes.map { it.toPortfolioQuote() },
+            exchangeRates = exchangeRates,
         )
-
-        ordered.forEach { transaction ->
-            val market = Market.fromString(transaction.market) ?: Market.CASH
-            when (val tradeType = TradeType.valueOf(transaction.tradeType)) {
-                TradeType.EXPIRE -> {
-                    val key = positionKey(transaction.symbol, market)
-                    val current = positions[key]
-                        ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                    val qtyDelta = transaction.quantity
-                    val nextQuantity = if (current.quantity > 0.0) {
-                        maxOf(0.0, current.quantity - qtyDelta)
-                    } else {
-                        minOf(0.0, current.quantity + qtyDelta)
-                    }
-                    val fraction = if (current.quantity == 0.0) 1.0 else {
-                        val closed = current.quantity - nextQuantity
-                        Math.abs(closed / current.quantity)
-                    }
-                    val closedCost = current.remainingCost * fraction
-                    val coverProfit = -closedCost
-                    
-                    positions[key] = current.copy(
-                        quantity = nextQuantity,
-                        remainingCost = current.remainingCost - closedCost,
-                        averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0)),
-                        realizedProfit = current.realizedProfit + coverProfit
-                    )
-                }
-
-                TradeType.DEPOSIT -> {
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                    if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny += amountCny
-                    } else {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity * mult)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
-                        )
-                    }
-                    totalDepositCny += amountCny
-                }
-
-                TradeType.WITHDRAW -> {
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                    if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny -= amountCny
-                    } else {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key]
-                        if (current != null) {
-                            val nextQuantity = current.quantity - transaction.quantity
-                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
-                            )
-                        }
-                    }
-                    totalWithdrawCny += amountCny
-                }
-
-                TradeType.TRANSFER_OUT -> {
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                    if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny -= amountCny
-                    } else {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key]
-                        if (current != null) {
-                            val nextQuantity = current.quantity - transaction.quantity
-                            val nextRemaining = if (nextQuantity <= 0) 0.0 else current.remainingCost * (nextQuantity.toDouble() / current.quantity.toDouble())
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
-                            )
-                        }
-                    }
-                    totalWithdrawCny += amountCny
-                }
-
-                TradeType.TRANSFER_IN -> {
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    val amountCny = convertToCny(transaction.price * transaction.quantity * mult, market, exchangeRates)
-                    if (market == Market.CASH || transaction.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny += amountCny
-                    } else {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        val nextQuantity = current.quantity + transaction.quantity
-                        val nextRemaining = current.remainingCost + (transaction.price * transaction.quantity * mult)
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            remainingCost = nextRemaining,
-                            averageCost = if (nextQuantity <= 0) 0.0 else nextRemaining / (nextQuantity * mult)
-                        )
-                    }
-                    totalDepositCny += amountCny
-                }
-                TradeType.INTEREST -> {
-                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
-                    cashBalanceCny -= amountCny
-                }
-                TradeType.TAX -> {
-                    val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), market, exchangeRates)
-                    cashBalanceCny -= amountCny
-                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        positions[key] = current.copy(
-                            realizedProfit = current.realizedProfit - (transaction.price * transaction.quantity)
-                        )
-                    }
-                }
-                TradeType.DIVIDEND -> {
-                    val netDividend = transaction.price * transaction.quantity - transaction.tax
-                    val amountCny = convertToCny(netDividend, market, exchangeRates)
-                    cashBalanceCny += amountCny
-                    if (transaction.symbol != CASH_ACCOUNT_SYMBOL && transaction.symbol != "CASH") {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key] ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-                        positions[key] = current.copy(
-                            realizedProfit = current.realizedProfit + netDividend
-                        )
-                    }
-                }
-
-                TradeType.OTHER -> {
-                    val amountCny = convertToCny(transaction.price * transaction.quantity, market, exchangeRates)
-                    cashBalanceCny += amountCny
-                }
-
-                TradeType.FX_CONVERSION -> Unit
-
-                TradeType.BUY, TradeType.SELL -> {
-                    totalCommissionCny += convertToCny(transaction.commission, market, exchangeRates)
-                    totalTaxCny += convertToCny(transaction.tax, market, exchangeRates)
-                    securityTradeCount += 1
-                    if (tradeType == TradeType.BUY) buyTradeCount++ else sellTradeCount++
-                    val key = positionKey(transaction.symbol, market)
-                    val current = positions[key]
-                        ?: PositionComputation(
-                            symbol = transaction.symbol,
-                            name = transaction.name,
-                            market = market,
-                            quantity = 0.0,
-                            averageCost = 0.0,
-                            remainingCost = 0.0,
-                            realizedProfit = 0.0,
-                            assetType = transaction.assetType,
-                            underlyingSymbol = transaction.underlyingSymbol,
-                        )
-
-                    val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                    positions[key] = if (tradeType == TradeType.BUY) {
-                        if (current.quantity < 0) {
-                            // Covering short position
-                            val coverQuantity = minOf(-current.quantity, transaction.quantity)
-                            val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
-                            val coverFees = transaction.commission + transaction.tax
-                            val remainingBuyQty = transaction.quantity - coverQuantity
-                            val totalCost = transaction.price * transaction.quantity * mult + coverFees
-                            cashBalanceCny -= convertToCny(totalCost, market, exchangeRates)
-                            if (remainingBuyQty > 0) {
-                                // Covered fully, opened long with remainder
-                                PositionComputation(
-                                    symbol = transaction.symbol,
-                                    name = transaction.name,
-                                    market = market,
-                                    quantity = remainingBuyQty,
-                                    remainingCost = transaction.price * remainingBuyQty * mult,
-                                    averageCost = transaction.price,
-                                    realizedProfit = current.realizedProfit + coverProfit - coverFees,
-                                    assetType = transaction.assetType,
-                                    underlyingSymbol = transaction.underlyingSymbol,
-                                )
-                            } else {
-                                // Partial or full cover, no new position
-                                val nextQuantity = current.quantity + transaction.quantity
-                                val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost * (nextQuantity / current.quantity)
-                                current.copy(
-                                    quantity = nextQuantity,
-                                    remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                    realizedProfit = current.realizedProfit + coverProfit - coverFees,
-                                )
-                            }
-                        } else {
-                            // Normal buy
-                            val buyCost = transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax
-                            val nextQuantity = current.quantity + transaction.quantity
-                            val nextRemaining = current.remainingCost + buyCost
-                            cashBalanceCny -= convertToCny(buyCost, market, exchangeRates)
-                            current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                            )
-                        }
-                    } else {
-                        // SELL
-                        if (current.quantity > 0) {
-                            // Has long position: sell to close, may open short if oversold
-                            val closeQuantity = minOf(current.quantity, transaction.quantity)
-                            val removedCost = current.averageCost * closeQuantity * mult
-                            val closeProceeds = transaction.price * closeQuantity * mult
-                            val closeProfit = closeProceeds - removedCost - transaction.commission - transaction.tax
-                            val remainingSellQty = transaction.quantity - closeQuantity
-                            val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
-                            cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
-                            if (remainingSellQty > 0) {
-                                // Closed long, opened short with remainder
-                                PositionComputation(
-                                    symbol = transaction.symbol,
-                                    name = transaction.name,
-                                    market = market,
-                                    quantity = -remainingSellQty,
-                                    remainingCost = -(transaction.price * remainingSellQty * mult),
-                                    averageCost = transaction.price,
-                                    realizedProfit = current.realizedProfit + closeProfit,
-                                    assetType = transaction.assetType,
-                                    underlyingSymbol = transaction.underlyingSymbol,
-                                )
-                            } else {
-                                // Partial or full close of long
-                                val nextQuantity = current.quantity - closeQuantity
-                                val nextRemaining = if (nextQuantity == 0.0) 0.0 else current.remainingCost - removedCost
-                                current.copy(
-                                    quantity = nextQuantity,
-                                    remainingCost = nextRemaining,
-                                    averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                                    realizedProfit = current.realizedProfit + closeProfit,
-                                )
-                            }
-                        } else {
-                            // No long position (quantity <= 0): open/extend short
-                            val totalProceeds = transaction.price * transaction.quantity * mult - transaction.commission - transaction.tax
-                            cashBalanceCny += convertToCny(totalProceeds, market, exchangeRates)
-                            val nextQuantity = current.quantity - transaction.quantity
-                            val nextRemaining = current.remainingCost - (transaction.price * transaction.quantity * mult)
-                            current.copy(
-                                quantity = nextQuantity,
-                                remainingCost = nextRemaining,
-                                averageCost = if (nextQuantity == 0.0) 0.0 else nextRemaining / (nextQuantity * mult),
-                            )
-                        }
-                    }
-                }
-                TradeType.SPLIT -> {
-                    if (registerSplitEvent(transaction, appliedSplitEvents)) {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key]
-                        if (current != null && !isAlmostZero(current.quantity)) {
-                            val nextQuantity = current.quantity * transaction.price
-                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
-                            )
-                        }
-                    }
-                }
-            }
+        val quoteMap = quotes.associateBy {
+            PortfolioSecurityRules.positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH)
         }
-
-        val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
-        val holdings = positions.values
+        val positions = snapshot.positions.mapValues { (_, position) ->
+            PositionComputation(
+                symbol = position.symbol,
+                name = position.name,
+                market = position.market,
+                quantity = position.quantity,
+                averageCost = position.averageCost,
+                remainingCost = position.remainingCost,
+                realizedProfit = position.realizedProfit,
+                assetType = position.assetType,
+                underlyingSymbol = position.underlyingSymbol,
+            )
+        }
+        val holdings = snapshot.positions.values
             .filter { !isAlmostZero(it.quantity) }
             .map { position ->
-                val quote = quoteMap[positionKey(position.symbol, position.market)]
+                val quote = quoteMap[PortfolioSecurityRules.positionKey(position.symbol, position.market)]
                 val currentPrice = quote?.currentPrice
                 val previousClose = quote?.previousClose
-                val isOpt = position.assetType == "OPTION" || isOptionSymbol(position.symbol)
-                val mult = if (isOpt) 100.0 else 1.0
+                val isOpt = PortfolioSecurityRules.isOptionAsset(position.assetType, position.symbol)
+                val mult = PortfolioSecurityRules.optionMultiplier(position.assetType, position.symbol)
                 val unrealized = currentPrice?.let { (it - position.averageCost) * position.quantity * mult }
                 val dayProfit = if (currentPrice != null && previousClose != null) {
                     (currentPrice - previousClose) * position.quantity * mult
@@ -4051,16 +2965,13 @@ class LedgerViewModel(
                     null
                 }
                 val marketValue = (currentPrice ?: position.averageCost) * position.quantity * mult
-
                 val unit = if (isOpt) "张" else "股"
-                val qtyVal = position.quantity
-                val formattedQty = formatQuantity(qtyVal)
 
                 HoldingUiModel(
                     name = position.name,
                     code = position.symbol,
                     market = position.market,
-                    quantityLabel = "$formattedQty $unit",
+                    quantityLabel = "${formatQuantity(position.quantity)} $unit",
                     costLabel = "成本 ${formatMarketAmount(position.averageCost, position.market)}",
                     priceLabel = currentPrice?.let { formatMarketAmount(it, position.market) } ?: "--",
                     changeLabel = dayPercent?.let(::formatSignedPercent) ?: "价格暂不可用",
@@ -4093,55 +3004,26 @@ class LedgerViewModel(
             }
             .sortedByDescending { it.second }
             .map { it.first }
-        val holdingsValueCny = positions.values.sumOf { position ->
-            val quote = quoteMap[positionKey(position.symbol, position.market)]
-            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
-            convertToCny(position.quantity * (quote?.currentPrice ?: position.averageCost) * mult, position.market, exchangeRates)
-        }
-        val holdingsCostCny = positions.values.sumOf { position ->
-            convertToCny(position.remainingCost, position.market, exchangeRates)
-        }
-        val unrealizedProfitCny = holdingsValueCny - holdingsCostCny
-        val dayProfitCny = positions.values.sumOf { position ->
-            val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
-            val current = quote.currentPrice ?: return@sumOf 0.0
-            val previous = quote.previousClose ?: return@sumOf 0.0
-            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
-            convertToCny((current - previous) * position.quantity * mult, position.market, exchangeRates)
-        }
-        val previousHoldingsValueCny = positions.values.sumOf { position ->
-            val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
-            val previous = quote.previousClose ?: return@sumOf 0.0
-            val mult = if (position.assetType == "OPTION" || isOptionSymbol(position.symbol)) 100.0 else 1.0
-            convertToCny(previous * position.quantity * mult, position.market, exchangeRates)
-        }
-        val netInflowCny = totalDepositCny - totalWithdrawCny
-        val totalAssetsCny = holdingsValueCny + cashBalanceCny
-        val previousAssetValueCny = previousHoldingsValueCny + cashBalanceCny
 
         return PortfolioComputation(
             holdings = holdings,
             positions = positions,
-            totalAssetsCny = totalAssetsCny,
-            holdingsValueCny = holdingsValueCny,
-            cashBalanceCny = cashBalanceCny,
-            totalDepositCny = totalDepositCny,
-            totalWithdrawCny = totalWithdrawCny,
-            netInflowCny = netInflowCny,
-            totalProfitCny = totalAssetsCny - netInflowCny,
-            unrealizedProfitCny = unrealizedProfitCny,
-            unrealizedProfitPercent = if (holdingsCostCny == 0.0) 0.0 else {
-                (unrealizedProfitCny / holdingsCostCny) * 100.0
-            },
-            dayProfitCny = dayProfitCny,
-            dayProfitPercent = if (previousAssetValueCny <= 0.0) 0.0 else {
-                ((dayProfitCny / previousAssetValueCny) * 100.0).coerceIn(-100.0, 10000.0)
-            },
-            totalCommissionCny = totalCommissionCny,
-            totalTaxCny = totalTaxCny,
-            securityTradeCount = securityTradeCount,
-            buyTradeCount = buyTradeCount,
-            sellTradeCount = sellTradeCount,
+            totalAssetsCny = snapshot.totalAssetsCny,
+            holdingsValueCny = snapshot.holdingsValueCny,
+            cashBalanceCny = snapshot.cashBalanceCny,
+            totalDepositCny = snapshot.totalDepositCny,
+            totalWithdrawCny = snapshot.totalWithdrawCny,
+            netInflowCny = snapshot.netInflowCny,
+            totalProfitCny = snapshot.totalAssetsCny - snapshot.netInflowCny,
+            unrealizedProfitCny = snapshot.unrealizedProfitCny,
+            unrealizedProfitPercent = snapshot.unrealizedProfitPercent,
+            dayProfitCny = snapshot.dayProfitCny,
+            dayProfitPercent = snapshot.dayProfitPercent.coerceIn(-100.0, 10000.0),
+            totalCommissionCny = snapshot.totalCommissionCny,
+            totalTaxCny = snapshot.totalTaxCny,
+            securityTradeCount = snapshot.securityTradeCount,
+            buyTradeCount = snapshot.buyTradeCount,
+            sellTradeCount = snapshot.sellTradeCount,
         )
     }
 
@@ -4149,20 +3031,16 @@ class LedgerViewModel(
         value * exchangeRates.rateToCny(market)
 
     private fun optionMultiplier(assetType: String?, symbol: String): Double =
-        if (isOptionAsset(assetType, symbol)) 100.0 else 1.0
+        PortfolioSecurityRules.optionMultiplier(assetType, symbol)
 
     private fun isOptionAsset(assetType: String?, symbol: String): Boolean =
-        assetType?.uppercase() == "OPTION" || isOptionSymbol(symbol)
+        PortfolioSecurityRules.isOptionAsset(assetType, symbol)
 
     private fun attributionSymbol(symbol: String, assetType: String?, underlyingSymbol: String?): String =
-        if (isOptionAsset(assetType, symbol)) {
-            underlyingSymbol?.takeIf { it.isNotBlank() } ?: symbol.substringBefore(" ").ifBlank { symbol }
-        } else {
-            symbol
-        }
+        PortfolioSecurityRules.attributionSymbol(symbol, assetType, underlyingSymbol)
 
     private fun attributionKey(symbol: String, market: Market, assetType: String?, underlyingSymbol: String?): String =
-        positionKey(attributionSymbol(symbol, assetType, underlyingSymbol), market)
+        PortfolioSecurityRules.attributionKey(symbol, market, assetType, underlyingSymbol)
 
     private fun addSecurityProfit(
         target: MutableMap<String, MutableMap<LocalDate, SecurityProfitBreakdown>>,
@@ -4313,15 +3191,13 @@ class LedgerViewModel(
         LocalDate.parse(value)
     }.getOrNull()
 
-    private fun effectiveTradeDate(tradeDate: String, tradeTime: String, market: Market, tradeType: String? = null): LocalDate {
-        val date = parseTradeDateOrNull(tradeDate) ?: LocalDate.parse(tradeDate)
-        if (tradeType == "SPLIT" || tradeType == TradeType.SPLIT.name) return date
-        return if (market == Market.US && tradeTime < US_TIMEZONE_CUTOFF) {
-            date.minusDays(1)
-        } else {
-            date
-        }
-    }
+    private fun effectiveTradeDate(tradeDate: String, tradeTime: String, market: Market, tradeType: String? = null): LocalDate =
+        PortfolioSecurityRules.effectiveTradeDate(
+            tradeDate = tradeDate,
+            tradeTime = tradeTime,
+            market = market,
+            tradeType = tradeType?.let { TradeType.valueOf(it) } ?: TradeType.BUY,
+        )
 
     private fun parseTradeTimeOrNull(value: String): LocalTime? = runCatching {
         LocalTime.parse(value.trim())
@@ -4466,7 +3342,8 @@ class LedgerViewModel(
         return cleaned.toDoubleOrNull() ?: 0.0
     }
 
-    private fun positionKey(symbol: String, market: Market): String = "${market.name}:$symbol"
+    private fun positionKey(symbol: String, market: Market): String =
+        PortfolioSecurityRules.positionKey(symbol, market)
 
     private fun resetDraftForType(
         type: TradeType,
@@ -5265,172 +4142,69 @@ private data class RefreshMeta(
         val partnerUnits = partnerNames.associateWith { 0.0 }.toMutableMap()
         val partnerNetContributions = partnerNames.associateWith { 0.0 }.toMutableMap()
         var totalUnits = 0.0
-
-        var cashBalanceCny = 0.0
-        val stockQuantities = mutableMapOf<String, Double>()
-        val stockPrices = mutableMapOf<String, Double>()
-        val appliedSplitEvents = mutableSetOf<String>()
-
-        quotes.forEach { quote ->
-            val market = Market.fromString(quote.market) ?: Market.CASH
-            val key = positionKey(quote.symbol, market)
-            val price = quote.currentPrice ?: 0.0
-            stockPrices[key] = price * exchangeRates.rateToCny(market)
-        }
+        val processedTransactions = mutableListOf<TransactionEntity>()
+        val portfolioQuotes = quotes.map { it.toPortfolioQuote() }
 
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({
-                val m = Market.fromString(it.market) ?: Market.CASH
-                effectiveTradeDate(it.tradeDate, it.tradeTime, m, it.tradeType).toString()
+                val market = Market.fromString(it.market) ?: Market.CASH
+                effectiveTradeDate(it.tradeDate, it.tradeTime, market, it.tradeType).toString()
             }, { it.tradeTime }, { it.createdAt }),
         )
 
         ordered.forEach { tx ->
             val market = Market.fromString(tx.market) ?: Market.CASH
-            val key = positionKey(tx.symbol, market)
-
-            when (runCatching { TradeType.valueOf(tx.tradeType) }.getOrNull()) {
-                TradeType.DEPOSIT -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
-                    val investor = tx.investorName?.trim()?.takeIf { it in partnerUnits } ?: partnerNames.first()
-
-                    val holdingsValueCny = stockQuantities.entries.sumOf { (k, qty) ->
-                        val price = stockPrices[k] ?: 0.0
-                        qty * price
-                    }
-                    val totalAssetValueBefore = cashBalanceCny + holdingsValueCny
-
-                    val unitPrice = if (totalUnits > 0.0 && totalAssetValueBefore > 0.0) {
-                        totalAssetValueBefore / totalUnits
-                    } else {
-                        1.0
-                    }
-
-                    val unitsIssued = amountCny / unitPrice
-                    partnerUnits[investor] = (partnerUnits[investor] ?: 0.0) + unitsIssued
-                    totalUnits += unitsIssued
-                    if (market == Market.CASH || tx.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny += amountCny
-                    } else {
-                        if (stockPrices[key] == null || stockPrices[key] == 0.0) {
-                            stockPrices[key] = convertToCny(tx.price, market, exchangeRates)
-                        }
-                        stockQuantities[key] = (stockQuantities[key] ?: 0.0) + tx.quantity
-                    }
+            val tradeType = runCatching { TradeType.valueOf(tx.tradeType) }.getOrNull()
+            if (tradeType == TradeType.DEPOSIT || tradeType == TradeType.WITHDRAW) {
+                val snapshotBefore = PortfolioCalculator().calculate(
+                    transactions = processedTransactions.map { it.toPortfolioTrade() },
+                    quotes = portfolioQuotes,
+                    exchangeRates = exchangeRates,
+                )
+                val totalAssetValueBefore = snapshotBefore.totalAssetsCny
+                val unitPrice = if (totalUnits > 0.0 && totalAssetValueBefore > 0.0) {
+                    totalAssetValueBefore / totalUnits
+                } else {
+                    1.0
+                }
+                val amountCny = convertToCny(
+                    tx.price * tx.quantity * optionMultiplier(tx.assetType, tx.symbol),
+                    market,
+                    exchangeRates,
+                )
+                val investor = tx.investorName?.trim()?.takeIf { it in partnerUnits } ?: partnerNames.first()
+                val units = amountCny / unitPrice
+                if (tradeType == TradeType.DEPOSIT) {
+                    partnerUnits[investor] = (partnerUnits[investor] ?: 0.0) + units
                     partnerNetContributions[investor] = (partnerNetContributions[investor] ?: 0.0) + amountCny
-                }
-                TradeType.WITHDRAW -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
-                    val investor = tx.investorName?.trim()?.takeIf { it in partnerUnits } ?: partnerNames.first()
-
-                    val holdingsValueCny = stockQuantities.entries.sumOf { (k, qty) ->
-                        val price = stockPrices[k] ?: 0.0
-                        qty * price
-                    }
-                    val totalAssetValueBefore = cashBalanceCny + holdingsValueCny
-
-                    val unitPrice = if (totalUnits > 0.0 && totalAssetValueBefore > 0.0) {
-                        totalAssetValueBefore / totalUnits
-                    } else {
-                        1.0
-                    }
-
-                    val unitsRedeemed = amountCny / unitPrice
-                    partnerUnits[investor] = (partnerUnits[investor] ?: 0.0) - unitsRedeemed
-                    totalUnits -= unitsRedeemed
-                    if (market == Market.CASH || tx.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny -= amountCny
-                    } else {
-                        stockQuantities[key] = (stockQuantities[key] ?: 0.0) - tx.quantity
-                    }
+                    totalUnits += units
+                } else {
+                    partnerUnits[investor] = (partnerUnits[investor] ?: 0.0) - units
                     partnerNetContributions[investor] = (partnerNetContributions[investor] ?: 0.0) - amountCny
+                    totalUnits -= units
                 }
-                TradeType.BUY -> {
-                    val txPriceCny = convertToCny(tx.price, market, exchangeRates)
-                    if (stockPrices[key] == null || stockPrices[key] == 0.0) {
-                        stockPrices[key] = txPriceCny
-                    }
-                    stockQuantities[key] = (stockQuantities[key] ?: 0.0) + tx.quantity
-                    val costCny = convertToCny(tx.price * tx.quantity + tx.commission + tx.tax, market, exchangeRates)
-                    cashBalanceCny -= costCny
-                }
-                TradeType.SELL -> {
-                    val txPriceCny = convertToCny(tx.price, market, exchangeRates)
-                    if (stockPrices[key] == null || stockPrices[key] == 0.0) {
-                        stockPrices[key] = txPriceCny
-                    }
-                    stockQuantities[key] = (stockQuantities[key] ?: 0.0) - tx.quantity
-                    val proceedsCny = convertToCny(tx.price * tx.quantity - tx.commission - tx.tax, market, exchangeRates)
-                    cashBalanceCny += proceedsCny
-                }
-                TradeType.TRANSFER_OUT -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
-                    if (market == Market.CASH || tx.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny -= amountCny
-                    } else {
-                        stockQuantities[key] = (stockQuantities[key] ?: 0.0) - tx.quantity
-                    }
-                }
-                TradeType.TRANSFER_IN -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
-                    if (market == Market.CASH || tx.symbol == CASH_ACCOUNT_SYMBOL) {
-                        cashBalanceCny += amountCny
-                    } else {
-                        if (stockPrices[key] == null || stockPrices[key] == 0.0) {
-                            stockPrices[key] = convertToCny(tx.price, market, exchangeRates)
-                        }
-                        stockQuantities[key] = (stockQuantities[key] ?: 0.0) + tx.quantity
-                    }
-                }
-                TradeType.INTEREST, TradeType.TAX -> {
-                    val amountCny = convertToCny(kotlin.math.abs(tx.price * tx.quantity), market, exchangeRates)
-                    cashBalanceCny -= amountCny
-                }
-                TradeType.DIVIDEND -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity - tx.tax, market, exchangeRates)
-                    cashBalanceCny += amountCny
-                    if (tx.symbol != CASH_ACCOUNT_SYMBOL && tx.symbol != "CASH") {
-                        if (stockPrices[key] == null || stockPrices[key] == 0.0) {
-                            stockPrices[key] = convertToCny(tx.price, market, exchangeRates)
-                        }
-                    }
-                }
-                TradeType.OTHER -> {
-                    val amountCny = convertToCny(tx.price * tx.quantity, market, exchangeRates)
-                    cashBalanceCny += amountCny
-                }
-                TradeType.SPLIT -> {
-                    if (registerSplitEvent(tx, appliedSplitEvents)) {
-                        val qty = stockQuantities[key] ?: 0.0
-                        stockQuantities[key] = qty * tx.price
-                    }
-                }
-                else -> {}
             }
+            processedTransactions += tx
         }
 
         val totalAssets = portfolio.totalAssetsCny
         return partnerNames.map { name ->
             val net = partnerNetContributions[name] ?: 0.0
             val ratio = if (totalUnits > 0.0) {
-                val u = partnerUnits[name] ?: 0.0
-                maxOf(0.0, u / totalUnits)
+                val units = partnerUnits[name] ?: 0.0
+                maxOf(0.0, units / totalUnits)
             } else {
                 1.0 / partnerNames.size
             }
             val assetsShareCny = totalAssets * ratio
             val pnlShareCny = assetsShareCny - net
 
-            val netConverted = convertFromCny(net, currency, exchangeRates)
-            val assetsShareConverted = convertFromCny(assetsShareCny, currency, exchangeRates)
-            val pnlShareConverted = convertFromCny(pnlShareCny, currency, exchangeRates)
-
             PartnerContribution(
                 name = name,
-                netContributionCny = netConverted,
+                netContributionCny = convertFromCny(net, currency, exchangeRates),
                 ratio = ratio,
-                assetsShareCny = assetsShareConverted,
-                pnlShareCny = pnlShareConverted
+                assetsShareCny = convertFromCny(assetsShareCny, currency, exchangeRates),
+                pnlShareCny = convertFromCny(pnlShareCny, currency, exchangeRates),
             )
         }
     }
@@ -5442,24 +4216,16 @@ private data class RefreshMeta(
         appliedSplitEvents: MutableSet<String>,
     ): Boolean = appliedSplitEvents.add(splitEventKey(transaction))
 
-    private fun splitEventKey(transaction: TransactionEntity): String {
-        val market = Market.fromString(transaction.market) ?: Market.CASH
-        val symbol = transaction.symbol.trim().uppercase(java.util.Locale.US)
-        val normalizedRatio = kotlin.math.round(transaction.price * 1_000_000_000.0) / 1_000_000_000.0
-        return "${market.name}:$symbol:${transaction.tradeDate}:$normalizedRatio"
-    }
+    private fun splitEventKey(transaction: TransactionEntity): String =
+        PortfolioSecurityRules.splitEventKey(
+            market = Market.fromString(transaction.market) ?: Market.CASH,
+            symbol = transaction.symbol,
+            tradeDate = transaction.tradeDate,
+            ratio = transaction.price,
+        )
 
-    private fun isOptionSymbol(symbol: String): Boolean {
-        val parts = symbol.trim().split(" ")
-        if (parts.size != 2) return false
-        val optPart = parts[1]
-        if (optPart.length < 8) return false
-        val datePart = optPart.substring(0, 6)
-        if (!datePart.all { it.isDigit() }) return false
-        val typeChar = optPart[6]
-        if (typeChar != 'C' && typeChar != 'P') return false
-        return true
-    }
+    private fun isOptionSymbol(symbol: String): Boolean =
+        PortfolioSecurityRules.isOptionAsset(assetType = null, symbol = symbol)
 
     private companion object {
         const val MANUAL_REFRESH_INTERVAL_MS = 60_000L

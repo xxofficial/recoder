@@ -4,7 +4,6 @@ import com.recoder.stockledger.data.ExchangeRates
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.TradeType
 import com.recoder.stockledger.data.rateToCny
-import java.time.LocalDate
 
 data class PortfolioTrade(
     val tradeType: TradeType,
@@ -19,6 +18,7 @@ data class PortfolioTrade(
     val tax: Double,
     val createdAt: Long,
     val assetType: String = "",
+    val underlyingSymbol: String? = null,
 )
 
 data class PortfolioQuote(
@@ -37,6 +37,7 @@ data class PortfolioPosition(
     val remainingCost: Double,
     val realizedProfit: Double,
     val assetType: String = "",
+    val underlyingSymbol: String? = null,
 )
 
 data class PortfolioSnapshot(
@@ -76,16 +77,18 @@ class PortfolioCalculator {
         val appliedSplitEvents = mutableSetOf<String>()
 
         transactions
-            .sortedWith(compareBy<PortfolioTrade>({ effectiveTradeDate(it).toString() }, { it.tradeTime }, { it.createdAt }))
+            .sortedWith(compareBy<PortfolioTrade>({
+                PortfolioSecurityRules.effectiveTradeDate(it.tradeDate, it.tradeTime, it.market, it.tradeType).toString()
+            }, { it.tradeTime }, { it.createdAt }))
             .forEach { transaction ->
                 when (transaction.tradeType) {
                     TradeType.DEPOSIT -> {
-                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
                         if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
                             cashBalanceCny += amountCny
                         } else {
-                            val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                             val current = positions[key] ?: PortfolioPosition(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
@@ -95,6 +98,7 @@ class PortfolioCalculator {
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
                                 assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                             val rawQty = current.quantity + transaction.quantity
                             val nextQuantity = cleanQuantity(rawQty)
@@ -109,12 +113,12 @@ class PortfolioCalculator {
                     }
 
                     TradeType.WITHDRAW -> {
-                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
                         if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
                             cashBalanceCny -= amountCny
                         } else {
-                            val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                             val current = positions[key]
                             if (current != null) {
                                 val rawQty = current.quantity - transaction.quantity
@@ -148,12 +152,12 @@ class PortfolioCalculator {
                     }
 
                     TradeType.TRANSFER_IN -> {
-                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
                         if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
                             cashBalanceCny += amountCny
                         } else {
-                            val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                             val current = positions[key] ?: PortfolioPosition(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
@@ -163,6 +167,7 @@ class PortfolioCalculator {
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
                                 assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                             val rawQty = current.quantity + transaction.quantity
                             val nextQuantity = cleanQuantity(rawQty)
@@ -177,12 +182,12 @@ class PortfolioCalculator {
                     }
 
                     TradeType.TRANSFER_OUT -> {
-                        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
                         val amountCny = convertToCny(transaction.price * transaction.quantity * mult, transaction.market, exchangeRates)
                         if (transaction.market == Market.CASH || transaction.symbol == "CASH") {
                             cashBalanceCny -= amountCny
                         } else {
-                            val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                             val current = positions[key] ?: PortfolioPosition(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
@@ -192,6 +197,7 @@ class PortfolioCalculator {
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
                                 assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                             val rawQty = current.quantity - transaction.quantity
                             val nextQuantity = cleanQuantity(rawQty)
@@ -210,7 +216,7 @@ class PortfolioCalculator {
                         val amountCny = convertToCny(netDividend, transaction.market, exchangeRates)
                         cashBalanceCny += amountCny
                         if (transaction.symbol != "CASH") {
-                            val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                             val current = positions[key] ?: PortfolioPosition(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
@@ -220,6 +226,7 @@ class PortfolioCalculator {
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
                                 assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                             positions[key] = current.copy(
                                 realizedProfit = current.realizedProfit + netDividend
@@ -231,7 +238,7 @@ class PortfolioCalculator {
                         val amountCny = convertToCny(kotlin.math.abs(transaction.price * transaction.quantity), transaction.market, exchangeRates)
                         cashBalanceCny -= amountCny
                         if (transaction.symbol != "CASH") {
-                            val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                             val current = positions[key] ?: PortfolioPosition(
                                 symbol = transaction.symbol,
                                 name = transaction.name,
@@ -241,6 +248,7 @@ class PortfolioCalculator {
                                 remainingCost = 0.0,
                                 realizedProfit = 0.0,
                                 assetType = transaction.assetType,
+                                underlyingSymbol = transaction.underlyingSymbol,
                             )
                             positions[key] = current.copy(
                                 realizedProfit = current.realizedProfit - (transaction.price * transaction.quantity)
@@ -249,15 +257,15 @@ class PortfolioCalculator {
                     }
 
                     TradeType.SPLIT -> {
-                        if (!appliedSplitEvents.add(splitEventKey(transaction))) {
+                        if (!appliedSplitEvents.add(PortfolioSecurityRules.splitEventKey(transaction))) {
                             return@forEach
                         }
-                        val key = positionKey(transaction.symbol, transaction.market)
+                            val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
                         val current = positions[key]
                         if (current != null && !isAlmostZero(current.quantity)) {
                             val rawQty = current.quantity * transaction.price
                             val nextQuantity = cleanQuantity(rawQty)
-                            val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+                            val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
                             positions[key] = current.copy(
                                 quantity = nextQuantity,
                                 averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
@@ -274,10 +282,10 @@ class PortfolioCalculator {
                 }
             }
 
-        val quoteMap = quotes.associateBy { positionKey(it.symbol, it.market) }
+        val quoteMap = quotes.associateBy { PortfolioSecurityRules.positionKey(it.symbol, it.market) }
         val holdingsValueCny = positions.values.sumOf { position ->
-            val quote = quoteMap[positionKey(position.symbol, position.market)]
-            val mult = if (isOption(position.symbol, position.assetType)) 100.0 else 1.0
+            val quote = quoteMap[PortfolioSecurityRules.positionKey(position.symbol, position.market)]
+            val mult = PortfolioSecurityRules.optionMultiplier(position.assetType, position.symbol)
             convertToCny(position.quantity * (quote?.currentPrice ?: position.averageCost) * mult, position.market, exchangeRates)
         }
         val holdingsCostCny = positions.values.sumOf { position ->
@@ -285,16 +293,16 @@ class PortfolioCalculator {
         }
         val unrealizedProfitCny = holdingsValueCny - holdingsCostCny
         val dayProfitCny = positions.values.sumOf { position ->
-            val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
+            val quote = quoteMap[PortfolioSecurityRules.positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
             val current = quote.currentPrice ?: return@sumOf 0.0
             val previous = quote.previousClose ?: return@sumOf 0.0
-            val mult = if (isOption(position.symbol, position.assetType)) 100.0 else 1.0
+            val mult = PortfolioSecurityRules.optionMultiplier(position.assetType, position.symbol)
             convertToCny((current - previous) * position.quantity * mult, position.market, exchangeRates)
         }
         val previousHoldingsValueCny = positions.values.sumOf { position ->
-            val quote = quoteMap[positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
+            val quote = quoteMap[PortfolioSecurityRules.positionKey(position.symbol, position.market)] ?: return@sumOf 0.0
             val previous = quote.previousClose ?: return@sumOf 0.0
-            val mult = if (isOption(position.symbol, position.assetType)) 100.0 else 1.0
+            val mult = PortfolioSecurityRules.optionMultiplier(position.assetType, position.symbol)
             convertToCny(previous * position.quantity * mult, position.market, exchangeRates)
         }
         val netInflowCny = totalDepositCny - totalWithdrawCny
@@ -325,28 +333,12 @@ class PortfolioCalculator {
         )
     }
 
-    private fun isOption(symbol: String, assetType: String): Boolean {
-        return assetType.uppercase(java.util.Locale.US) == "OPTION" || isOptionSymbol(symbol)
-    }
-
-    private fun isOptionSymbol(symbol: String): Boolean {
-        val parts = symbol.trim().split(" ")
-        if (parts.size != 2) return false
-        val optPart = parts[1]
-        if (optPart.length < 8) return false
-        val datePart = optPart.substring(0, 6)
-        if (!datePart.all { it.isDigit() }) return false
-        val typeChar = optPart[6]
-        if (typeChar != 'C' && typeChar != 'P') return false
-        return true
-    }
-
     private fun applySecurityTrade(
         transaction: PortfolioTrade,
         positions: MutableMap<String, PortfolioPosition>,
         exchangeRates: ExchangeRates,
     ): Double {
-        val key = positionKey(transaction.symbol, transaction.market)
+        val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
         val current = positions[key] ?: PortfolioPosition(
             symbol = transaction.symbol,
             name = transaction.name,
@@ -356,9 +348,10 @@ class PortfolioCalculator {
             remainingCost = 0.0,
             realizedProfit = 0.0,
             assetType = transaction.assetType,
+            underlyingSymbol = transaction.underlyingSymbol,
         )
 
-        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
         val cashDelta = if (transaction.tradeType == TradeType.BUY) {
             -convertToCny(
                 transaction.price * transaction.quantity * mult + transaction.commission + transaction.tax,
@@ -382,7 +375,7 @@ class PortfolioCalculator {
     }
 
     private fun applyBuy(current: PortfolioPosition, transaction: PortfolioTrade): PortfolioPosition {
-        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
         if (current.quantity < 0.0) {
             val coverQuantity = minOf(-current.quantity, transaction.quantity)
             val coverProfit = (current.averageCost - transaction.price) * coverQuantity * mult
@@ -399,6 +392,7 @@ class PortfolioCalculator {
                     averageCost = transaction.price,
                     realizedProfit = current.realizedProfit + coverProfit - coverFees,
                     assetType = transaction.assetType,
+                    underlyingSymbol = transaction.underlyingSymbol,
                 )
             } else {
                 val rawNextQty = current.quantity + transaction.quantity
@@ -429,7 +423,7 @@ class PortfolioCalculator {
     }
 
     private fun applySell(current: PortfolioPosition, transaction: PortfolioTrade): PortfolioPosition {
-        val mult = if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0
+        val mult = PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)
         if (current.quantity > 0.0) {
             val closeQuantity = minOf(current.quantity, transaction.quantity)
             val removedCost = current.averageCost * closeQuantity * mult
@@ -447,6 +441,7 @@ class PortfolioCalculator {
                     averageCost = transaction.price,
                     realizedProfit = current.realizedProfit + closeProfit,
                     assetType = transaction.assetType,
+                    underlyingSymbol = transaction.underlyingSymbol,
                 )
             } else {
                 val rawNextQty = current.quantity - closeQuantity
@@ -474,17 +469,11 @@ class PortfolioCalculator {
 
     private fun cleanQuantity(qty: Double): Double = if (isAlmostZero(qty)) 0.0 else qty
 
-    private fun splitEventKey(transaction: PortfolioTrade): String {
-        val symbol = transaction.symbol.trim().uppercase(java.util.Locale.US)
-        val normalizedRatio = kotlin.math.round(transaction.price * 1_000_000_000.0) / 1_000_000_000.0
-        return "${transaction.market.name}:$symbol:${transaction.tradeDate}:$normalizedRatio"
-    }
-
     private fun applyExpire(
         transaction: PortfolioTrade,
         positions: MutableMap<String, PortfolioPosition>,
     ) {
-        val key = positionKey(transaction.symbol, transaction.market)
+        val key = PortfolioSecurityRules.positionKey(transaction.symbol, transaction.market)
         val current = positions[key] ?: return
         val qtyDelta = transaction.quantity
         val nextQuantity = if (current.quantity > 0.0) {
@@ -501,27 +490,11 @@ class PortfolioCalculator {
         positions[key] = current.copy(
             quantity = nextQuantity,
             remainingCost = current.remainingCost - closedCost,
-            averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * (if (isOption(transaction.symbol, transaction.assetType)) 100.0 else 1.0)),
+            averageCost = if (nextQuantity == 0.0) 0.0 else (current.remainingCost - closedCost) / (nextQuantity * PortfolioSecurityRules.optionMultiplier(transaction.assetType, transaction.symbol)),
             realizedProfit = current.realizedProfit + coverProfit
         )
     }
 
-    private fun effectiveTradeDate(transaction: PortfolioTrade): LocalDate {
-        val date = LocalDate.parse(transaction.tradeDate)
-        if (transaction.tradeType == TradeType.SPLIT) return date
-        return if (transaction.market == Market.US && transaction.tradeTime < US_TIMEZONE_CUTOFF) {
-            date.minusDays(1)
-        } else {
-            date
-        }
-    }
-
     private fun convertToCny(value: Double, market: Market, exchangeRates: ExchangeRates): Double =
         value * exchangeRates.rateToCny(market)
-
-    private fun positionKey(symbol: String, market: Market): String = "${market.name}:$symbol"
-
-    private companion object {
-        const val US_TIMEZONE_CUTOFF = "06:00"
-    }
 }

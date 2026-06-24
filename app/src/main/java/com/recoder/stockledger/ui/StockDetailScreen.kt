@@ -31,12 +31,16 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.recoder.stockledger.data.DisplayCurrency
+import com.recoder.stockledger.data.ExchangeRates
 import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.ProfitAnalysisUiModel
 import com.recoder.stockledger.data.SecurityProfitPointUiModel
 import com.recoder.stockledger.data.local.TransactionEntity
 import com.recoder.stockledger.data.local.QuoteSnapshotEntity
 import com.recoder.stockledger.data.TradeType
+import com.recoder.stockledger.domain.portfolio.PortfolioCalculator
+import com.recoder.stockledger.domain.portfolio.PortfolioSecurityRules
+import com.recoder.stockledger.domain.portfolio.toPortfolioTrade
 import com.recoder.stockledger.ui.theme.BackgroundPrimary
 import com.recoder.stockledger.ui.theme.ForegroundMuted
 import com.recoder.stockledger.ui.theme.ForegroundPrimary
@@ -736,33 +740,28 @@ private fun calculateStockQuantity(
     cutoff: LocalDate,
     includeCutoff: Boolean,
 ): Double {
-    val appliedSplitEvents = mutableSetOf<String>()
-    var quantity = 0.0
-    transactions
-        .filter { transaction ->
-            val date = runCatching { LocalDate.parse(transaction.tradeDate) }.getOrNull() ?: return@filter false
-            if (includeCutoff) !date.isAfter(cutoff) else date.isBefore(cutoff)
-        }
-        .forEach { transaction ->
-            when (runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull()) {
-                TradeType.BUY -> quantity += transaction.quantity
-                TradeType.SELL -> quantity -= transaction.quantity
-                TradeType.SPLIT -> {
-                    if (appliedSplitEvents.add(stockDetailSplitEventKey(transaction))) {
-                        quantity *= transaction.price
-                    }
-                }
-                else -> Unit
-            }
-        }
-    return quantity
-}
-
-private fun stockDetailSplitEventKey(transaction: TransactionEntity): String {
-    val market = Market.fromString(transaction.market) ?: Market.CASH
-    val symbol = transaction.symbol.trim().uppercase(java.util.Locale.US)
-    val normalizedRatio = kotlin.math.round(transaction.price * 1_000_000_000.0) / 1_000_000_000.0
-    return "${market.name}:$symbol:${transaction.tradeDate}:$normalizedRatio"
+    val first = transactions.firstOrNull() ?: return 0.0
+    val market = Market.fromString(first.market) ?: Market.CASH
+    val symbol = first.symbol
+    val cutoffTrades = transactions.filter { transaction ->
+        val tradeType = runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull() ?: return@filter false
+        val transactionMarket = Market.fromString(transaction.market) ?: Market.CASH
+        val effectiveDate = runCatching {
+            PortfolioSecurityRules.effectiveTradeDate(
+                tradeDate = transaction.tradeDate,
+                tradeTime = transaction.tradeTime,
+                market = transactionMarket,
+                tradeType = tradeType,
+            )
+        }.getOrNull() ?: return@filter false
+        if (includeCutoff) !effectiveDate.isAfter(cutoff) else effectiveDate.isBefore(cutoff)
+    }
+    val snapshot = PortfolioCalculator().calculate(
+        transactions = cutoffTrades.map { it.toPortfolioTrade() },
+        quotes = emptyList(),
+        exchangeRates = ExchangeRates(),
+    )
+    return snapshot.positions[PortfolioSecurityRules.positionKey(symbol, market)]?.quantity ?: 0.0
 }
 
 @Preview(showBackground = true, widthDp = 412, heightDp = 900)

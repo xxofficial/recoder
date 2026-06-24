@@ -55,3 +55,32 @@
 - 不要求把拆股记录改为全局唯一事件；该方向另见 `docs/corporate-action-todo.md`。
 - 不要求一次性重写所有 UI，只要逐步消除重复计算入口即可。
 
+## 已落地接口
+
+本次重构后，组合/收益计算的核心交易回放入口统一为 `PortfolioCalculator`：
+
+- `PortfolioMappers`
+  - `TransactionEntity.toPortfolioTrade()`：统一把数据库流水转换成领域层交易输入，并保留 `assetType`、`underlyingSymbol`。
+  - `QuoteSnapshotEntity.toPortfolioQuote()`：统一把行情快照转换成领域层行情输入。
+- `PortfolioSecurityRules`
+  - `isOptionAsset(assetType, symbol)`：统一识别期权资产。
+  - `optionMultiplier(assetType, symbol)`：期权乘数为 100，正股为 1。
+  - `positionKey(symbol, market)`：统一持仓 key。
+  - `attributionSymbol(symbol, assetType, underlyingSymbol)` / `attributionKey(...)`：期权按 underlying 归因，例如 `AAPL 260501C295` 计入 `AAPL`。
+  - `splitEventKey(...)`：统一拆并股去重 key，按 `market + symbol + tradeDate + ratio` 归一。
+  - `effectiveTradeDate(...)`：统一美股早晨成交时间折算和拆股日期处理。
+
+UI 层当前只应做两类事情：
+
+- 调用领域层：`LedgerViewModel.computePortfolio()`、收益分析日期切片、合伙账本估值、个股详情数量都应通过 `PortfolioCalculator` 或 `PortfolioSecurityRules` 获取核心结果。
+- 映射展示模型：如 `HoldingUiModel`、`ProfitAnalysisUiModel`、`SecurityProfitAnalysisUiModel` 的格式化、颜色和文案。
+
+收益分析对 UI 暴露的标的级字段保持：
+
+- `symbol`
+- `name`
+- `market`
+- `totalProfitCny`
+- `stockProfitCny`
+- `derivativeProfitCny`
+- `returnRatePercent`
