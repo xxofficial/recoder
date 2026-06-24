@@ -8,6 +8,8 @@ local.properties
 /.kotlin/
 **/build/
 app/release/
+.signing/
+*.jks
 backups/phone-prod/
 tmp/
 Statements/

@@ -1,8 +1,48 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun releaseSigningProperty(name: String): String? =
+    localProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }
+
+val releaseSigningKeys = listOf(
+    "RECODER_STORE_FILE",
+    "RECODER_STORE_PASSWORD",
+    "RECODER_KEY_ALIAS",
+    "RECODER_KEY_PASSWORD",
+)
+
+val missingReleaseSigningKeys = releaseSigningKeys.filter { releaseSigningProperty(it) == null }
+
+gradle.taskGraph.whenReady {
+    val requiresReleaseSigning = allTasks.any { task ->
+        val taskName = task.name.lowercase()
+        taskName.contains("release") &&
+            (taskName.contains("assemble") ||
+                taskName.contains("bundle") ||
+                taskName.contains("package") ||
+                taskName.contains("sign"))
+    }
+
+    if (requiresReleaseSigning && missingReleaseSigningKeys.isNotEmpty()) {
+        throw GradleException(
+            "Release signing is missing: ${missingReleaseSigningKeys.joinToString()}. " +
+                "Set them in local.properties or environment variables.",
+        )
+    }
 }
 
 android {
@@ -20,6 +60,17 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        create("release") {
+            if (missingReleaseSigningKeys.isEmpty()) {
+                storeFile = file(releaseSigningProperty("RECODER_STORE_FILE")!!)
+                storePassword = releaseSigningProperty("RECODER_STORE_PASSWORD")
+                keyAlias = releaseSigningProperty("RECODER_KEY_ALIAS")
+                keyPassword = releaseSigningProperty("RECODER_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -29,7 +80,9 @@ android {
 
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            if (missingReleaseSigningKeys.isEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
