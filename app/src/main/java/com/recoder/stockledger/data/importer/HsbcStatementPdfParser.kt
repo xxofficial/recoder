@@ -37,6 +37,10 @@ object HsbcStatementPdfParser {
     fun parseText(rawText: String): List<ParsedStatementTrade> {
         val lines = rawText.lines().map { it.trim() }
         val refFeeMap = mutableMapOf<String, Double>()
+        val cashFlowTrades = StatementCashFlowParser.parse(lines, "HSBC", compactCentAmount = true) { line ->
+            line.contains("SAFE CUSTODY CHARGE", ignoreCase = true) ||
+                line.startsWith("SAFE CUSTODY ", ignoreCase = true)
+        }
 
         // 1. Scan for charges and map reference to fee
         for (idx in 0 until lines.size - 1) {
@@ -107,14 +111,14 @@ object HsbcStatementPdfParser {
                             trades.add(
                                 ParsedStatementTrade(
                                     sourceChannel = ImportSourceChannel.PDF_STATEMENT,
-                                    tradeType = TradeType.WITHDRAW,
+                                    tradeType = TradeType.OTHER,
                                     market = Market.HK,
                                     symbol = "CUSTODY",
-                                    name = "代收保管费",
+                                    name = "Trade25 扣费",
                                     currencyCode = curr,
-                                    price = amount,
+                                    price = -amount,
                                     quantity = 1.0,
-                                    amount = amount,
+                                    amount = -amount,
                                     tradeDate = date,
                                     tradeTime = getTradeTimeForMarket(Market.HK),
                                     commission = 0.0,
@@ -223,7 +227,7 @@ object HsbcStatementPdfParser {
             }
         }
 
-        return trades
+        return (trades + cashFlowTrades).distinctBy { it.tradeRef }
     }
 
     private fun getTradeTimeForMarket(market: Market): String = when (market) {

@@ -155,6 +155,25 @@ class PortfolioCalculatorTest {
     }
 
     @Test
+    fun `calculate applies duplicate split events once in combined portfolio`() {
+        val snapshot = calculator.calculate(
+            transactions = listOf(
+                trade(type = TradeType.BUY, market = Market.US, symbol = "SNXX", price = 150.0, quantity = 3.0, tradeDate = "2026-05-06"),
+                trade(type = TradeType.BUY, market = Market.US, symbol = "SNXX", price = 190.0, quantity = 2.0, tradeDate = "2026-05-11"),
+                trade(type = TradeType.SPLIT, market = Market.US, symbol = "SNXX", price = 8.0, quantity = 1.0, tradeDate = "2026-06-03", tradeTime = "00:00:00"),
+                trade(type = TradeType.SPLIT, market = Market.US, symbol = "SNXX", price = 8.0, quantity = 1.0, tradeDate = "2026-06-03", tradeTime = "00:00:00"),
+            ),
+            quotes = emptyList(),
+            exchangeRates = ExchangeRates(usdToCny = 7.0, hkdToCny = 1.0),
+        )
+
+        val position = snapshot.positions.getValue("US:SNXX")
+        assertEquals(40.0, position.quantity, 0.0001)
+        assertEquals(20.75, position.averageCost, 0.0001)
+        assertEquals(830.0, position.remainingCost, 0.0001)
+    }
+
+    @Test
     fun `calculate handles US stock split timezone sorting`() {
         // Test that a US split on 2026-03-10 00:00:00 (which is the effective date of the split)
         // is sorted BEFORE a US trade on 2026-03-11 05:44 HKT (which gets shifted to 2026-03-10 effective date)
@@ -621,13 +640,15 @@ class PortfolioCalculatorTest {
                 trade(type = TradeType.BUY, market = Market.US, symbol = "AAPL", price = 100.0, quantity = 10.0),
                 trade(type = TradeType.DIVIDEND, market = Market.US, symbol = "AAPL", price = 1.5, quantity = 10.0, tax = 1.5),
                 trade(type = TradeType.OTHER, market = Market.US, symbol = "CASH", price = 100.0, quantity = 1.0),
+                trade(type = TradeType.OTHER, market = Market.US, symbol = "CASH", price = -25.0, quantity = 1.0),
             ),
             quotes = emptyList(),
             exchangeRates = ExchangeRates(usdToCny = usdRate, hkdToCny = 1.0),
         )
 
-        // Cash balance should be -1000 + (15 - 1.5) + 100 = -886.5 USD.
-        assertEquals(-886.5 * usdRate, snapshot.cashBalanceCny, 0.0001)
+        // Cash balance should be -1000 + (15 - 1.5) + 100 - 25 = -911.5 USD.
+        assertEquals(-911.5 * usdRate, snapshot.cashBalanceCny, 0.0001)
+        assertEquals(0.0, snapshot.totalWithdrawCny, 0.0001)
 
         val position = snapshot.positions.getValue("US:AAPL")
         assertEquals(10.0, position.quantity, 0.0001)

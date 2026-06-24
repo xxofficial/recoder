@@ -73,6 +73,7 @@ class PortfolioCalculator {
         var securityTradeCount = 0
         var buyTradeCount = 0
         var sellTradeCount = 0
+        val appliedSplitEvents = mutableSetOf<String>()
 
         transactions
             .sortedWith(compareBy<PortfolioTrade>({ effectiveTradeDate(it).toString() }, { it.tradeTime }, { it.createdAt }))
@@ -248,6 +249,9 @@ class PortfolioCalculator {
                     }
 
                     TradeType.SPLIT -> {
+                        if (!appliedSplitEvents.add(splitEventKey(transaction))) {
+                            return@forEach
+                        }
                         val key = positionKey(transaction.symbol, transaction.market)
                         val current = positions[key]
                         if (current != null && !isAlmostZero(current.quantity)) {
@@ -469,6 +473,12 @@ class PortfolioCalculator {
     private fun isAlmostZero(value: Double): Boolean = kotlin.math.abs(value) < 1e-6
 
     private fun cleanQuantity(qty: Double): Double = if (isAlmostZero(qty)) 0.0 else qty
+
+    private fun splitEventKey(transaction: PortfolioTrade): String {
+        val symbol = transaction.symbol.trim().uppercase(java.util.Locale.US)
+        val normalizedRatio = kotlin.math.round(transaction.price * 1_000_000_000.0) / 1_000_000_000.0
+        return "${transaction.market.name}:$symbol:${transaction.tradeDate}:$normalizedRatio"
+    }
 
     private fun applyExpire(
         transaction: PortfolioTrade,

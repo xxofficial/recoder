@@ -732,7 +732,12 @@ fun TransactionRow(
     isSelected: Boolean = false,
     showCheckbox: Boolean = false,
 ) {
-    val (badgeBackground, badgeForeground) = tradeTypeColors(item.tradeType)
+    val isOtherExpense = item.tradeType == TradeType.OTHER && item.amountLabel.trimStart().startsWith("-")
+    val (badgeBackground, badgeForeground) = if (isOtherExpense) {
+        MarketDownSoft to MarketDown
+    } else {
+        tradeTypeColors(item.tradeType)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()

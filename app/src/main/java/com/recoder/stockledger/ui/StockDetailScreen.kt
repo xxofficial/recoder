@@ -163,24 +163,8 @@ fun StockDetailRoute(
             runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
         }.sumOf { it.price * it.quantity }
 
-        val closingQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0.0) { qty, txn ->
-            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
-            when (tradeType) {
-                TradeType.BUY -> qty + txn.quantity
-                TradeType.SELL -> qty - txn.quantity
-                TradeType.SPLIT -> qty * txn.price
-                else -> qty
-            }
-        }
-        val openingQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0.0) { qty, txn ->
-            val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
-            when (tradeType) {
-                TradeType.BUY -> qty + txn.quantity
-                TradeType.SELL -> qty - txn.quantity
-                TradeType.SPLIT -> qty * txn.price
-                else -> qty
-            }
-        }
+        val closingQty = calculateStockQuantity(stockTransactions, rangeEnd, includeCutoff = true)
+        val openingQty = calculateStockQuantity(stockTransactions, rangeStart, includeCutoff = false)
         val closingPrice = if (rangeEnd == latestDate && quoteMap[symbol]?.currentPrice != null) {
             quoteMap[symbol]!!.currentPrice!!
         } else {
@@ -272,24 +256,8 @@ fun StockDetailRoute(
         runCatching { TradeType.valueOf(it.tradeType) }.getOrNull() == TradeType.BUY
     }.sumOf { it.price * it.quantity * (if (it.assetType == "OPTION") 100.0 else 1.0) }
 
-    val closingStockQty = stockTransactions.filter { it.tradeDate <= rangeEnd.toString() }.fold(0.0) { qty, txn ->
-        val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
-        when (tradeType) {
-            TradeType.BUY -> qty + txn.quantity
-            TradeType.SELL -> qty - txn.quantity
-            TradeType.SPLIT -> qty * txn.price
-            else -> qty
-        }
-    }
-    val openingStockQty = stockTransactions.filter { it.tradeDate < rangeStart.toString() }.fold(0.0) { qty, txn ->
-        val tradeType = runCatching { TradeType.valueOf(txn.tradeType) }.getOrNull()
-        when (tradeType) {
-            TradeType.BUY -> qty + txn.quantity
-            TradeType.SELL -> qty - txn.quantity
-            TradeType.SPLIT -> qty * txn.price
-            else -> qty
-        }
-    }
+    val closingStockQty = calculateStockQuantity(stockTransactions, rangeEnd, includeCutoff = true)
+    val openingStockQty = calculateStockQuantity(stockTransactions, rangeStart, includeCutoff = false)
     val closingStockPrice = if (rangeEnd == latestDate && quoteMap[symbol]?.currentPrice != null) {
         quoteMap[symbol]!!.currentPrice!!
     } else {
@@ -761,6 +729,40 @@ private fun DetailRow(
             fontWeight = FontWeight.Medium,
         )
     }
+}
+
+private fun calculateStockQuantity(
+    transactions: List<TransactionEntity>,
+    cutoff: LocalDate,
+    includeCutoff: Boolean,
+): Double {
+    val appliedSplitEvents = mutableSetOf<String>()
+    var quantity = 0.0
+    transactions
+        .filter { transaction ->
+            val date = runCatching { LocalDate.parse(transaction.tradeDate) }.getOrNull() ?: return@filter false
+            if (includeCutoff) !date.isAfter(cutoff) else date.isBefore(cutoff)
+        }
+        .forEach { transaction ->
+            when (runCatching { TradeType.valueOf(transaction.tradeType) }.getOrNull()) {
+                TradeType.BUY -> quantity += transaction.quantity
+                TradeType.SELL -> quantity -= transaction.quantity
+                TradeType.SPLIT -> {
+                    if (appliedSplitEvents.add(stockDetailSplitEventKey(transaction))) {
+                        quantity *= transaction.price
+                    }
+                }
+                else -> Unit
+            }
+        }
+    return quantity
+}
+
+private fun stockDetailSplitEventKey(transaction: TransactionEntity): String {
+    val market = Market.fromString(transaction.market) ?: Market.CASH
+    val symbol = transaction.symbol.trim().uppercase(java.util.Locale.US)
+    val normalizedRatio = kotlin.math.round(transaction.price * 1_000_000_000.0) / 1_000_000_000.0
+    return "${market.name}:$symbol:${transaction.tradeDate}:$normalizedRatio"
 }
 
 @Preview(showBackground = true, widthDp = 412, heightDp = 900)

@@ -157,6 +157,26 @@ object USmartStatementPdfParser {
         val tradeDate: LocalDate,
     )
 
+    private data class ParsedOptionContract(
+        val symbol: String,
+        val name: String,
+        val underlyingSymbol: String,
+        val expiryDate: String,
+        val strikePrice: Double,
+        val optionType: String,
+    )
+
+    private data class OptionCashLine(
+        val tradeType: TradeType,
+        val isFee: Boolean,
+        val currency: String,
+        val amount: Double,
+        val tradeDate: LocalDate,
+        val contract: ParsedOptionContract,
+        val sourceIndex: Int,
+        val rawLine: String,
+    )
+
     private data class GroupResult(val trades: List<ParsedStatementTrade>, val nextIndex: Int)
 
     // ===== Public API =====
@@ -208,6 +228,11 @@ object USmartStatementPdfParser {
             it.isNotEmpty() && !isNoiseLine(it) && !it.matches(Regex("""^\d{1,2}$""")) 
         }
         Log.d(TAG, "Lines: ${allLines.size} raw → ${lines.size} after noise filter, stmtMonth=$stmtMonth")
+
+        val cashFlowTrades = StatementCashFlowParser.parse(lines, "YL") { line ->
+            line.startsWith("融资利息") || isOptionTransferLine(line)
+        }
+        val optionTrades = parseOptionCashTrades(lines)
 
         // ---- Phase 0: Scan for interest in cash flow section anywhere in the lines ----
         val cashFlowInterests = mutableListOf<ParsedStatementTrade>()
@@ -262,7 +287,7 @@ object USmartStatementPdfParser {
         while (i < lines.size && !lines[i].contains("交易明细")) i++
         if (i >= lines.size) {
             Log.w(TAG, "交易明细 section not found")
-            return cashFlowInterests.distinctBy { it.tradeRef }
+            return (cashFlowTrades + optionTrades + cashFlowInterests).distinctBy { it.tradeRef }
         }
         i++ // skip section header
 
@@ -546,6 +571,8 @@ object USmartStatementPdfParser {
         val cashFlowCurrencies = cashFlowInterests.map { it.currencyCode }.toSet()
         val filteredSummaryInterests = summaryInterests.filter { it.currencyCode !in cashFlowCurrencies }
         val allInterests = cashFlowInterests + filteredSummaryInterests
+        trades.addAll(cashFlowTrades)
+        trades.addAll(optionTrades)
         trades.addAll(allInterests)
 
         // Post-process to assign distinct sequential times and createdAt timestamps to duplicate/identical trades
@@ -582,6 +609,195 @@ object USmartStatementPdfParser {
 
         Log.d(TAG, "Parsed ${finalTrades.size} trades total")
         return finalTrades
+    }
+
+    private fun parseOptionCashTrades(lines: List<String>): List<ParsedStatementTrade> {
+        val optionLines = mutableListOf<OptionCashLine>()
+        lines.forEachIndexed { index, line ->
+            val match = optionCashAmountRegex.find(line) ?: return@forEachIndexed
+            val contract = parseOptionContract(match.groupValues[4]) ?: return@forEachIndexed
+            val context = listOfNotNull(
+                lines.getOrNull(index - 2),
+                lines.getOrNull(index - 1),
+                line,
+                lines.getOrNull(index + 1),
+                lines.getOrNull(index + 2),
+            ).joinToString(" ")
+            val compactContext = context.replace(Regex("""\s+"""), "")
+            val compactFeeContext = listOfNotNull(
+                lines.getOrNull(index - 1),
+                line,
+                lines.getOrNull(index + 1),
+            ).joinToString(" ").replace(Regex("""\s+"""), "")
+            val tradeType = when {
+                isOptionSellContext(compactContext) -> TradeType.SELL
+                isOptionBuyContext(compactContext) -> TradeType.BUY
+                else -> return@forEachIndexed
+            }
+            val isFee = compactFeeContext.contains("手续费") ||
+                compactFeeContext.contains("手續费") ||
+                compactFeeContext.contains("手續費")
+            optionLines.add(
+                OptionCashLine(
+                    tradeType = tradeType,
+                    isFee = isFee,
+                    currency = match.groupValues[1],
+                    amount = parseSignedAmount(match.groupValues[2]),
+                    tradeDate = LocalDate.parse(match.groupValues[3], dateFormatter),
+                    contract = contract,
+                    sourceIndex = index,
+                    rawLine = context.replace(Regex("""\s+"""), " ").trim(),
+                )
+            )
+        }
+
+        val feeLines = optionLines.filter { it.isFee }.sortedBy { it.sourceIndex }
+        val usedFees = mutableSetOf<Int>()
+        return optionLines
+            .filter { !it.isFee }
+            .mapIndexed { outputIndex, tradeLine ->
+                val fee = feeLines.firstOrNull { candidate ->
+                    candidate.sourceIndex !in usedFees &&
+                        candidate.tradeDate == tradeLine.tradeDate &&
+                        candidate.tradeType == tradeLine.tradeType &&
+                        candidate.currency == tradeLine.currency &&
+                        candidate.contract.symbol == tradeLine.contract.symbol &&
+                        candidate.sourceIndex > tradeLine.sourceIndex
+                } ?: feeLines.firstOrNull { candidate ->
+                    candidate.sourceIndex !in usedFees &&
+                        candidate.tradeDate == tradeLine.tradeDate &&
+                        candidate.tradeType == tradeLine.tradeType &&
+                        candidate.currency == tradeLine.currency &&
+                        candidate.contract.symbol == tradeLine.contract.symbol
+                }
+                if (fee != null) usedFees.add(fee.sourceIndex)
+                optionCashLineToTrade(tradeLine, fee, outputIndex)
+            }
+    }
+
+    private fun optionCashLineToTrade(
+        tradeLine: OptionCashLine,
+        feeLine: OptionCashLine?,
+        outputIndex: Int,
+    ): ParsedStatementTrade {
+        val market = when (tradeLine.currency) {
+            "HKD" -> Market.HK
+            "CNY" -> Market.A_SHARE
+            else -> Market.US
+        }
+        val grossAmount = kotlin.math.abs(tradeLine.amount)
+        val commission = feeLine?.amount?.let { kotlin.math.abs(it) } ?: 0.0
+        val price = grossAmount / 100.0
+        val dateStr = tradeLine.tradeDate.format(dateFormatter)
+        val ref = listOf(
+            "YL",
+            "OPT",
+            dateStr.replace("-", ""),
+            tradeLine.contract.symbol.replace(" ", ""),
+            tradeLine.tradeType.name,
+            formatOptionRefNumber(grossAmount),
+            tradeLine.sourceIndex.toString(),
+            outputIndex.toString(),
+        ).joinToString("-")
+        val rawLine = listOfNotNull(tradeLine.rawLine, feeLine?.rawLine).joinToString(" | ")
+        val tradeTime = getTradeTimeForMarket(market)
+        val hour = getHourForMarket(market)
+
+        return ParsedStatementTrade(
+            sourceChannel = ImportSourceChannel.PDF_STATEMENT,
+            tradeType = tradeLine.tradeType,
+            market = market,
+            symbol = tradeLine.contract.symbol,
+            name = tradeLine.contract.name,
+            currencyCode = tradeLine.currency,
+            price = price,
+            quantity = 1.0,
+            amount = grossAmount,
+            tradeDate = tradeLine.tradeDate,
+            tradeTime = tradeTime,
+            commission = commission,
+            platformFee = 0.0,
+            tax = 0.0,
+            tradeRef = ref,
+            rawLine = rawLine,
+            createdAt = tradeLine.tradeDate.atTime(hour, 35)
+                .atZone(ZoneId.of("UTC+8"))
+                .toInstant()
+                .toEpochMilli(),
+            assetType = "OPTION",
+            underlyingSymbol = tradeLine.contract.underlyingSymbol,
+            expiryDate = tradeLine.contract.expiryDate,
+            strikePrice = tradeLine.contract.strikePrice,
+            optionType = tradeLine.contract.optionType,
+        )
+    }
+
+    private fun isOptionTransferLine(line: String): Boolean {
+        return line.contains("期权") ||
+            line.contains("期權") ||
+            optionCashAmountRegex.containsMatchIn(line)
+    }
+
+    private fun isOptionBuyContext(context: String): Boolean {
+        val hasBuy = context.contains("买") || context.contains("買")
+        val hasOption = context.contains("期权") || context.contains("期權") || context.contains("买入期") || context.contains("買入期")
+        return hasBuy && hasOption
+    }
+
+    private fun isOptionSellContext(context: String): Boolean {
+        val hasSell = context.contains("卖") || context.contains("賣")
+        val hasOption = context.contains("期权") || context.contains("期權") || context.contains("卖出期") || context.contains("賣出期")
+        return hasSell && hasOption
+    }
+
+    private val optionCashAmountRegex = Regex(
+        """^(HKD|USD|CNY)\s+([-]?[\d,.]+)\s+(\d{4}-\d{2}-\d{2})\s+([A-Z]{1,6}\d{6}[CP]\d{1,8})\b"""
+    )
+
+    private fun parseOptionContract(raw: String): ParsedOptionContract? {
+        val match = Regex("""^([A-Z]{1,6})(\d{6})([CP])(\d{1,8})$""").find(raw.trim()) ?: return null
+        val underlying = match.groupValues[1].uppercase()
+        val expiryCompact = match.groupValues[2]
+        val typeChar = match.groupValues[3]
+        val strikeRaw = match.groupValues[4]
+        val strike = if (strikeRaw.length > 3) {
+            strikeRaw.toDouble() / 1000.0
+        } else {
+            strikeRaw.toDouble()
+        }
+        val optionType = if (typeChar == "C") "CALL" else "PUT"
+        val expiry = String.format(
+            java.util.Locale.US,
+            "%04d-%02d-%02d",
+            2000 + expiryCompact.substring(0, 2).toInt(),
+            expiryCompact.substring(2, 4).toInt(),
+            expiryCompact.substring(4, 6).toInt(),
+        )
+        val strikeLabel = formatStrikeLabel(strike)
+        return ParsedOptionContract(
+            symbol = "$underlying $expiryCompact$typeChar$strikeLabel",
+            name = "$underlying $expiry ${if (optionType == "CALL") "Call" else "Put"} @ $strikeLabel",
+            underlyingSymbol = underlying,
+            expiryDate = expiry,
+            strikePrice = strike,
+            optionType = optionType,
+        )
+    }
+
+    private fun parseSignedAmount(raw: String): Double {
+        return raw.replace(",", "").toDouble()
+    }
+
+    private fun formatStrikeLabel(value: Double): String {
+        return if (value == value.toLong().toDouble()) {
+            value.toLong().toString()
+        } else {
+            value.toString().trimEnd('0').trimEnd('.')
+        }
+    }
+
+    private fun formatOptionRefNumber(value: Double): String {
+        return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
     }
 
     private fun cleanFragment(frag: String): String {

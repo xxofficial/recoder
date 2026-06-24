@@ -5,6 +5,7 @@ import org.apache.pdfbox.text.PDFTextStripper
 import org.junit.Test
 import org.junit.Assert.*
 import java.io.File
+import com.recoder.stockledger.data.Market
 import com.recoder.stockledger.data.TradeType
 
 import org.json.JSONObject
@@ -24,6 +25,110 @@ class USmartStatementParserTest {
      * The generated file can also be used as a backup import into the app.
      */
     private val GENERATE_MODE = false
+
+    @Test
+    fun testParseCashMovementsFromText() {
+        val text = """
+            结单日期：2026-04
+            资金明细
+            USD
+            2026-04-10 现金分红 USD NVDA.US Cash Dividend 12.50
+            2026-04-10 Withholding Tax USD NVDA.US Withholding Tax -3.75
+            2026-04-11 活动礼包 USD 现金奖励 100.00
+            HKD
+            2026-05-22 存入资金 1,000.00
+            2026-05-28 存入资金 HKD 19,000.00
+            2026-05-29 提取资金 HKD -500.00
+            2026-04-12 货币兑换出账 HKD HKD 换汇至 USD @ 0.1272 -5,000.00
+            2026-04-12 货币兑换入账 USD HKD 换汇至 USD @ 0.1272 636.00
+            融资利息 USD -2.65 2026-04-30
+        """.trimIndent()
+
+        val parsed = USmartStatementPdfParser.parseText(text)
+
+        val dividend = parsed.single { it.tradeType == TradeType.DIVIDEND }
+        assertEquals("NVDA", dividend.symbol)
+        assertEquals(Market.US, dividend.market)
+        assertEquals("USD", dividend.currencyCode)
+        assertEquals(12.50, dividend.price, 0.0001)
+        assertEquals(1.0, dividend.quantity, 0.0001)
+        assertEquals(3.75, dividend.tax ?: 0.0, 0.0001)
+        assertTrue(dividend.rawLine.contains("Withholding Tax"))
+
+        val other = parsed.single { it.tradeType == TradeType.OTHER }
+        assertEquals("CASH", other.symbol)
+        assertEquals(100.00, other.price, 0.0001)
+
+        val deposits = parsed.filter { it.tradeType == TradeType.DEPOSIT }.sortedBy { it.price }
+        assertEquals(2, deposits.size)
+        assertEquals(listOf(1000.0, 19000.0), deposits.map { it.price })
+        deposits.forEach {
+            assertEquals(Market.HK, it.market)
+            assertEquals("HKD", it.currencyCode)
+        }
+
+        val withdraw = parsed.single { it.tradeType == TradeType.WITHDRAW }
+        assertEquals(500.0, withdraw.price, 0.0001)
+        assertEquals("HKD", withdraw.currencyCode)
+
+        val fx = parsed.single { it.tradeType == TradeType.FX_CONVERSION }
+        assertEquals("HKD", fx.fxFromCurrency)
+        assertEquals(5000.0, fx.fxFromAmount ?: 0.0, 0.0001)
+        assertEquals("USD", fx.fxToCurrency)
+        assertEquals(636.0, fx.fxToAmount ?: 0.0, 0.0001)
+        assertEquals(0.1272, fx.fxRate ?: 0.0, 0.0000001)
+
+        val interest = parsed.single { it.tradeType == TradeType.INTEREST }
+        assertEquals(2.65, interest.price, 0.0001)
+    }
+
+    @Test
+    fun testParseOptionTradesFromCashMovements() {
+        val text = """
+            结单日期：2026-04
+            资金明细
+            资金自动划出—买入期
+            USD -40.00 2026-03-02 LITE260227P600000
+            权
+            资金自动划出—买入期
+            USD -0.98 2026-03-02 LITE260227P600000
+            权手续费
+            资金自动转入—期权账
+            USD 10.00 2026-03-04 QQQ260303C606000
+            户卖出期权
+            资金自动划出—卖出期
+            USD -0.54 2026-03-04 QQQ260303C606000
+            权手续费
+        """.trimIndent()
+
+        val parsed = USmartStatementPdfParser.parseText(text)
+        val buy = parsed.single { it.tradeType == TradeType.BUY }
+        assertEquals("LITE 260227P600", buy.symbol)
+        assertEquals("LITE", buy.underlyingSymbol)
+        assertEquals("2026-02-27", buy.expiryDate)
+        assertEquals(600.0, buy.strikePrice ?: 0.0, 0.0001)
+        assertEquals("PUT", buy.optionType)
+        assertEquals("OPTION", buy.assetType)
+        assertEquals(Market.US, buy.market)
+        assertEquals("USD", buy.currencyCode)
+        assertEquals(0.40, buy.price, 0.0001)
+        assertEquals(1.0, buy.quantity, 0.0001)
+        assertEquals(40.0, buy.amount, 0.0001)
+        assertEquals(0.98, buy.commission ?: 0.0, 0.0001)
+        assertTrue(buy.rawLine.contains("手续费"))
+
+        val sell = parsed.single { it.tradeType == TradeType.SELL }
+        assertEquals("QQQ 260303C606", sell.symbol)
+        assertEquals("QQQ", sell.underlyingSymbol)
+        assertEquals("2026-03-03", sell.expiryDate)
+        assertEquals(606.0, sell.strikePrice ?: 0.0, 0.0001)
+        assertEquals("CALL", sell.optionType)
+        assertEquals("OPTION", sell.assetType)
+        assertEquals(0.10, sell.price, 0.0001)
+        assertEquals(10.0, sell.amount, 0.0001)
+        assertEquals(0.54, sell.commission ?: 0.0, 0.0001)
+        assertTrue(sell.tradeRef.contains("YL-OPT"))
+    }
 
     @Test
     fun testParseAllUSmartPdfs() {
@@ -125,25 +230,30 @@ class USmartStatementParserTest {
             
             // Lightweight custom regex parsing to avoid Android SDK org.json dependencies in unit tests
             val txBlockPattern = Regex("""\{\s*"tradeType"\s*:[^}]*\}""")
-            val expectedBlocks = txBlockPattern.findAll(expectedJson).map { it.value }.toList()
+            val allExpectedBlocks = txBlockPattern.findAll(expectedJson).map { it.value }.toList()
 
-            assertEquals(
-                "Parsed trade count should match golden standard",
-                expectedBlocks.size,
-                allParsedTrades.size
-            )
-
-            // Helper function to extract keys from json block
             fun extractValue(jsonBlock: String, key: String): String {
                 val regex = Regex(""""$key"\s*:\s*(?:"([^"]*)"|([^,\n}]*))""")
                 val match = regex.find(jsonBlock) ?: return ""
                 return (match.groupValues[1].takeIf { it.isNotEmpty() } ?: match.groupValues[2]).trim()
             }
 
+            val legacyTypes = setOf(TradeType.BUY.name, TradeType.SELL.name, TradeType.INTEREST.name)
+            val expectedBlocks = allExpectedBlocks.filter { extractValue(it, "tradeType") in legacyTypes }
+            val actualLegacyTrades = allParsedTrades.filter {
+                it.tradeType.name in legacyTypes && it.assetType != "OPTION"
+            }
+
+            assertEquals(
+                "Parsed legacy trade count should match golden standard",
+                expectedBlocks.size,
+                actualLegacyTrades.size
+            )
+
             // Compare each trade
             for (idx in 0 until expectedBlocks.size) {
                 val expectedBlock = expectedBlocks[idx]
-                val actual = allParsedTrades[idx]
+                val actual = actualLegacyTrades[idx]
 
                 assertEquals("Trade $idx symbol", extractValue(expectedBlock, "symbol"), actual.symbol)
                 assertEquals("Trade $idx name", extractValue(expectedBlock, "name"), actual.name)
@@ -156,7 +266,7 @@ class USmartStatementParserTest {
                 assertEquals("Trade $idx commission", extractValue(expectedBlock, "commission").toDouble(), actual.commission ?: 0.0, 0.01)
                 assertEquals("Trade $idx tax", extractValue(expectedBlock, "tax").toDouble(), actual.tax ?: 0.0, 0.01)
             }
-            println("\n*** All ${allParsedTrades.size} records match the golden standard! ***")
+            println("\n*** All ${actualLegacyTrades.size} legacy records match the golden standard! ***")
         }
     }
 

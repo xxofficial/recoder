@@ -1065,8 +1065,14 @@ class LedgerViewModel(
             isSyncingSplits.value = true
             splitsSyncStatusMessage.value = "正在获取交易过的股票列表..."
             try {
+                val activeLedgerId = selectedLedgerId.value
+                val activePlatform = selectedPlatform.value
                 val txns = repository.transactions.first()
-                val securityTxns = txns.filter {
+                val scopedTxns = filterTransactionsByPlatform(
+                    txns.filter { it.ledgerId == activeLedgerId },
+                    activePlatform,
+                )
+                val securityTxns = scopedTxns.filter {
                     val tType = runCatching { TradeType.valueOf(it.tradeType) }.getOrNull()
                     tType != null && tType.isSecurityTrade && it.symbol.isNotBlank() &&
                             it.assetType.uppercase() != "OPTION" && !isOptionSymbol(it.symbol)
@@ -1086,9 +1092,9 @@ class LedgerViewModel(
                     val events = repository.fetchStockSplits(symbol)
                     if (events.isNotEmpty()) {
                         // Find all existing split events in database for this symbol
-                        val existingDates = txns.filter {
+                        val existingDates = scopedTxns.filter {
                             it.symbol == symbol && it.tradeType == TradeType.SPLIT.name
-                        }.map { it.tradeDate }.toSet()
+                        }.map { it.tradeDate }.toMutableSet()
 
                         // Find the representative market/platform/name from existing transactions of this stock
                         val representativeTxn = securityTxns.firstOrNull { it.symbol == symbol }
@@ -1124,7 +1130,7 @@ class LedgerViewModel(
                                             note = "自动同步补全：折算比例 ${event.ratio}",
                                             tradeTime = "00:00:00",
                                             createdAt = System.currentTimeMillis(),
-                                            ledgerId = selectedLedgerId.value,
+                                            ledgerId = activeLedgerId,
                                             investorName = representativeTxn.investorName,
                                             assetType = representativeTxn.assetType,
                                             underlyingSymbol = representativeTxn.underlyingSymbol,
@@ -1133,6 +1139,7 @@ class LedgerViewModel(
                                             optionType = representativeTxn.optionType,
                                         )
                                         repository.addTrade(newSplitTxn)
+                                        existingDates.add(event.date.toString())
                                         addedCount++
                                     }
                                 }
@@ -1141,7 +1148,8 @@ class LedgerViewModel(
                     }
                 }
 
-                splitsSyncStatusMessage.value = "同步完成！共补全了 ${addedCount} 条拆并股记录"
+                val scopeLabel = activePlatform?.let { "当前账本/${it.label}" } ?: "当前账本/全部平台"
+                splitsSyncStatusMessage.value = "同步完成！${scopeLabel}共补全了 ${addedCount} 条拆并股记录"
                 repository.refreshQuotesForPortfolio(repository.transactions.first(), force = true)
             } catch (e: Exception) {
                 splitsSyncStatusMessage.value = "同步失败：${e.message ?: "未知错误"}"
@@ -2043,11 +2051,6 @@ class LedgerViewModel(
         if (!needsSecuritySymbol) {
             val amount = parseDecimal(draft.priceLabel)
             if (amount <= 0.0) return "金额必须大于 0"
-
-            val amountCny = convertToCny(amount, normalizeCashMarket(draft.market), repository.exchangeRates.value)
-            if ((draft.selectedType == TradeType.WITHDRAW || draft.selectedType == TradeType.TAX) && portfolio.cashBalanceCny + EPSILON < amountCny) {
-                return "可用现金不足，无法完成交易"
-            }
             return null
         }
 
@@ -2531,6 +2534,8 @@ class LedgerViewModel(
                         val fxMeta = fxConversionMeta(transaction)
                         val dividendGross = transaction.price * transaction.quantity
                         val dividendNet = dividendGross - transaction.tax
+                        val otherAmount = transaction.price * transaction.quantity
+                        val isOtherExpense = tradeType == TradeType.OTHER && otherAmount < 0.0
                         TransactionUiModel(
                             id = transaction.id,
                             tradeType = tradeType,
@@ -2543,7 +2548,7 @@ class LedgerViewModel(
                             } else if (tradeType == TradeType.FX_CONVERSION) {
                                 fxTitle
                             } else if (tradeType == TradeType.OTHER) {
-                                transaction.name.ifBlank { "其他收入" }
+                                transaction.name.ifBlank { if (isOtherExpense) "其他支出" else "其他收入" }
                             } else {
                                 CASH_ACCOUNT_NAME
                             },
@@ -2584,7 +2589,8 @@ class LedgerViewModel(
                             } else if (tradeType == TradeType.TAX) {
                                 "税费金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.OTHER) {
-                                "其他收入 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
+                                val otherLabel = if (isOtherExpense) "其他支出" else "其他收入"
+                                "$otherLabel ${formatMarketAmount(kotlin.math.abs(otherAmount), market)}"
                             } else if (tradeType == TradeType.DEPOSIT) {
                                 "入金金额 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             } else if (tradeType == TradeType.WITHDRAW) {
@@ -2623,7 +2629,7 @@ class LedgerViewModel(
                             } else if (tradeType == TradeType.FX_CONVERSION) {
                                 "仅记录，不计入资产"
                             } else if (tradeType == TradeType.OTHER) {
-                                "其他现金入账"
+                                if (isOtherExpense) "其他现金支出" else "其他现金入账"
                             } else {
                                 "净变动 ${formatMarketAmount(transaction.price * transaction.quantity, market)}"
                             },
@@ -2716,6 +2722,7 @@ class LedgerViewModel(
         val previousSecurityProfit = mutableMapOf<String, Double>()
         val latestSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
         val previousSecurityBreakdowns = mutableMapOf<String, SecurityProfitBreakdown>()
+        val appliedSplitEvents = mutableSetOf<String>()
         var previousCumulativeProfit = 0.0
         var previousTotalAssets = 0.0
         var cumulativeNav = 1.0
@@ -2907,15 +2914,17 @@ class LedgerViewModel(
                     TradeType.FX_CONVERSION -> Unit
 
                     TradeType.SPLIT -> {
-                        val key = positionKey(transaction.symbol, market)
-                        val current = positions[key]
-                        if (current != null && current.quantity != 0.0) {
-                            val nextQuantity = current.quantity * transaction.price
-                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                            positions[key] = current.copy(
-                                quantity = nextQuantity,
-                                averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
-                            )
+                        if (registerSplitEvent(transaction, appliedSplitEvents)) {
+                            val key = positionKey(transaction.symbol, market)
+                            val current = positions[key]
+                            if (current != null && current.quantity != 0.0) {
+                                val nextQuantity = current.quantity * transaction.price
+                                val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                                positions[key] = current.copy(
+                                    quantity = nextQuantity,
+                                    averageCost = if (nextQuantity == 0.0) 0.0 else current.remainingCost / (nextQuantity * mult),
+                                )
+                            }
                         }
                     }
 
@@ -3186,6 +3195,7 @@ class LedgerViewModel(
         val activityDates = linkedSetOf<LocalDate>()
         val tradeStatsByDate = mutableMapOf<LocalDate, DailyTradeStats>()
         val quoteMap = quotes.associateBy { positionKey(it.symbol, Market.fromString(it.market) ?: Market.CASH) }
+        val appliedSplitEvents = mutableSetOf<String>()
 
         ordered.forEach { transaction ->
             val market = Market.fromString(transaction.market) ?: return@forEach
@@ -3466,14 +3476,16 @@ class LedgerViewModel(
                 TradeType.FX_CONVERSION -> Unit
 
                 TradeType.SPLIT -> {
-                    val current = positions[key]
-                    if (current != null && !isAlmostZero(current.quantity)) {
-                        val nextQuantity = current.quantity * transaction.price
-                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
-                        )
+                    if (registerSplitEvent(transaction, appliedSplitEvents)) {
+                        val current = positions[key]
+                        if (current != null && !isAlmostZero(current.quantity)) {
+                            val nextQuantity = current.quantity * transaction.price
+                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            )
+                        }
                     }
                 }
             }
@@ -3682,6 +3694,7 @@ class LedgerViewModel(
         var securityTradeCount = 0
         var buyTradeCount = 0
         var sellTradeCount = 0
+        val appliedSplitEvents = mutableSetOf<String>()
         val ordered = transactions.sortedWith(
             compareBy<TransactionEntity>({
                 val m = Market.fromString(it.market) ?: Market.CASH
@@ -3996,15 +4009,17 @@ class LedgerViewModel(
                     }
                 }
                 TradeType.SPLIT -> {
-                    val key = positionKey(transaction.symbol, market)
-                    val current = positions[key]
-                    if (current != null && !isAlmostZero(current.quantity)) {
-                        val nextQuantity = current.quantity * transaction.price
-                        val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
-                        positions[key] = current.copy(
-                            quantity = nextQuantity,
-                            averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
-                        )
+                    if (registerSplitEvent(transaction, appliedSplitEvents)) {
+                        val key = positionKey(transaction.symbol, market)
+                        val current = positions[key]
+                        if (current != null && !isAlmostZero(current.quantity)) {
+                            val nextQuantity = current.quantity * transaction.price
+                            val mult = if (transaction.assetType == "OPTION" || isOptionSymbol(transaction.symbol)) 100.0 else 1.0
+                            positions[key] = current.copy(
+                                quantity = nextQuantity,
+                                averageCost = if (isAlmostZero(nextQuantity)) 0.0 else current.remainingCost / (nextQuantity * mult),
+                            )
+                        }
                     }
                 }
             }
@@ -5254,6 +5269,7 @@ private data class RefreshMeta(
         var cashBalanceCny = 0.0
         val stockQuantities = mutableMapOf<String, Double>()
         val stockPrices = mutableMapOf<String, Double>()
+        val appliedSplitEvents = mutableSetOf<String>()
 
         quotes.forEach { quote ->
             val market = Market.fromString(quote.market) ?: Market.CASH
@@ -5384,8 +5400,10 @@ private data class RefreshMeta(
                     cashBalanceCny += amountCny
                 }
                 TradeType.SPLIT -> {
-                    val qty = stockQuantities[key] ?: 0.0
-                    stockQuantities[key] = qty * tx.price
+                    if (registerSplitEvent(tx, appliedSplitEvents)) {
+                        val qty = stockQuantities[key] ?: 0.0
+                        stockQuantities[key] = qty * tx.price
+                    }
                 }
                 else -> {}
             }
@@ -5418,6 +5436,18 @@ private data class RefreshMeta(
     }
 
     private fun isAlmostZero(value: Double): Boolean = kotlin.math.abs(value) < EPSILON
+
+    private fun registerSplitEvent(
+        transaction: TransactionEntity,
+        appliedSplitEvents: MutableSet<String>,
+    ): Boolean = appliedSplitEvents.add(splitEventKey(transaction))
+
+    private fun splitEventKey(transaction: TransactionEntity): String {
+        val market = Market.fromString(transaction.market) ?: Market.CASH
+        val symbol = transaction.symbol.trim().uppercase(java.util.Locale.US)
+        val normalizedRatio = kotlin.math.round(transaction.price * 1_000_000_000.0) / 1_000_000_000.0
+        return "${market.name}:$symbol:${transaction.tradeDate}:$normalizedRatio"
+    }
 
     private fun isOptionSymbol(symbol: String): Boolean {
         val parts = symbol.trim().split(" ")
